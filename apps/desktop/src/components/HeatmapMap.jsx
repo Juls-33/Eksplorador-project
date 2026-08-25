@@ -6,42 +6,75 @@ export default function HeatmapMap({
   center = [14.5995, 120.9842],
   zoom = 18,
   heatPoints = [],
-  roverPos = [14.5995, 120.9842]
+  roverPos = [14.5995, 120.9842],
+  waypoints = [],
+  onMapClick = null,
+  isSettingWaypoints = false
 }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const heatLayerRef = useRef(null);
   const roverMarkerRef = useRef(null);
+  const waypointLayerGroupRef = useRef(null);
+  const routePolylineRef = useRef(null);
+
+  // Keep references to latest state to avoid stale closure issues in Leaflet event listeners
+  const isSettingWaypointsRef = useRef(isSettingWaypoints);
+  const onMapClickRef = useRef(onMapClick);
+
+  useEffect(() => {
+    isSettingWaypointsRef.current = isSettingWaypoints;
+    onMapClickRef.current = onMapClick;
+
+    // Toggle crosshair cursor dynamically on container
+    if (mapContainerRef.current) {
+      mapContainerRef.current.style.cursor = isSettingWaypoints ? 'crosshair' : '';
+    }
+  }, [isSettingWaypoints, onMapClick]);
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
-    // Base Leaflet Map
+    // Initialize Map
     mapInstanceRef.current = L.map(mapContainerRef.current, {
       zoomControl: true
     }).setView(center, zoom);
 
-    // OpenStreetMap tiles
+    // OpenStreetMap Layer
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
       maxZoom: 20
     }).addTo(mapInstanceRef.current);
 
-    // Custom Rover Indicator Icon
+    waypointLayerGroupRef.current = L.layerGroup().addTo(mapInstanceRef.current);
+    routePolylineRef.current = L.polyline([], {
+      color: '#D99A2B',
+      dashArray: '6, 8',
+      weight: 3
+    }).addTo(mapInstanceRef.current);
+
+    // Rover Marker
     const roverIcon = L.divIcon({
       className: 'rover-marker',
       html: `<div style="
         background: #1F5132;
-        width: 16px;
-        height: 16px;
+        width: 18px;
+        height: 18px;
         border-radius: 50%;
         border: 3px solid #fff;
-        box-shadow: 0 0 10px rgba(0,0,0,0.4);
+        box-shadow: 0 0 10px rgba(0,0,0,0.5);
       "></div>`,
-      iconSize: [16, 16]
+      iconSize: [18, 18]
     });
 
     roverMarkerRef.current = L.marker(roverPos, { icon: roverIcon }).addTo(mapInstanceRef.current);
+
+    // Map Click Handler: ONLY triggers when in waypoint setting mode
+    mapInstanceRef.current.on('click', (e) => {
+      if (isSettingWaypointsRef.current && onMapClickRef.current) {
+        onMapClickRef.current([e.latlng.lat, e.latlng.lng]);
+      }
+    });
 
     return () => {
       if (mapInstanceRef.current) {
@@ -50,7 +83,7 @@ export default function HeatmapMap({
     };
   }, []);
 
-  // Update Heatmap points
+  // Update Heatmap Points
   useEffect(() => {
     if (!mapInstanceRef.current) return;
 
@@ -80,5 +113,37 @@ export default function HeatmapMap({
     }
   }, [roverPos]);
 
-  return <div ref={mapContainerRef} className="map-container" />;
+  // Draw Waypoints & Path
+  useEffect(() => {
+    if (!waypointLayerGroupRef.current || !routePolylineRef.current) return;
+
+    waypointLayerGroupRef.current.clearLayers();
+
+    waypoints.forEach((pt, index) => {
+      const pinIcon = L.divIcon({
+        className: 'custom-pin',
+        html: `<div style="
+          background: #8A5A35;
+          color: white;
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          border: 2px solid white;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 11px;
+          font-weight: bold;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        ">${index + 1}</div>`,
+        iconSize: [24, 24]
+      });
+
+      L.marker(pt, { icon: pinIcon }).addTo(waypointLayerGroupRef.current);
+    });
+
+    routePolylineRef.current.setLatLngs(waypoints);
+  }, [waypoints]);
+
+  return <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />;
 }
