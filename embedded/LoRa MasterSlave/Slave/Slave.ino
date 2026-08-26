@@ -1,64 +1,64 @@
-/*********
-  Rui Santos & Sara Santos - Random Nerd Tutorials
-  Modified from the examples of the Arduino LoRa library
-  More resources: https://RandomNerdTutorials.com/esp32-lora-rfm95-transceiver-arduino-ide/
-*********/
-
-// DIO0  2
-// 3.3V  3.3
-// GND  any one connect
-// RESET  14
-// NSS 5
-// SCK 18
-// MOSI 23
-// MISO 19
+#include <Arduino.h>
 #include <SPI.h>
 #include <LoRa.h>
 
-//define the pins used by the transceiver module
-#define ss 5
-#define rst 14
-#define dio0 2
+#define LORA_SS    5
+#define LORA_RST   14
+#define LORA_DIO0  2
+
+uint32_t lastProcessedID = 0;
+
+void sendAck(uint32_t id) {
+  delay(10); // Small turnaround delay before switching to TX
+  LoRa.beginPacket();
+  LoRa.print("ACK:" + String(id));
+  LoRa.endPacket();
+}
 
 void setup() {
-  //initialize Serial Monitor
   Serial.begin(115200);
   while (!Serial);
-  Serial.println("LoRa Receiver");
 
-  //setup LoRa transceiver module
-  LoRa.setPins(ss, rst, dio0);
-  
-  //replace the LoRa.begin(---E-) argument with your location's frequency 
-  //433E6 for Asia
-  //868E6 for Europe
-  //915E6 for North America
-  while (!LoRa.begin(433E6)) {
-    Serial.println(".");
-    delay(500);
+  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
+  if (!LoRa.begin(433E6)) {
+    Serial.println(F("[ERROR] LoRa Receiver init failed."));
+    while (1);
   }
-   // Change sync word (0xF3) to match the receiver
-  // The sync word assures you don't get LoRa messages from other LoRa transceivers
-  // ranges from 0-0xFF
   LoRa.setSyncWord(0xF3);
-  Serial.println("LoRa Initializing OK!");
+  LoRa.enableCrc(); // Hardware CRC check rejects corrupted packets
+  Serial.println(F("[OK] LoRa Receiver Running with ARQ & Hardware CRC"));
 }
 
 void loop() {
-  // try to parse packet
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
-    // received a packet
-    Serial.print("Received packet '");
-
-    // read packet
+    String incoming = "";
     while (LoRa.available()) {
-      String LoRaData = LoRa.readString();
-      Serial.print(LoRaData); 
+      incoming += (char)LoRa.read();
     }
+    incoming.trim();
 
-    // print RSSI of packet
-    Serial.print("' with RSSI ");
-    Serial.println(LoRa.packetRssi());
+    if (incoming.startsWith("DATA:")) {
+      int commaIndex = incoming.indexOf(',');
+      if (commaIndex != -1) {
+        uint32_t packetID = incoming.substring(5, commaIndex).toInt();
+
+        // 1. Send ACK back immediately
+        sendAck(packetID);
+
+        // 2. De-duplicate: Process only if it is a new packet ID
+        if (packetID != lastProcessedID) {
+          lastProcessedID = packetID;
+
+          Serial.printf("[RX Valid | RSSI: %d dBm | SNR: %.1f dB] ID #%lu: %s\n",
+                        LoRa.packetRssi(),
+                        LoRa.packetSnr(),
+                        (unsigned long)packetID,
+                        incoming.c_str());
+        } else {
+          Serial.printf("[RX Duplicate Ignored] ID #%lu re-acknowledged.\n", (unsigned long)packetID);
+        }
+      }
+    }
   }
 }
