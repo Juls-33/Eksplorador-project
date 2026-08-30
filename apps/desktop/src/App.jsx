@@ -18,19 +18,21 @@ import {
 } from 'lucide-react';
 import HeatmapMap from './components/HeatmapMap';
 import FieldMapView from './views/FieldMapView';
+import SamplingView from './views/SamplingView';
+import SoilRecordsView from './views/SoilRecordsView';
+import CropAssessmentView from './views/CropAssessmentView';
+import ReportsView from './views/ReportsView';
 import './App.css';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('Field Map');
+  const [activeTab, setActiveTab] = useState('Reports');
   const [selectedLayer, setSelectedLayer] = useState('ph');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const [samplePoints] = useState([
-    [14.5995, 120.9842, 0.9],
-    [14.5997, 120.9844, 0.6],
-    [14.5993, 120.9840, 0.4],
-    [14.5998, 120.9847, 0.8],
-    [14.5991, 120.9838, 0.3]
+    [14.6095, 120.9890, 0.9],
+    [14.6098, 120.9894, 0.6],
+    [14.6102, 120.9899, 0.4]
   ]);
 
   const navItems = [
@@ -104,6 +106,14 @@ export default function App() {
       <main className="main-content">
         {activeTab === 'Field Map' ? (
           <FieldMapView />
+        ) : activeTab === 'Sampling' ? (
+          <SamplingView />
+        ) : activeTab === 'Soil Records' ? (
+          <SoilRecordsView />
+        ) : activeTab === 'Crop Assessment' ? (
+          <CropAssessmentView />
+        ) : activeTab === 'Reports' ? (
+          <ReportsView />
         ) : (
           <>
             <header className="top-bar">
@@ -184,7 +194,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* Dashboard Workspace Grid */}
+            {/* Dashboard Workspace */}
             <section className="workspace-grid">
               <div className="card map-card">
                 <div className="card-header">
@@ -210,10 +220,10 @@ export default function App() {
                   </div>
                 </div>
                 <HeatmapMap
-                  center={[14.5995, 120.9842]}
+                  center={[14.6095, 120.9890]}
                   zoom={18}
                   heatPoints={samplePoints}
-                  roverPos={[14.5995, 120.9842]}
+                  roverPos={[14.6095, 120.9890]}
                 />
               </div>
 
@@ -243,11 +253,11 @@ export default function App() {
                     </thead>
                     <tbody>
                       <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px' }}>14:28:10</td>
-                        <td style={{ padding: '8px' }}>14.5995, 120.9842</td>
+                        <td style={{ padding: '8px' }}>14:32:05</td>
+                        <td style={{ padding: '8px' }}>14.6095, 120.9890</td>
                         <td style={{ padding: '8px' }}>6.4</td>
-                        <td style={{ padding: '8px' }}>42%</td>
-                        <td style={{ padding: '8px' }}>1.2 dS/m</td>
+                        <td style={{ padding: '8px' }}>42.5%</td>
+                        <td style={{ padding: '8px' }}>1.25 dS/m</td>
                       </tr>
                     </tbody>
                   </table>

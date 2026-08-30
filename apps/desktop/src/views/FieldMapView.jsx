@@ -7,10 +7,13 @@ import {
   Edit2,
   Check,
   X,
-  AlertCircle
+  AlertCircle,
+  Layers,
+  Info
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
+import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
 
 const initialPlots = [
   'UST Field',
@@ -18,33 +21,114 @@ const initialPlots = [
   'South Plot B'
 ];
 
+const ustFieldBoundary = [
+  [14.6097, 120.9888],
+  [14.6105, 120.9901],
+  [14.6090, 120.9912],
+  [14.6082, 120.9898]
+];
+
+// Rich sample objects containing multi-variable sensor readings
+const ustFieldSamples = [
+  { coords: [14.6094, 120.9896], moisture: 46, ph: 6.5, n: 28, p: 38, k: 58, overall: 92 },
+  { coords: [14.6096, 120.9899], moisture: 42, ph: 6.4, n: 24, p: 35, k: 52, overall: 88 },
+  { coords: [14.6091, 120.9902], moisture: 38, ph: 6.1, n: 20, p: 30, k: 45, overall: 75 },
+  { coords: [14.6088, 120.9898], moisture: 34, ph: 5.8, n: 16, p: 25, k: 38, overall: 60 },
+  { coords: [14.6098, 120.9894], moisture: 48, ph: 6.8, n: 32, p: 44, k: 64, overall: 95 },
+  { coords: [14.6085, 120.9905], moisture: 28, ph: 5.5, n: 12, p: 20, k: 30, overall: 45 }
+];
+
+// Color Legends and Gradients for each selected layer
+const layerConfigurations = {
+  overall: {
+    label: 'Overall Soil Health',
+    unit: 'Score / 100',
+    gradient: {
+      0.2: '#dc2626', // Red: Critical / Degraded
+      0.4: '#ea580c', // Orange: Low Fertility
+      0.6: '#eab308', // Yellow: Moderate
+      0.8: '#84cc16', // Light Green: Good
+      1.0: '#15803d'  // Dark Green: Optimal
+    },
+    ranges: [
+      { color: '#15803d', label: '85 - 100', desc: 'Optimal Fertility' },
+      { color: '#84cc16', label: '70 - 84', desc: 'Good Condition' },
+      { color: '#eab308', label: '55 - 69', desc: 'Moderate / Caution' },
+      { color: '#ea580c', label: '40 - 54', desc: 'Low Nutrient' },
+      { color: '#dc2626', label: '< 40', desc: 'Critical / Degraded' }
+    ],
+    extractValue: (s) => s.overall / 100
+  },
+  moisture: {
+    label: 'Soil Moisture',
+    unit: '%',
+    gradient: {
+      0.2: '#ef4444', // Red: Very Dry (<25%)
+      0.4: '#f97316', // Orange: Low (25-35%)
+      0.7: '#22c55e', // Green: Optimal (40-55%)
+      1.0: '#0284c7'  // Blue: Saturated / Wet (>60%)
+    },
+    ranges: [
+      { color: '#0284c7', label: '> 60%', desc: 'Saturated / Wet' },
+      { color: '#22c55e', label: '40% - 55%', desc: 'Optimal Moisture' },
+      { color: '#f97316', label: '25% - 39%', desc: 'Low / Drying' },
+      { color: '#ef4444', label: '< 25%', desc: 'Deficient / Very Dry' }
+    ],
+    extractValue: (s) => Math.min(1.0, Math.max(0.1, (s.moisture - 20) / 50))
+  },
+  ph: {
+    label: 'Soil pH Level',
+    unit: 'pH',
+    gradient: {
+      0.2: '#dc2626', // Red: Strong Acid (<5.5)
+      0.5: '#eab308', // Yellow: Slight Acid (5.8 - 6.2)
+      0.8: '#16a34a', // Green: Optimal Neutral (6.3 - 7.0)
+      1.0: '#7c3aed'  // Purple: Alkaline (>7.5)
+    },
+    ranges: [
+      { color: '#7c3aed', label: '> 7.5', desc: 'Alkaline' },
+      { color: '#16a34a', label: '6.3 - 7.0', desc: 'Optimal Neutral' },
+      { color: '#eab308', label: '5.8 - 6.2', desc: 'Slightly Acidic' },
+      { color: '#dc2626', label: '< 5.5', desc: 'Strongly Acidic' }
+    ],
+    extractValue: (s) => Math.min(1.0, Math.max(0.1, (s.ph - 4.5) / 4.0))
+  },
+  npk: {
+    label: 'NPK Compound Ratio',
+    unit: 'mg/kg',
+    gradient: {
+      0.2: '#dc2626', // Red: Severely Deficient
+      0.5: '#d97706', // Amber: Low
+      0.8: '#15803d', // Green: Balanced / Optimal
+      1.0: '#1e40af'  // Blue: High / Excess
+    },
+    ranges: [
+      { color: '#1e40af', label: 'High', desc: 'Rich / Excessive NPK' },
+      { color: '#15803d', label: 'Balanced', desc: 'Optimal Macronutrients' },
+      { color: '#d97706', label: 'Low', desc: 'Nutrient Depleted' },
+      { color: '#dc2626', label: 'Deficient', desc: 'Severe Shortage' }
+    ],
+    extractValue: (s) => Math.min(1.0, Math.max(0.1, (s.n + s.p + s.k) / 160))
+  }
+};
+
 const initialMissions = [
   {
     id: 'MSN-001',
-    name: 'North Soil Moisture Survey',
-    location: 'North Plot A',
-    date: '2026-08-20',
-    status: 'Finished',
+    name: 'UST Field Comprehensive Scan',
+    location: 'UST Field',
+    date: '2026-08-30',
+    status: 'Active',
+    boundary: ustFieldBoundary,
     waypoints: [
-      [14.6095, 120.9890],
-      [14.6098, 120.9894],
-      [14.6102, 120.9899]
+      [14.6094, 120.9896],
+      [14.6096, 120.9899],
+      [14.6091, 120.9902],
+      [14.6088, 120.9898]
     ],
-    summary: 'High moisture pockets detected near the northeast corner. Optimal for deep-root crop planting.',
-    stats: { avgPh: 6.4, avgMoisture: '45%', avgEC: '1.2 dS/m', totalDistance: '124m', samplesCollected: 18 }
-  },
-  {
-    id: 'MSN-002',
-    name: 'South Nutrient & NPK Scan',
-    location: 'South Plot B',
-    date: '2026-08-22',
-    status: 'Finished',
-    waypoints: [
-      [14.6080, 120.9875],
-      [14.6084, 120.9879]
-    ],
-    summary: 'Low potassium levels observed across the central grid. Fertilizer supplementation advised.',
-    stats: { avgPh: 5.9, avgMoisture: '38%', avgEC: '0.9 dS/m', totalDistance: '86m', samplesCollected: 12 }
+    samples: ustFieldSamples,
+    summary: 'Active scan on UST Field. Heatmap restricted strictly inside the perimeter.',
+    stats: { avgPh: 6.5, avgMoisture: '44%', avgEC: '1.2 dS/m', totalDistance: '142m', samplesCollected: 16 }
   }
 ];
 
@@ -52,17 +136,20 @@ export default function FieldMapView() {
   const [plots, setPlots] = useState(initialPlots);
   const [missions, setMissions] = useState(initialMissions);
   const [selectedMissionId, setSelectedMissionId] = useState('MSN-001');
+  const [selectedLayerKey, setSelectedLayerKey] = useState('overall');
   const [activeMission, setActiveMission] = useState(null);
 
-  // Live Rover Telemetry (GPS + IMU Heading)
-  const [roverPos, setRoverPos] = useState([14.6095, 120.9895]);
+  // Live Rover Telemetry
+  const [roverPos, setRoverPos] = useState([14.6094, 120.9896]);
   const [roverHeading, setRoverHeading] = useState(45);
   const [currentWaypointIdx, setCurrentWaypointIdx] = useState(0);
 
-  // Modal & Waypoint Creation States
+  // Mission Wizard State
+  const [wizardStep, setWizardStep] = useState('IDLE');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newMission, setNewMission] = useState({ name: '', location: 'UST Field', date: new Date().toISOString().slice(0, 10) });
-  const [isAddingPins, setIsAddingPins] = useState(false);
+
+  const [tempBoundary, setTempBoundary] = useState([]);
   const [tempWaypoints, setTempWaypoints] = useState([]);
   const [notification, setNotification] = useState(null);
 
@@ -74,6 +161,7 @@ export default function FieldMapView() {
   const [plotError, setPlotError] = useState(null);
 
   const currentSelected = missions.find(m => m.id === selectedMissionId) || missions[0];
+  const activeConfig = layerConfigurations[selectedLayerKey];
 
   const groupedMissions = missions.reduce((acc, msn) => {
     acc[msn.location] = acc[msn.location] || [];
@@ -138,55 +226,86 @@ export default function FieldMapView() {
   };
 
   const handleMapClick = (coords) => {
-    if (isAddingPins) {
+    if (wizardStep === 'DRAWING_BOUNDARY') {
+      setTempBoundary(prev => [...prev, coords]);
+    } else if (wizardStep === 'PLACING_PINS') {
+      if (tempBoundary.length >= 3 && !isPointInPolygon(coords, tempBoundary)) {
+        setNotification({ type: 'error', message: 'Waypoints must be placed inside the defined field boundary.' });
+        return;
+      }
       setTempWaypoints(prev => [...prev, coords]);
     }
   };
 
   const handleStartMissionSetup = () => {
     if (!newMission.name.trim()) return;
-    if (!newMission.location) {
-      setPlotError('Please select or create a valid plot location.');
+    setIsModalOpen(false);
+    setWizardStep('DRAWING_BOUNDARY');
+    setTempBoundary([]);
+    setTempWaypoints([]);
+    setNotification({ type: 'info', message: 'Step 1: Click around the perimeter of the field to draw the boundary.' });
+  };
+
+  const handleConfirmBoundary = () => {
+    if (tempBoundary.length < 3) {
+      setNotification({ type: 'error', message: 'Please click at least 3 points on the map to define a closed boundary.' });
       return;
     }
-    setIsModalOpen(false);
-    setIsAddingPins(true);
-    setTempWaypoints([]);
-    setNotification({ type: 'info', message: 'Click on the map to place rover waypoint pins.' });
+    setWizardStep('PLACING_PINS');
+    setNotification({ type: 'info', message: 'Step 2: Now click inside the boundary to place rover traversal waypoints.' });
   };
 
   const handleLaunchMission = () => {
     if (tempWaypoints.length === 0) {
-      setNotification({ type: 'error', message: 'Please add at least 1 waypoint on the map.' });
+      setNotification({ type: 'error', message: 'Please add at least 1 traversal waypoint inside the boundary.' });
       return;
     }
+
+    const syntheticSamples = tempWaypoints.map((pt, i) => ({
+      coords: pt,
+      moisture: 38 + (i * 4) % 15,
+      ph: 6.0 + (i * 0.2) % 0.8,
+      n: 20 + (i * 3) % 15,
+      p: 30 + (i * 2) % 15,
+      k: 45 + (i * 4) % 20,
+      overall: 70 + (i * 6) % 25
+    }));
+
     const missionObj = {
       id: `MSN-00${missions.length + 1}`,
       name: newMission.name,
       location: newMission.location,
       date: newMission.date,
       status: 'Active',
+      boundary: tempBoundary,
       waypoints: tempWaypoints,
-      summary: 'Mission in progress. Collecting spatial telemetry...',
-      stats: { avgPh: 6.2, avgMoisture: '41%', avgEC: '1.1 dS/m', totalDistance: '95m', samplesCollected: 4 }
+      samples: syntheticSamples,
+      summary: 'Mission in progress. Real-time multi-variable heatmap calculated.',
+      stats: {
+        avgPh: 6.4,
+        avgMoisture: '42%',
+        avgEC: '1.2 dS/m',
+        totalDistance: `${calculatePolygonArea(tempBoundary)} m²`,
+        samplesCollected: tempWaypoints.length
+      }
     };
 
     setMissions(prev => [missionObj, ...prev]);
     setActiveMission(missionObj);
     setSelectedMissionId(missionObj.id);
     setCurrentWaypointIdx(0);
-    setIsAddingPins(false);
-    setNotification({ type: 'success', message: `Mission "${missionObj.name}" launched!` });
+    setWizardStep('IDLE');
+    setNotification({ type: 'success', message: `Mission "${missionObj.name}" launched with multi-layer heatmap!` });
   };
 
   const handleFinishMission = (id) => {
-    setMissions(prev => prev.map(m => m.id === id ? { ...m, status: 'Finished', summary: 'Mission successfully concluded. Telemetry logged to SQLite.' } : m));
+    setMissions(prev => prev.map(m => m.id === id ? { ...m, status: 'Finished', summary: 'Mission finished. Boundary and telemetry stored.' } : m));
     if (activeMission?.id === id) setActiveMission(null);
-    setNotification({ type: 'success', message: `Mission has finished! Statistics and findings logged.` });
+    setNotification({ type: 'success', message: `Mission completed and findings logged.` });
   };
 
   const handleAdvanceWaypoint = () => {
-    const activePins = isAddingPins ? tempWaypoints : (currentSelected?.waypoints || []);
+    const activePins = wizardStep !== 'IDLE' ? tempWaypoints : (currentSelected?.waypoints || []);
     if (currentWaypointIdx < activePins.length - 1) {
       setRoverPos(activePins[currentWaypointIdx]);
       setCurrentWaypointIdx(prev => prev + 1);
@@ -196,36 +315,70 @@ export default function FieldMapView() {
     }
   };
 
-  const displayedWaypoints = isAddingPins ? tempWaypoints : (currentSelected?.waypoints || []);
+  const activeBoundary = wizardStep !== 'IDLE' ? tempBoundary : (currentSelected?.boundary || []);
+  const displayedWaypoints = wizardStep !== 'IDLE' ? tempWaypoints : (currentSelected?.waypoints || []);
+
+  // Format heat points dynamically based on the selected layer
+  const currentSamples = currentSelected?.samples || [];
+  const heatPointsForLayer = currentSamples.map(s => [
+    s.coords[0],
+    s.coords[1],
+    activeConfig.extractValue(s)
+  ]);
+
+  const fieldAreaSqMeters = calculatePolygonArea(activeBoundary);
 
   return (
     <div className="field-map-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
-      {/* Top Action & Mission Banner */}
+      {/* Top Action Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Field Map & Mission Planning</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Plan rover GPS waypoints, monitor live tele-location, and analyze findings.</p>
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Field Map & Heatmap Analysis</h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+            Multi-variable GIS heatmap layers, bounded spatial interpolation, and color-coded soil health gradients.
+          </p>
         </div>
 
         <div style={{ display: 'flex', gap: '10px' }}>
-          {isAddingPins ? (
+          {wizardStep === 'DRAWING_BOUNDARY' && (
+            <>
+              <button
+                className="badge"
+                onClick={handleConfirmBoundary}
+                style={{ cursor: 'pointer', padding: '8px 16px', background: 'var(--primary-green)', color: '#fff' }}
+              >
+                <Check size={16} /> Complete Boundary ({tempBoundary.length} points)
+              </button>
+              <button
+                className="badge"
+                onClick={() => { setWizardStep('IDLE'); setTempBoundary([]); }}
+                style={{ cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+            </>
+          )}
+
+          {wizardStep === 'PLACING_PINS' && (
             <>
               <button
                 className="badge badge-connected"
                 onClick={handleLaunchMission}
                 style={{ cursor: 'pointer', padding: '8px 16px', background: 'var(--primary-green)', color: '#fff' }}
               >
-                <Play size={16} /> Confirm & Launch ({tempWaypoints.length} Pins)
+                <Play size={16} /> Launch Mission ({tempWaypoints.length} Pins)
               </button>
               <button
                 className="badge"
-                onClick={() => { setIsAddingPins(false); setTempWaypoints([]); }}
+                onClick={() => { setWizardStep('DRAWING_BOUNDARY'); setTempWaypoints([]); }}
                 style={{ cursor: 'pointer' }}
               >
-                Cancel
+                Back to Boundary
               </button>
             </>
-          ) : (
+          )}
+
+          {wizardStep === 'IDLE' && (
             <button
               className="badge"
               style={{ background: 'var(--primary-green)', color: '#fff', cursor: 'pointer', padding: '8px 16px' }}
@@ -241,7 +394,7 @@ export default function FieldMapView() {
         </div>
       </div>
 
-      {/* Alert / Notification Bar */}
+      {/* Notification Alert */}
       {notification && (
         <div style={{
           padding: '10px 14px',
@@ -278,6 +431,7 @@ export default function FieldMapView() {
                       onClick={() => {
                         setSelectedMissionId(m.id);
                         setCurrentWaypointIdx(0);
+                        setWizardStep('IDLE');
                       }}
                       style={{
                         padding: '10px',
@@ -314,27 +468,104 @@ export default function FieldMapView() {
           </div>
         </div>
 
-        {/* Center Column: Unobstructed Interactive Map */}
-        <div className="card" style={{ position: 'relative' }}>
-          <div className="card-header">
+        {/* Center Column: Interactive Map with Layer Selection & Color Guide */}
+        <div className="card" style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+          <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="card-title">
-              {isAddingPins ? '📍 Pinning Waypoints (Click Map to Add)' : `Active Map View: ${currentSelected?.name || 'Live'}`}
+              {wizardStep === 'DRAWING_BOUNDARY'
+                ? '✏️ Step 1: Drawing Perimeter Boundary'
+                : wizardStep === 'PLACING_PINS'
+                ? '📍 Step 2: Placing Waypoints Inside Boundary'
+                : `Heatmap: ${currentSelected?.name || 'Active'}`}
             </span>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              GPS: {roverPos[0].toFixed(4)}° N, {roverPos[1].toFixed(4)}° E
+
+            {/* Layer Selection Dropdown */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Layers size={14} color="var(--primary-green)" />
+              <select
+                value={selectedLayerKey}
+                onChange={(e) => setSelectedLayerKey(e.target.value)}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--card-border)',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  outline: 'none',
+                  background: '#fff',
+                  color: 'var(--text-dark)'
+                }}
+              >
+                <option value="overall">Overall Soil Health</option>
+                <option value="moisture">Soil Moisture</option>
+                <option value="ph">Soil pH</option>
+                <option value="npk">NPK Ratio</option>
+              </select>
             </div>
           </div>
-          <HeatmapMap
-            center={[14.6095, 120.9895]}
-            zoom={18}
-            waypoints={displayedWaypoints}
-            roverPos={roverPos}
-            onMapClick={handleMapClick}
-            isSettingWaypoints={isAddingPins}
-          />
+
+          <div style={{ flex: 1, position: 'relative' }}>
+            <HeatmapMap
+              center={[14.6095, 120.9895]}
+              zoom={18}
+              boundary={activeBoundary}
+              waypoints={displayedWaypoints}
+              heatPoints={heatPointsForLayer}
+              roverPos={roverPos}
+              onMapClick={handleMapClick}
+              interactionMode={
+                wizardStep === 'DRAWING_BOUNDARY'
+                  ? 'DRAW_BOUNDARY'
+                  : wizardStep === 'PLACING_PINS'
+                  ? 'SET_WAYPOINTS'
+                  : 'NONE'
+              }
+              gradient={activeConfig.gradient}
+            />
+
+            {/* Floating Color Legend Guide Overlay */}
+            <div style={{
+              position: 'absolute',
+              bottom: '12px',
+              left: '12px',
+              zIndex: 1000,
+              background: 'rgba(255, 255, 255, 0.95)',
+              backdropFilter: 'blur(4px)',
+              border: '1px solid var(--card-border)',
+              borderRadius: '8px',
+              padding: '10px 12px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+              fontSize: '0.75rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+              maxWidth: '220px'
+            }}>
+              <div style={{ fontWeight: 800, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Info size={13} color="var(--primary-green)" />
+                <span>{activeConfig.label} ({activeConfig.unit})</span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {activeConfig.ranges.map((range, idx) => (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{
+                      width: '12px',
+                      height: '12px',
+                      borderRadius: '3px',
+                      background: range.color,
+                      flexShrink: 0
+                    }} />
+                    <span style={{ fontWeight: 700, minWidth: '60px' }}>{range.label}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>{range.desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Right Column: Analytics, Crop Suitability & Operator Traversal Guide */}
+        {/* Right Column: Mission Overview & Operator Traversal Guide */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
           {/* Mission Overview */}
           <div className="card" style={{ flexShrink: 0 }}>
@@ -366,8 +597,8 @@ export default function FieldMapView() {
                   <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{currentSelected?.stats.avgEC}</div>
                 </div>
                 <div style={{ padding: '6px 8px', background: 'var(--bg-main)', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Distance Covered</div>
-                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{currentSelected?.stats.totalDistance}</div>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Sample Density</div>
+                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{displayedWaypoints.length} pts</div>
                 </div>
               </div>
             </div>
@@ -398,7 +629,7 @@ export default function FieldMapView() {
             </div>
           </div>
 
-          {/* Operator Traversal Guidance Card */}
+          {/* Traversal Guidance Card */}
           <div style={{ flex: 1, minHeight: '190px' }}>
             <OperatorNavGuide
               roverPos={roverPos}
@@ -462,7 +693,7 @@ export default function FieldMapView() {
               <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Mission Name</label>
               <input
                 type="text"
-                placeholder="e.g., East Boundary Nutrient Check"
+                placeholder="e.g., UST Field Spatial Scan"
                 value={newMission.name}
                 onChange={e => setNewMission({ ...newMission, name: e.target.value })}
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--card-border)', marginTop: '4px' }}
@@ -637,7 +868,7 @@ export default function FieldMapView() {
                 onClick={handleStartMissionSetup}
                 style={{ background: 'var(--primary-green)', color: '#fff', cursor: 'pointer' }}
               >
-                Next: Place Pins
+                Next: Draw Field Boundary
               </button>
             </div>
           </div>
