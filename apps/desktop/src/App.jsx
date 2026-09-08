@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   LayoutDashboard,
   Map as MapIcon,
@@ -7,7 +8,7 @@ import {
   Sprout,
   BarChart3,
   Settings,
-  Droplets,
+  Droplets,                             
   CheckCircle2,
   Wifi,
   Radio,
@@ -25,9 +26,17 @@ import ReportsView from './views/ReportsView';
 import './App.css';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('Reports');
+  const [activeTab, setActiveTab] = useState('Dashboard');
   const [selectedLayer, setSelectedLayer] = useState('ph');
   const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const [telemetryData, setTelemetryData] = useState([]);
+  const [latestKpi, setLatestKpi] = useState({
+    moisture: '--', 
+    ph: '--', 
+    ec: '--',
+    npk: '-- / -- / --'
+  })
 
   const [samplePoints] = useState([
     [14.6095, 120.9890, 0.9],
@@ -43,6 +52,32 @@ export default function App() {
     { id: 'Crop Assessment', label: 'Crop Assessment', icon: Sprout },
     { id: 'Reports', label: 'Reports', icon: BarChart3 }
   ];
+
+  useEffect(() => {
+    async function loadTelemetry() {
+      try {
+        await invoke('init_db');
+        const records = await invoke('get_recent_telemetry');
+        setTelemetryData(records);
+
+        if (records.length > 0 ) {
+          const latest = records[0];
+          
+          const npkDisplay = `${latest.nitrogen ?? '--'} / ${latest.phosphorus ?? '--'} / ${latest.potassium ?? '--'}`;
+
+          setLatestKpi({
+            moisture: latest.moisture ?? '--',
+            ph: latest.ph ?? '--',
+            ec: latest.ec ?? '--',
+            npk: npkDisplay,
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load telemetry from Rust Backend:', error);
+      }
+    }
+    loadTelemetry();
+  }, []);
 
   return (
     <div className="dashboard-layout">
@@ -156,7 +191,7 @@ export default function App() {
                   </div>
                   <span className="kpi-title">Soil Moisture</span>
                 </div>
-                <div className="kpi-value">42%</div>
+                <div className="kpi-value">{latestKpi.moisture}%</div>
                 <div className="kpi-status"><CheckCircle2 size={13} /> Within range</div>
               </div>
 
@@ -167,7 +202,7 @@ export default function App() {
                   </div>
                   <span className="kpi-title">Soil pH</span>
                 </div>
-                <div className="kpi-value">6.4</div>
+                <div className="kpi-value">{latestKpi.ph}</div>
                 <div className="kpi-status"><CheckCircle2 size={13} /> Optimal</div>
               </div>
 
@@ -178,7 +213,7 @@ export default function App() {
                   </div>
                   <span className="kpi-title">Conductivity (EC)</span>
                 </div>
-                <div className="kpi-value">1.2 <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>dS/m</span></div>
+                <div className="kpi-value">{latestKpi.ec} <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>dS/m</span></div>
                 <div className="kpi-status"><CheckCircle2 size={13} /> Within range</div>
               </div>
 
@@ -189,7 +224,7 @@ export default function App() {
                   </div>
                   <span className="kpi-title">NPK Ratio</span>
                 </div>
-                <div className="kpi-value">1.2 / 38 / 55 <span style={{ fontSize: '0.75rem', fontWeight: 500 }}>mg/kg</span></div>
+                <div className="kpi-value">{latestKpi.npk} <span style={{ fontSize: '0.75rem', fontWeight: 500 }}>mg/kg</span></div>
                 <div className="kpi-status"><CheckCircle2 size={13} /> Balanced</div>
               </div>
             </section>
@@ -216,6 +251,8 @@ export default function App() {
                       <option value="ph">Soil pH</option>
                       <option value="ec">Electrical Conductivity</option>
                       <option value="nitrogen">Nitrogen (N)</option>
+                      <option value="phosphorus">Phosphorus (P)</option>
+                      <option value="potassium">Potassium (K)</option>
                     </select>
                   </div>
                 </div>
@@ -224,6 +261,7 @@ export default function App() {
                   zoom={18}
                   heatPoints={samplePoints}
                   roverPos={[14.6095, 120.9890]}
+                  activeLayer={selectedLayer}
                 />
               </div>
 
@@ -249,16 +287,28 @@ export default function App() {
                         <th style={{ padding: '6px 8px' }}>pH</th>
                         <th style={{ padding: '6px 8px' }}>Moisture</th>
                         <th style={{ padding: '6px 8px' }}>EC</th>
+                        <th style={{ padding: '6px 8px' }}>NPK (N/P/K)</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px' }}>14:32:05</td>
-                        <td style={{ padding: '8px' }}>14.6095, 120.9890</td>
-                        <td style={{ padding: '8px' }}>6.4</td>
-                        <td style={{ padding: '8px' }}>42.5%</td>
-                        <td style={{ padding: '8px' }}>1.25 dS/m</td>
-                      </tr>
+                      {telemetryData.length === 0 ? (
+                        <tr>
+                          <td colSpan="6" style={{ padding: '8px', textAlign: 'center', color: 'var(--text-muted)'}}>
+                            No telemetry records found.
+                          </td>
+                        </tr>
+                      ): (
+                        telemetryData.map((row) => (
+                          <tr key={row.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '8px' }}>{row.timestamp}</td>
+                            <td style={{ padding: '8px' }}>{row.latitude}, {row.longitude}</td>
+                            <td style={{ padding: '8px' }}>{row.ph}</td>
+                            <td style={{ padding: '8px' }}>{row.moisture}%</td>
+                            <td style={{ padding: '8px' }}>{row.ec} dS/m</td>
+                            <td style={{ padding: '8px' }}>{row.nitrogen} / {row.phosphorus} / {row.potassium} </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -273,7 +323,7 @@ export default function App() {
                     High Suitability: Rice & Corn
                   </div>
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                    Based on current NPK and 6.4 pH readings.
+                    Based on current NPK and {latestKpi.ph} pH readings.
                   </p>
                 </div>
               </div>
