@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import {
   LayoutDashboard,
@@ -8,12 +9,13 @@ import {
   Sprout,
   BarChart3,
   Settings,
-  Droplets,                             
+  Droplets,
   CheckCircle2,
+  AlertTriangle,
   Wifi,
+  WifiOff,
   Radio,
   Navigation,
-  BatteryCharging,
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
@@ -25,24 +27,83 @@ import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
 import './App.css';
 
+// How long (ms) without a new packet before we treat the rover as disconnected
+const STALE_TIMEOUT_MS = 15000;
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('Dashboard');
   const [selectedLayer, setSelectedLayer] = useState('ph');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const [telemetryData, setTelemetryData] = useState([]);
-  const [latestKpi, setLatestKpi] = useState({
-    moisture: '--', 
-    ph: '--', 
-    ec: '--',
-    npk: '-- / -- / --'
-  })
+  // Live sensor data — null until the first packet arrives.
+  // Drives the status badges and KPI cards (current-moment readings).
+  const [liveData, setLiveData] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
 
-  const [samplePoints] = useState([
-    [14.6095, 120.9890, 0.9],
-    [14.6098, 120.9894, 0.6],
-    [14.6102, 120.9899, 0.4]
-  ]);
+  const lastPacketTime = useRef(null);
+
+  // DB-backed telemetry history. Drives the Heatmap and the Recent
+  // Geo-tagged Samples table — these show validated/aggregated readings
+  // pulled from SQLite rather than raw live packets, so the map and
+  // table don't fill up with every single transmission (including
+  // invalid/no-fix ones) as the rover runs.
+  const [telemetryData, setTelemetryData] = useState([]);
+
+  // Heatmap points derived from DB records (lat, lng, normalized pH 0-1)
+  const dbHeatPoints = telemetryData
+    .filter((row) => row.latitude !== 0 || row.longitude !== 0)
+    .map((row) => [row.latitude, row.longitude, Math.max(0, Math.min(1, row.ph / 14))]);
+
+  // Most recent DB record's position, used to center the map / show the
+  // last-known rover marker when no live GPS fix is currently available
+  const latestDbPos =
+    telemetryData.length > 0 ? [telemetryData[0].latitude, telemetryData[0].longitude] : null;
+
+  useEffect(() => {
+    const unlisten = listen('sensor-data', (event) => {
+      const data = event.payload;
+
+      // Ignore malformed/error packets forwarded from the receiver
+      if (data.error) {
+        console.warn('Receiver reported an error:', data.error);
+        return;
+      }
+
+      setLiveData(data);
+      setIsConnected(true);
+      lastPacketTime.current = Date.now();
+    });
+
+    // Periodically check whether the last packet is too old to trust
+    const staleCheck = setInterval(() => {
+      if (lastPacketTime.current && Date.now() - lastPacketTime.current > STALE_TIMEOUT_MS) {
+        setIsConnected(false);
+      }
+    }, 2000);
+
+    return () => {
+      unlisten.then((f) => f());
+      clearInterval(staleCheck);
+    };
+  }, []);
+
+  useEffect(() => {
+    async function loadTelemetry() {
+      try {
+        await invoke('init_db');
+        const records = await invoke('get_recent_telemetry');
+        setTelemetryData(records);
+      } catch (error) {
+        console.error('Failed to load telemetry from Rust Backend:', error);
+      }
+    }
+    loadTelemetry();
+    // Refresh periodically so the heatmap/table pick up new DB rows
+    // as they're inserted (e.g. once averaged-sample inserts are added
+    // on the Rust side)
+    const refreshInterval = setInterval(loadTelemetry, 10000);
+    return () => clearInterval(refreshInterval);
+  }, []);
 
   const navItems = [
     { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -53,31 +114,8 @@ export default function App() {
     { id: 'Reports', label: 'Reports', icon: BarChart3 }
   ];
 
-  useEffect(() => {
-    async function loadTelemetry() {
-      try {
-        await invoke('init_db');
-        const records = await invoke('get_recent_telemetry');
-        setTelemetryData(records);
-
-        if (records.length > 0 ) {
-          const latest = records[0];
-          
-          const npkDisplay = `${latest.nitrogen ?? '--'} / ${latest.phosphorus ?? '--'} / ${latest.potassium ?? '--'}`;
-
-          setLatestKpi({
-            moisture: latest.moisture ?? '--',
-            ph: latest.ph ?? '--',
-            ec: latest.ec ?? '--',
-            npk: npkDisplay,
-          });
-        }
-      } catch (error) {
-        console.error('Failed to load telemetry from Rust Backend:', error);
-      }
-    }
-    loadTelemetry();
-  }, []);
+  const hasGpsFix = liveData && (liveData.lat !== 0 || liveData.lng !== 0);
+  const soilOk = liveData && liveData.soilValid === 1;
 
   return (
     <div className="dashboard-layout">
@@ -94,20 +132,12 @@ export default function App() {
                     <div className="brand-subtitle">SOIL MONITORING</div>
                   </div>
                 </div>
-                <button
-                  className="sidebar-toggle-btn"
-                  onClick={() => setIsCollapsed(true)}
-                  title="Collapse Sidebar"
-                >
+                <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(true)} title="Collapse Sidebar">
                   <ChevronLeft size={18} />
                 </button>
               </>
             ) : (
-              <button
-                className="sidebar-toggle-btn"
-                onClick={() => setIsCollapsed(false)}
-                title="Expand Sidebar"
-              >
+              <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(false)} title="Expand Sidebar">
                 <ChevronRight size={20} />
               </button>
             )}
@@ -161,23 +191,31 @@ export default function App() {
                   <strong>North Plot A</strong>
                 </div>
                 <div className="badge">
-                  <strong>SESSION-024</strong>
+                  <strong>{liveData ? `PKT #${liveData.seq}` : 'SESSION-024'}</strong>
                 </div>
-                <div className="badge badge-connected">
-                  <Wifi size={14} />
-                  <span>Rover Connected</span>
+                <div className={`badge ${isConnected ? 'badge-connected' : ''}`}>
+                  {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
+                  <span>{isConnected ? 'Rover Connected' : 'Waiting for Rover'}</span>
                 </div>
                 <div className="badge">
                   <Radio size={14} />
-                  <span>LoRA</span>
+                  <span>
+                    LoRa {liveData ? `(RSSI ${liveData.rssi} dBm, SNR ${liveData.snr})` : ''}
+                  </span>
                 </div>
                 <div className="badge">
                   <Navigation size={14} />
-                  <span>GPS 3D Fix</span>
+                  <span>
+                    {liveData
+                      ? hasGpsFix
+                        ? `GPS Fix (${liveData.satsLocked} sats)`
+                        : `No Fix (${liveData.satsView} in view)`
+                      : 'GPS --'}
+                  </span>
                 </div>
                 <div className="badge">
-                  <BatteryCharging size={14} color="#1F5132" />
-                  <span>82%</span>
+                  {soilOk ? <CheckCircle2 size={14} color="#1F5132" /> : <AlertTriangle size={14} color="#B45309" />}
+                  <span>{liveData ? (soilOk ? 'Probe OK' : 'Probe Not Responding') : 'Probe --'}</span>
                 </div>
               </div>
             </header>
@@ -191,8 +229,10 @@ export default function App() {
                   </div>
                   <span className="kpi-title">Soil Moisture</span>
                 </div>
-                <div className="kpi-value">{latestKpi.moisture}%</div>
-                <div className="kpi-status"><CheckCircle2 size={13} /> Within range</div>
+                <div className="kpi-value">{soilOk ? `${liveData.moisture}%` : '--'}</div>
+                <div className="kpi-status">
+                  <CheckCircle2 size={13} /> {soilOk ? 'Within range' : 'No valid reading'}
+                </div>
               </div>
 
               <div className="kpi-card">
@@ -202,8 +242,10 @@ export default function App() {
                   </div>
                   <span className="kpi-title">Soil pH</span>
                 </div>
-                <div className="kpi-value">{latestKpi.ph}</div>
-                <div className="kpi-status"><CheckCircle2 size={13} /> Optimal</div>
+                <div className="kpi-value">{soilOk ? liveData.ph : '--'}</div>
+                <div className="kpi-status">
+                  <CheckCircle2 size={13} /> {soilOk ? 'Optimal' : 'No valid reading'}
+                </div>
               </div>
 
               <div className="kpi-card">
@@ -213,8 +255,12 @@ export default function App() {
                   </div>
                   <span className="kpi-title">Conductivity (EC)</span>
                 </div>
-                <div className="kpi-value">{latestKpi.ec} <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>dS/m</span></div>
-                <div className="kpi-status"><CheckCircle2 size={13} /> Within range</div>
+                <div className="kpi-value">
+                  {soilOk ? liveData.ec : '--'} <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>uS/cm</span>
+                </div>
+                <div className="kpi-status">
+                  <CheckCircle2 size={13} /> {soilOk ? 'Within range' : 'No valid reading'}
+                </div>
               </div>
 
               <div className="kpi-card">
@@ -224,8 +270,13 @@ export default function App() {
                   </div>
                   <span className="kpi-title">NPK Ratio</span>
                 </div>
-                <div className="kpi-value">{latestKpi.npk} <span style={{ fontSize: '0.75rem', fontWeight: 500 }}>mg/kg</span></div>
-                <div className="kpi-status"><CheckCircle2 size={13} /> Balanced</div>
+                <div className="kpi-value">
+                  {soilOk ? `${liveData.nitrogen} / ${liveData.phosphorus} / ${liveData.potassium}` : '-- / -- / --'}
+                  <span style={{ fontSize: '0.75rem', fontWeight: 500 }}> mg/kg</span>
+                </div>
+                <div className="kpi-status">
+                  <CheckCircle2 size={13} /> {soilOk ? 'Balanced' : 'No valid reading'}
+                </div>
               </div>
             </section>
 
@@ -257,10 +308,10 @@ export default function App() {
                   </div>
                 </div>
                 <HeatmapMap
-                  center={[14.6095, 120.9890]}
+                  center={hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos || [14.6095, 120.9890]}
                   zoom={18}
-                  heatPoints={samplePoints}
-                  roverPos={[14.6095, 120.9890]}
+                  heatPoints={dbHeatPoints}
+                  roverPos={hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos}
                   activeLayer={selectedLayer}
                 />
               </div>
@@ -270,7 +321,16 @@ export default function App() {
                   <span className="card-title">Live Sampling Queue</span>
                 </div>
                 <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  <p>Awaiting next telemetry ping from rover...</p>
+                  {liveData ? (
+                    <p>
+                      Last packet #{liveData.seq} received just now.
+                      {!hasGpsFix && ' Waiting for GPS fix.'}
+                      {hasGpsFix && !soilOk && ' GPS locked, but soil probe reading invalid.'}
+                      {' '}Map and table update from saved records.
+                    </p>
+                  ) : (
+                    <p>Awaiting next telemetry ping from rover...</p>
+                  )}
                 </div>
               </div>
 
@@ -293,19 +353,25 @@ export default function App() {
                     <tbody>
                       {telemetryData.length === 0 ? (
                         <tr>
-                          <td colSpan="6" style={{ padding: '8px', textAlign: 'center', color: 'var(--text-muted)'}}>
+                          <td colSpan={6} style={{ padding: '8px', textAlign: 'center', color: 'var(--text-muted)' }}>
                             No telemetry records found.
                           </td>
                         </tr>
-                      ): (
+                      ) : (
                         telemetryData.map((row) => (
                           <tr key={row.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                             <td style={{ padding: '8px' }}>{row.timestamp}</td>
-                            <td style={{ padding: '8px' }}>{row.latitude}, {row.longitude}</td>
+                            <td style={{ padding: '8px' }}>
+                              {row.latitude !== 0 || row.longitude !== 0
+                                ? `${row.latitude.toFixed(5)}, ${row.longitude.toFixed(5)}`
+                                : 'No fix'}
+                            </td>
                             <td style={{ padding: '8px' }}>{row.ph}</td>
                             <td style={{ padding: '8px' }}>{row.moisture}%</td>
-                            <td style={{ padding: '8px' }}>{row.ec} dS/m</td>
-                            <td style={{ padding: '8px' }}>{row.nitrogen} / {row.phosphorus} / {row.potassium} </td>
+                            <td style={{ padding: '8px' }}>{row.ec} uS/cm</td>
+                            <td style={{ padding: '8px' }}>
+                              {row.nitrogen ?? '--'} / {row.phosphorus ?? '--'} / {row.potassium ?? '--'}
+                            </td>
                           </tr>
                         ))
                       )}
@@ -320,10 +386,12 @@ export default function App() {
                 </div>
                 <div style={{ padding: '16px', fontSize: '0.85rem' }}>
                   <div style={{ fontWeight: 700, color: 'var(--primary-green)', marginBottom: '4px' }}>
-                    High Suitability: Rice & Corn
+                    {soilOk ? 'High Suitability: Rice & Corn' : 'Awaiting valid soil data'}
                   </div>
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                    Based on current NPK and {latestKpi.ph} pH readings.
+                    {soilOk
+                      ? `Based on current NPK and ${liveData.ph} pH readings.`
+                      : 'Recommendations will appear once a valid soil reading is received.'}
                   </p>
                 </div>
               </div>
