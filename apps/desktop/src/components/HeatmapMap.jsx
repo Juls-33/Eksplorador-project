@@ -85,7 +85,12 @@ export default function HeatmapMap({
       iconSize: [18, 18]
     });
 
-    roverMarkerRef.current = L.marker(roverPos, { icon: roverIcon }).addTo(mapInstanceRef.current);
+    // Guard against a null/invalid roverPos (e.g. no GPS fix yet) so the map
+    // instance always finishes initializing and its cleanup gets registered —
+    // an uncaught error here previously left a stale Leaflet instance attached
+    // to the DOM node, causing "Map container is already initialized" on remount.
+    const initialRoverPos = Array.isArray(roverPos) && roverPos.length === 2 ? roverPos : center;
+    roverMarkerRef.current = L.marker(initialRoverPos, { icon: roverIcon }).addTo(mapInstanceRef.current);
 
     mapInstanceRef.current.on('click', (e) => {
       if (interactionModeRef.current !== 'NONE' && onMapClickRef.current) {
@@ -96,6 +101,7 @@ export default function HeatmapMap({
     return () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
       }
     };
   }, []);
@@ -157,7 +163,9 @@ export default function HeatmapMap({
 
   // Update Rover GPS Marker
   useEffect(() => {
-    if (roverMarkerRef.current && roverPos) {
+    // Guard here too — this effect runs on every roverPos change, so a null
+    // (no GPS fix) must not crash setLatLng.
+    if (roverMarkerRef.current && Array.isArray(roverPos) && roverPos.length === 2) {
       roverMarkerRef.current.setLatLng(roverPos);
     }
   }, [roverPos]);

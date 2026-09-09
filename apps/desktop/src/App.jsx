@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import {
   LayoutDashboard,
   Map as MapIcon,
@@ -9,10 +10,11 @@ import {
   Settings,
   Droplets,
   CheckCircle2,
+  AlertTriangle,
   Wifi,
+  WifiOff,
   Radio,
   Navigation,
-  BatteryCharging,
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
@@ -24,16 +26,63 @@ import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
 import './App.css';
 
+// How long (ms) without a new packet before we treat the rover as disconnected
+const STALE_TIMEOUT_MS = 15000;
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('Reports');
   const [selectedLayer, setSelectedLayer] = useState('ph');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const [samplePoints] = useState([
-    [14.6095, 120.9890, 0.9],
-    [14.6098, 120.9894, 0.6],
-    [14.6102, 120.9899, 0.4]
-  ]);
+  // Live sensor data — null until the first packet arrives
+  const [liveData, setLiveData] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [recentSamples, setRecentSamples] = useState([]);
+  const [heatPoints, setHeatPoints] = useState([]);
+
+  const lastPacketTime = useRef(null);
+
+  useEffect(() => {
+    const unlisten = listen('sensor-data', (event) => {
+      const data = event.payload;
+
+      // Ignore malformed/error packets forwarded from the receiver
+      if (data.error) {
+        console.warn('Receiver reported an error:', data.error);
+        return;
+      }
+
+      setLiveData(data);
+      setIsConnected(true);
+      lastPacketTime.current = Date.now();
+
+      setRecentSamples((prev) => {
+        const entry = { time: new Date().toLocaleTimeString(), ...data };
+        return [entry, ...prev].slice(0, 10);
+      });
+
+      // Only plot on the heatmap once GPS actually has a fix (lat/lng != 0)
+      // and the soil probe reading is valid for that point
+      if (data.lat && data.lng && (data.lat !== 0 || data.lng !== 0) && data.soilValid === 1) {
+        setHeatPoints((prev) => {
+          const normalizedPh = Math.max(0, Math.min(1, data.ph / 14));
+          return [...prev, [data.lat, data.lng, normalizedPh]].slice(-200);
+        });
+      }
+    });
+
+    // Periodically check whether the last packet is too old to trust
+    const staleCheck = setInterval(() => {
+      if (lastPacketTime.current && Date.now() - lastPacketTime.current > STALE_TIMEOUT_MS) {
+        setIsConnected(false);
+      }
+    }, 2000);
+
+    return () => {
+      unlisten.then((f) => f());
+      clearInterval(staleCheck);
+    };
+  }, []);
 
   const navItems = [
     { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -43,6 +92,9 @@ export default function App() {
     { id: 'Crop Assessment', label: 'Crop Assessment', icon: Sprout },
     { id: 'Reports', label: 'Reports', icon: BarChart3 }
   ];
+
+  const hasGpsFix = liveData && (liveData.lat !== 0 || liveData.lng !== 0);
+  const soilOk = liveData && liveData.soilValid === 1;
 
   return (
     <div className="dashboard-layout">
@@ -59,20 +111,12 @@ export default function App() {
                     <div className="brand-subtitle">SOIL MONITORING</div>
                   </div>
                 </div>
-                <button
-                  className="sidebar-toggle-btn"
-                  onClick={() => setIsCollapsed(true)}
-                  title="Collapse Sidebar"
-                >
+                <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(true)} title="Collapse Sidebar">
                   <ChevronLeft size={18} />
                 </button>
               </>
             ) : (
-              <button
-                className="sidebar-toggle-btn"
-                onClick={() => setIsCollapsed(false)}
-                title="Expand Sidebar"
-              >
+              <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(false)} title="Expand Sidebar">
                 <ChevronRight size={20} />
               </button>
             )}
@@ -126,23 +170,31 @@ export default function App() {
                   <strong>North Plot A</strong>
                 </div>
                 <div className="badge">
-                  <strong>SESSION-024</strong>
+                  <strong>{liveData ? `PKT #${liveData.seq}` : 'SESSION-024'}</strong>
                 </div>
-                <div className="badge badge-connected">
-                  <Wifi size={14} />
-                  <span>Rover Connected</span>
+                <div className={`badge ${isConnected ? 'badge-connected' : ''}`}>
+                  {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
+                  <span>{isConnected ? 'Rover Connected' : 'Waiting for Rover'}</span>
                 </div>
                 <div className="badge">
                   <Radio size={14} />
-                  <span>LoRA</span>
+                  <span>
+                    LoRa {liveData ? `(RSSI ${liveData.rssi} dBm, SNR ${liveData.snr})` : ''}
+                  </span>
                 </div>
                 <div className="badge">
                   <Navigation size={14} />
-                  <span>GPS 3D Fix</span>
+                  <span>
+                    {liveData
+                      ? hasGpsFix
+                        ? `GPS Fix (${liveData.satsLocked} sats)`
+                        : `No Fix (${liveData.satsView} in view)`
+                      : 'GPS --'}
+                  </span>
                 </div>
                 <div className="badge">
-                  <BatteryCharging size={14} color="#1F5132" />
-                  <span>82%</span>
+                  {soilOk ? <CheckCircle2 size={14} color="#1F5132" /> : <AlertTriangle size={14} color="#B45309" />}
+                  <span>{liveData ? (soilOk ? 'Probe OK' : 'Probe Not Responding') : 'Probe --'}</span>
                 </div>
               </div>
             </header>
@@ -156,8 +208,10 @@ export default function App() {
                   </div>
                   <span className="kpi-title">Soil Moisture</span>
                 </div>
-                <div className="kpi-value">42%</div>
-                <div className="kpi-status"><CheckCircle2 size={13} /> Within range</div>
+                <div className="kpi-value">{soilOk ? `${liveData.moisture}%` : '--'}</div>
+                <div className="kpi-status">
+                  <CheckCircle2 size={13} /> {soilOk ? 'Within range' : 'No valid reading'}
+                </div>
               </div>
 
               <div className="kpi-card">
@@ -167,8 +221,10 @@ export default function App() {
                   </div>
                   <span className="kpi-title">Soil pH</span>
                 </div>
-                <div className="kpi-value">6.4</div>
-                <div className="kpi-status"><CheckCircle2 size={13} /> Optimal</div>
+                <div className="kpi-value">{soilOk ? liveData.ph : '--'}</div>
+                <div className="kpi-status">
+                  <CheckCircle2 size={13} /> {soilOk ? 'Optimal' : 'No valid reading'}
+                </div>
               </div>
 
               <div className="kpi-card">
@@ -178,8 +234,12 @@ export default function App() {
                   </div>
                   <span className="kpi-title">Conductivity (EC)</span>
                 </div>
-                <div className="kpi-value">1.2 <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>dS/m</span></div>
-                <div className="kpi-status"><CheckCircle2 size={13} /> Within range</div>
+                <div className="kpi-value">
+                  {soilOk ? liveData.ec : '--'} <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>uS/cm</span>
+                </div>
+                <div className="kpi-status">
+                  <CheckCircle2 size={13} /> {soilOk ? 'Within range' : 'No valid reading'}
+                </div>
               </div>
 
               <div className="kpi-card">
@@ -189,8 +249,13 @@ export default function App() {
                   </div>
                   <span className="kpi-title">NPK Ratio</span>
                 </div>
-                <div className="kpi-value">1.2 / 38 / 55 <span style={{ fontSize: '0.75rem', fontWeight: 500 }}>mg/kg</span></div>
-                <div className="kpi-status"><CheckCircle2 size={13} /> Balanced</div>
+                <div className="kpi-value">
+                  {soilOk ? `${liveData.nitrogen} / ${liveData.phosphorus} / ${liveData.potassium}` : '-- / -- / --'}
+                  <span style={{ fontSize: '0.75rem', fontWeight: 500 }}> mg/kg</span>
+                </div>
+                <div className="kpi-status">
+                  <CheckCircle2 size={13} /> {soilOk ? 'Balanced' : 'No valid reading'}
+                </div>
               </div>
             </section>
 
@@ -220,10 +285,10 @@ export default function App() {
                   </div>
                 </div>
                 <HeatmapMap
-                  center={[14.6095, 120.9890]}
+                  center={hasGpsFix ? [liveData.lat, liveData.lng] : [14.6095, 120.9890]}
                   zoom={18}
-                  heatPoints={samplePoints}
-                  roverPos={[14.6095, 120.9890]}
+                  heatPoints={heatPoints}
+                  roverPos={hasGpsFix ? [liveData.lat, liveData.lng] : null}
                 />
               </div>
 
@@ -232,7 +297,15 @@ export default function App() {
                   <span className="card-title">Live Sampling Queue</span>
                 </div>
                 <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  <p>Awaiting next telemetry ping from rover...</p>
+                  {liveData ? (
+                    <p>
+                      Last packet #{liveData.seq} received at {recentSamples[0]?.time}
+                      {!hasGpsFix && ' — waiting for GPS fix before plotting on map.'}
+                      {hasGpsFix && !soilOk && ' — GPS locked, but soil probe reading invalid.'}
+                    </p>
+                  ) : (
+                    <p>Awaiting next telemetry ping from rover...</p>
+                  )}
                 </div>
               </div>
 
@@ -252,13 +325,27 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px' }}>14:32:05</td>
-                        <td style={{ padding: '8px' }}>14.6095, 120.9890</td>
-                        <td style={{ padding: '8px' }}>6.4</td>
-                        <td style={{ padding: '8px' }}>42.5%</td>
-                        <td style={{ padding: '8px' }}>1.25 dS/m</td>
-                      </tr>
+                      {recentSamples.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} style={{ padding: '8px', color: 'var(--text-muted)' }}>
+                            No samples received yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        recentSamples.map((sample, idx) => (
+                          <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '8px' }}>{sample.time}</td>
+                            <td style={{ padding: '8px' }}>
+                              {sample.lat !== 0 || sample.lng !== 0
+                                ? `${sample.lat.toFixed(5)}, ${sample.lng.toFixed(5)}`
+                                : 'No fix'}
+                            </td>
+                            <td style={{ padding: '8px' }}>{sample.soilValid === 1 ? sample.ph : '--'}</td>
+                            <td style={{ padding: '8px' }}>{sample.soilValid === 1 ? `${sample.moisture}%` : '--'}</td>
+                            <td style={{ padding: '8px' }}>{sample.soilValid === 1 ? `${sample.ec} uS/cm` : '--'}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -270,10 +357,12 @@ export default function App() {
                 </div>
                 <div style={{ padding: '16px', fontSize: '0.85rem' }}>
                   <div style={{ fontWeight: 700, color: 'var(--primary-green)', marginBottom: '4px' }}>
-                    High Suitability: Rice & Corn
+                    {soilOk ? 'High Suitability: Rice & Corn' : 'Awaiting valid soil data'}
                   </div>
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                    Based on current NPK and 6.4 pH readings.
+                    {soilOk
+                      ? `Based on current NPK and ${liveData.ph} pH readings.`
+                      : 'Recommendations will appear once a valid soil reading is received.'}
                   </p>
                 </div>
               </div>
