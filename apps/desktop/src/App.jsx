@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import {
   LayoutDashboard,
   Map as MapIcon,
@@ -30,17 +31,33 @@ import './App.css';
 const STALE_TIMEOUT_MS = 15000;
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('Reports');
+  const [activeTab, setActiveTab] = useState('Dashboard');
   const [selectedLayer, setSelectedLayer] = useState('ph');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  // Live sensor data — null until the first packet arrives
+  // Live sensor data — null until the first packet arrives.
+  // Drives the status badges and KPI cards (current-moment readings).
   const [liveData, setLiveData] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [recentSamples, setRecentSamples] = useState([]);
-  const [heatPoints, setHeatPoints] = useState([]);
 
   const lastPacketTime = useRef(null);
+
+  // DB-backed telemetry history. Drives the Heatmap and the Recent
+  // Geo-tagged Samples table — these show validated/aggregated readings
+  // pulled from SQLite rather than raw live packets, so the map and
+  // table don't fill up with every single transmission (including
+  // invalid/no-fix ones) as the rover runs.
+  const [telemetryData, setTelemetryData] = useState([]);
+
+  // Heatmap points derived from DB records (lat, lng, normalized pH 0-1)
+  const dbHeatPoints = telemetryData
+    .filter((row) => row.latitude !== 0 || row.longitude !== 0)
+    .map((row) => [row.latitude, row.longitude, Math.max(0, Math.min(1, row.ph / 14))]);
+
+  // Most recent DB record's position, used to center the map / show the
+  // last-known rover marker when no live GPS fix is currently available
+  const latestDbPos =
+    telemetryData.length > 0 ? [telemetryData[0].latitude, telemetryData[0].longitude] : null;
 
   useEffect(() => {
     const unlisten = listen('sensor-data', (event) => {
@@ -55,20 +72,6 @@ export default function App() {
       setLiveData(data);
       setIsConnected(true);
       lastPacketTime.current = Date.now();
-
-      setRecentSamples((prev) => {
-        const entry = { time: new Date().toLocaleTimeString(), ...data };
-        return [entry, ...prev].slice(0, 10);
-      });
-
-      // Only plot on the heatmap once GPS actually has a fix (lat/lng != 0)
-      // and the soil probe reading is valid for that point
-      if (data.lat && data.lng && (data.lat !== 0 || data.lng !== 0) && data.soilValid === 1) {
-        setHeatPoints((prev) => {
-          const normalizedPh = Math.max(0, Math.min(1, data.ph / 14));
-          return [...prev, [data.lat, data.lng, normalizedPh]].slice(-200);
-        });
-      }
     });
 
     // Periodically check whether the last packet is too old to trust
@@ -82,6 +85,24 @@ export default function App() {
       unlisten.then((f) => f());
       clearInterval(staleCheck);
     };
+  }, []);
+
+  useEffect(() => {
+    async function loadTelemetry() {
+      try {
+        await invoke('init_db');
+        const records = await invoke('get_recent_telemetry');
+        setTelemetryData(records);
+      } catch (error) {
+        console.error('Failed to load telemetry from Rust Backend:', error);
+      }
+    }
+    loadTelemetry();
+    // Refresh periodically so the heatmap/table pick up new DB rows
+    // as they're inserted (e.g. once averaged-sample inserts are added
+    // on the Rust side)
+    const refreshInterval = setInterval(loadTelemetry, 10000);
+    return () => clearInterval(refreshInterval);
   }, []);
 
   const navItems = [
@@ -281,14 +302,17 @@ export default function App() {
                       <option value="ph">Soil pH</option>
                       <option value="ec">Electrical Conductivity</option>
                       <option value="nitrogen">Nitrogen (N)</option>
+                      <option value="phosphorus">Phosphorus (P)</option>
+                      <option value="potassium">Potassium (K)</option>
                     </select>
                   </div>
                 </div>
                 <HeatmapMap
-                  center={hasGpsFix ? [liveData.lat, liveData.lng] : [14.6095, 120.9890]}
+                  center={hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos || [14.6095, 120.9890]}
                   zoom={18}
-                  heatPoints={heatPoints}
-                  roverPos={hasGpsFix ? [liveData.lat, liveData.lng] : null}
+                  heatPoints={dbHeatPoints}
+                  roverPos={hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos}
+                  activeLayer={selectedLayer}
                 />
               </div>
 
@@ -299,9 +323,10 @@ export default function App() {
                 <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                   {liveData ? (
                     <p>
-                      Last packet #{liveData.seq} received at {recentSamples[0]?.time}
-                      {!hasGpsFix && ' — waiting for GPS fix before plotting on map.'}
-                      {hasGpsFix && !soilOk && ' — GPS locked, but soil probe reading invalid.'}
+                      Last packet #{liveData.seq} received just now.
+                      {!hasGpsFix && ' Waiting for GPS fix.'}
+                      {hasGpsFix && !soilOk && ' GPS locked, but soil probe reading invalid.'}
+                      {' '}Map and table update from saved records.
                     </p>
                   ) : (
                     <p>Awaiting next telemetry ping from rover...</p>
@@ -322,27 +347,31 @@ export default function App() {
                         <th style={{ padding: '6px 8px' }}>pH</th>
                         <th style={{ padding: '6px 8px' }}>Moisture</th>
                         <th style={{ padding: '6px 8px' }}>EC</th>
+                        <th style={{ padding: '6px 8px' }}>NPK (N/P/K)</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {recentSamples.length === 0 ? (
+                      {telemetryData.length === 0 ? (
                         <tr>
-                          <td colSpan={5} style={{ padding: '8px', color: 'var(--text-muted)' }}>
-                            No samples received yet.
+                          <td colSpan={6} style={{ padding: '8px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            No telemetry records found.
                           </td>
                         </tr>
                       ) : (
-                        recentSamples.map((sample, idx) => (
-                          <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                            <td style={{ padding: '8px' }}>{sample.time}</td>
+                        telemetryData.map((row) => (
+                          <tr key={row.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '8px' }}>{row.timestamp}</td>
                             <td style={{ padding: '8px' }}>
-                              {sample.lat !== 0 || sample.lng !== 0
-                                ? `${sample.lat.toFixed(5)}, ${sample.lng.toFixed(5)}`
+                              {row.latitude !== 0 || row.longitude !== 0
+                                ? `${row.latitude.toFixed(5)}, ${row.longitude.toFixed(5)}`
                                 : 'No fix'}
                             </td>
-                            <td style={{ padding: '8px' }}>{sample.soilValid === 1 ? sample.ph : '--'}</td>
-                            <td style={{ padding: '8px' }}>{sample.soilValid === 1 ? `${sample.moisture}%` : '--'}</td>
-                            <td style={{ padding: '8px' }}>{sample.soilValid === 1 ? `${sample.ec} uS/cm` : '--'}</td>
+                            <td style={{ padding: '8px' }}>{row.ph}</td>
+                            <td style={{ padding: '8px' }}>{row.moisture}%</td>
+                            <td style={{ padding: '8px' }}>{row.ec} uS/cm</td>
+                            <td style={{ padding: '8px' }}>
+                              {row.nitrogen ?? '--'} / {row.phosphorus ?? '--'} / {row.potassium ?? '--'}
+                            </td>
                           </tr>
                         ))
                       )}
