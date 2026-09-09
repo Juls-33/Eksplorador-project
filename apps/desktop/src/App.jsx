@@ -30,6 +30,37 @@ import './App.css';
 // How long (ms) without a new packet before we treat the rover as disconnected
 const STALE_TIMEOUT_MS = 15000;
 
+// Maps each heatmap layer option to how its value is pulled from a DB row
+// and normalized to 0-1 for the heat gradient, plus that layer's own color
+// scale. Normalization ranges are approximate and can be tuned against real
+// field data once enough samples are collected.
+const LAYER_CONFIG = {
+  moisture: {
+    extract: (row) => Math.max(0, Math.min(1, (row.moisture - 20) / 50)),
+    gradient: { 0.2: '#ef4444', 0.4: '#f97316', 0.7: '#22c55e', 1.0: '#0284c7' }
+  },
+  ph: {
+    extract: (row) => Math.max(0, Math.min(1, (row.ph - 4.5) / 4.0)),
+    gradient: { 0.2: '#dc2626', 0.5: '#eab308', 0.8: '#16a34a', 1.0: '#7c3aed' }
+  },
+  ec: {
+    extract: (row) => Math.max(0, Math.min(1, row.ec / 4)),
+    gradient: { 0.2: '#dc2626', 0.4: '#ea580c', 0.6: '#eab308', 0.8: '#84cc16', 1.0: '#15803d' }
+  },
+  nitrogen: {
+    extract: (row) => Math.max(0, Math.min(1, (row.nitrogen ?? 0) / 60)),
+    gradient: { 0.2: '#dc2626', 0.5: '#d97706', 0.8: '#15803d', 1.0: '#1e40af' }
+  },
+  phosphorus: {
+    extract: (row) => Math.max(0, Math.min(1, (row.phosphorus ?? 0) / 80)),
+    gradient: { 0.2: '#dc2626', 0.5: '#d97706', 0.8: '#15803d', 1.0: '#1e40af' }
+  },
+  potassium: {
+    extract: (row) => Math.max(0, Math.min(1, (row.potassium ?? 0) / 100)),
+    gradient: { 0.2: '#dc2626', 0.5: '#d97706', 0.8: '#15803d', 1.0: '#1e40af' }
+  }
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('Dashboard');
   const [selectedLayer, setSelectedLayer] = useState('ph');
@@ -49,10 +80,13 @@ export default function App() {
   // invalid/no-fix ones) as the rover runs.
   const [telemetryData, setTelemetryData] = useState([]);
 
-  // Heatmap points derived from DB records (lat, lng, normalized pH 0-1)
+  const activeLayerConfig = LAYER_CONFIG[selectedLayer] ?? LAYER_CONFIG.ph;
+
+  // Heatmap points derived from DB records, using whichever layer is
+  // currently selected in the dropdown
   const dbHeatPoints = telemetryData
     .filter((row) => row.latitude !== 0 || row.longitude !== 0)
-    .map((row) => [row.latitude, row.longitude, Math.max(0, Math.min(1, row.ph / 14))]);
+    .map((row) => [row.latitude, row.longitude, activeLayerConfig.extract(row)]);
 
   // Most recent DB record's position, used to center the map / show the
   // last-known rover marker when no live GPS fix is currently available
@@ -312,7 +346,7 @@ export default function App() {
                   zoom={18}
                   heatPoints={dbHeatPoints}
                   roverPos={hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos}
-                  activeLayer={selectedLayer}
+                  gradient={activeLayerConfig.gradient}
                 />
               </div>
 
