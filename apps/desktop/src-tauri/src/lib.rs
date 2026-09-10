@@ -45,17 +45,6 @@ fn init_db() -> Result<(), String> {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM telemetry", [], |row| row.get(0))
         .map_err(|e| e.to_string())?;
-
-    if count == 0 {
-        conn.execute(
-            "INSERT INTO telemetry (timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium) VALUES
-            ('14:32:05', 14.6095, 120.9890, 6.4, 42.5, 1.25, 1.2, 38.0, 55.0),
-            ('14:35:10', 14.6098, 120.9894, 6.2, 38.0, 1.10, 1.1, 36.5, 52.0),
-            ('14:40:22', 14.6102, 120.9899, 6.5, 45.2, 1.30, 1.4, 40.0, 58.0)",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
-    }
     Ok(())
 }
 

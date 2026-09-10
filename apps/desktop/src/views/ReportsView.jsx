@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   FileText,
   Printer,
@@ -11,106 +12,174 @@ import {
   PieChart,
   Layers,
   Award,
+  Loader2,
+  AlertCircle,
   Filter
 } from 'lucide-react';
 
-const mockReportData = [
-  {
-    id: 'RPT-2026-001',
-    title: 'Comprehensive Agronomic Survey: North Plot A',
-    missionId: 'MSN-001',
-    plot: 'North Plot A',
-    surveyDate: '2026-08-20',
-    generatedDate: '2026-08-30',
-    inspector: 'Julius Santos',
-    soilTexture: 'Loam',
-    fertilityGrade: 'Grade A - Optimal Fertility',
-    overallScore: 91,
-    stats: {
-      avgMoisture: '42.5%',
-      avgPh: 6.4,
-      avgEC: '1.25 dS/m',
-      salinity: '640 mg/L',
-      n: '24 mg/kg',
-      p: '38 mg/kg',
-      k: '55 mg/kg',
-      totalDistance: '124m',
-      samplesCount: 18
-    },
-    parameterVariance: [
-      { parameter: 'Soil Moisture', min: '38.2%', max: '46.1%', mean: '42.5%', status: 'Balanced' },
-      { parameter: 'Soil pH', min: '6.1', max: '6.7', mean: '6.4', status: 'Optimal' },
-      { parameter: 'Electrical Conductivity', min: '1.10 dS/m', max: '1.38 dS/m', mean: '1.25 dS/m', status: 'Normal' },
-      { parameter: 'Nitrogen (N)', min: '20 mg/kg', max: '28 mg/kg', mean: '24 mg/kg', status: 'Adequate' },
-      { parameter: 'Phosphorus (P)', min: '32 mg/kg', max: '44 mg/kg', mean: '38 mg/kg', status: 'Optimal' },
-      { parameter: 'Potassium (K)', min: '48 mg/kg', max: '62 mg/kg', mean: '55 mg/kg', status: 'High' }
-    ],
-    recommendedCrops: [
-      { name: 'Rice (Oryza sativa)', match: '94%', note: 'Optimal soil moisture and pH match.' },
-      { name: 'Sweet Corn (Zea mays)', match: '88%', note: 'Adequate drainage across northeast grid.' }
-    ],
-    actionableRecommendations: [
-      'Maintain existing irrigation schedule; soil shows consistent moisture retention above 40%.',
-      'Apply light nitrogen top-dressing (approx. 20kg/ha Urea) prior to vegetative crop growth stage.',
-      'No lime or pH amendment needed. Soil buffering is currently stable at 6.4.'
-    ]
-  },
-  {
-    id: 'RPT-2026-002',
-    title: 'Nutrient & Moisture Assessment: South Plot B',
-    missionId: 'MSN-002',
-    plot: 'South Plot B',
-    surveyDate: '2026-08-22',
-    generatedDate: '2026-08-30',
-    inspector: 'Julius Santos',
-    soilTexture: 'Sandy Loam',
-    fertilityGrade: 'Grade B - Moderate Fertility',
-    overallScore: 74,
-    stats: {
-      avgMoisture: '37.2%',
-      avgPh: 5.9,
-      avgEC: '0.92 dS/m',
-      salinity: '465 mg/L',
-      n: '14 mg/kg',
-      p: '26 mg/kg',
-      k: '33 mg/kg',
-      totalDistance: '86m',
-      samplesCount: 12
-    },
-    parameterVariance: [
-      { parameter: 'Soil Moisture', min: '34.0%', max: '39.5%', mean: '37.2%', status: 'Low-Normal' },
-      { parameter: 'Soil pH', min: '5.6', max: '6.1', mean: '5.9', status: 'Slight Acid' },
-      { parameter: 'Electrical Conductivity', min: '0.85 dS/m', max: '1.02 dS/m', mean: '0.92 dS/m', status: 'Low' },
-      { parameter: 'Nitrogen (N)', min: '12 mg/kg', max: '16 mg/kg', mean: '14 mg/kg', status: 'Deficient' },
-      { parameter: 'Phosphorus (P)', min: '22 mg/kg', max: '30 mg/kg', mean: '26 mg/kg', status: 'Moderate' },
-      { parameter: 'Potassium (K)', min: '28 mg/kg', max: '36 mg/kg', mean: '33 mg/kg', status: 'Deficient' }
-    ],
-    recommendedCrops: [
-      { name: 'Cassava / Tuber', match: '65%', note: 'Tolerant to lower pH and sandy loam drainage.' },
-      { name: 'Peanut / Legumes', match: '72%', note: 'Assists in natural nitrogen fixation.' }
-    ],
-    actionableRecommendations: [
-      'Apply Muriate of Potash (MOP) to address potassium deficiency (K < 35 mg/kg).',
-      'Incorporate organic mulching to reduce rapid water percolation in sandy loam zones.',
-      'Broadcast 50kg agricultural dolomite lime to raise pH from 5.9 to 6.5.'
-    ]
-  }
-];
+// Helper function to dynamically process raw SQLite telemetry into structured agronomic reports
+function processTelemetryToReports(records){
+  if (!records || records.length === 0) return [];
+
+  // Group records by plot or mission_id (fallback to 'Main Field' if unassigned)
+  const grouped = records.reduce((acc, row) => {
+    const key = row.plot || row.mission_id || 'Main Field';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(row);
+    return acc;
+  }, {});
+
+  return Object.entries(grouped).map(([plotName,rows], index) => {
+    const count = rows.length;
+
+    // Helper math functions
+    const calcStats = (key) => {
+      const vals = rows.map((r) => Number(r[key]) || 0).filter((v) => v !== 0);
+      if (vals.length === 0) return { min: 0, max: 0, mean: 0};
+      const min = Math.min (...vals);
+      const max = Math.max (...vals);
+      const mean = vals.reduce((a,b) => a + b, 0) / vals.length;
+      return {min,max,mean};
+    };
+
+    const moisture = calcStats('moisture');
+    const ph = calcStats('ph');
+    const ec = calcStats('ec');
+    const n = calcStats('nitrogen');
+    const p = calcStats('phosphorus');
+    const k = calcStats('potassium');
+
+    // Dynamic Fertility Rating logic based on pH and NPK
+    let score = 70;
+    if (ph.mean >= 6.0 && ph.mean <= 7.0) score += 15;
+    if (moisture.mean >= 30 && moisture.mean <= 60) score += 10;
+    if (n.mean >= 20 && p.mean >= 20 && k.mean >= 30) score += 5;
+
+    let grade = 'Grade B - Moderate Fertility';
+    if (score >= 85) grade = 'Grade A - Optimal Fertility';
+    else if (score < 65) grade = 'Grade C - Low Fertility / Needs Amendment';
+
+    // Dynamic Crop Recommendations
+    const crops = [];
+    if (ph.mean >= 5.5 && ph.mean <= 6.8 && moisture.mean >= 35) {
+      crops.push({ name: 'Rice (Oryza sativa)', match: '92%', note: 'Favorable moisture and pH profile.' });
+    }
+    if (ph.mean >= 5.8 && ph.mean <= 7.2) {
+      crops.push({ name: 'Corn / Maize (Zea mays)', match: '85%', note: 'Balanced pH level across tested nodes.' });
+    }
+    if (crops.length === 0) {
+      crops.push({ name: 'Cassava / Root Crops', match: '70%', note: 'Tolerant to wider soil pH and lower moisture.' });
+    }
+
+    const recs = [];
+    if (ph.mean < 6.0) recs.push(`Broadcast agricultural lime to elevate soil pH (current mean: ${ph.mean.toFixed(1)}).`);
+    else if (ph.mean > 7.5) recs.push(`Apply sulfur amendments to reduce alkalinity (current mean: ${ph.mean.toFixed(1)}).`);
+    else recs.push(`Soil pH buffering is stable at ${ph.mean.toFixed(1)}. No lime amendment needed.`);
+
+    if (n.mean < 20) recs.push(`Apply Nitrogen fertilizer (Urea / Ammonium Nitrate) to reach optimal vegetative growth levels.`);
+    if (k.mean < 30) recs.push(`Incorporate Muriate of Potash (MOP) to resolve Potassium deficiency.`);
+    if (moisture.mean < 30) recs.push(`Increase irrigation volume; average soil moisture is below recommended target.`);
+
+    const reportId = `RPT-2026-00${index + 1}`;
+    const latestDate = rows[0]?.timestamp ? rows[0].timestamp.split(' ')[0] : '2026-09-10';
+
+    return {
+      id: reportId,
+      title: `Agronomic Spatial Assessment: ${plotName}`,
+      missionId: rows[0]?.mission_id || `MSN-00${index + 1}`,
+      plot: plotName,
+      surveyDate: latestDate,
+      generatedDate: new Date().toISOString().split('T')[0],
+      inspector: 'System Generated (SQLite Data)',
+      soilTexture: 'Loam / Field Sample',
+      fertilityGrade: grade,
+      overallScore: score,
+      stats: {
+        avgMoisture: `${moisture.mean.toFixed(1)}%`,
+        avgPh: ph.mean.toFixed(1),
+        avgEC: `${ec.mean.toFixed(2)} dS/m`,
+        n: `${n.mean.toFixed(0)} mg/kg`,
+        p: `${p.mean.toFixed(0)} mg/kg`,
+        k: `${k.mean.toFixed(0)} mg/kg`,
+        samplesCount: count
+      },
+      parameterVariance: [
+        { parameter: 'Soil Moisture', min: `${moisture.min.toFixed(1)}%`, max: `${moisture.max.toFixed(1)}%`, mean: `${moisture.mean.toFixed(1)}%`, status: moisture.mean >= 35 ? 'Balanced' : 'Low' },
+        { parameter: 'Soil pH', min: ph.min.toFixed(1), max: ph.max.toFixed(1), mean: ph.mean.toFixed(1), status: ph.mean >= 6.0 && ph.mean <= 7.0 ? 'Optimal' : 'Needs Review' },
+        { parameter: 'Electrical Conductivity', min: `${ec.min.toFixed(2)} dS/m`, max: `${ec.max.toFixed(2)} dS/m`, mean: `${ec.mean.toFixed(2)} dS/m`, status: 'Normal' },
+        { parameter: 'Nitrogen (N)', min: `${n.min.toFixed(0)} mg/kg`, max: `${n.max.toFixed(0)} mg/kg`, mean: `${n.mean.toFixed(0)} mg/kg`, status: n.mean >= 20 ? 'Adequate' : 'Deficient' },
+        { parameter: 'Phosphorus (P)', min: `${p.min.toFixed(0)} mg/kg`, max: `${p.max.toFixed(0)} mg/kg`, mean: `${p.mean.toFixed(0)} mg/kg`, status: p.mean >= 20 ? 'Optimal' : 'Low' },
+        { parameter: 'Potassium (K)', min: `${k.min.toFixed(0)} mg/kg`, max: `${k.max.toFixed(0)} mg/kg`, mean: `${k.mean.toFixed(0)} mg/kg`, status: k.mean >= 30 ? 'Adequate' : 'Deficient' }
+      ], 
+      recommendedCrops: crops,
+      actionableRecommendations: recs
+    };
+  });
+}
 
 export default function ReportsView() {
-  const [selectedReportId, setSelectedReportId] = useState('RPT-2026-001');
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedReportId, setSelectedReportId] = useState('null');
   const [plotFilter, setPlotFilter] = useState('ALL');
   const printRef = useRef(null);
 
-  const currentReport = mockReportData.find(r => r.id === selectedReportId) || mockReportData[0];
+  useEffect(() => {
+    async function loadDbReports() {
+      try {
+        setLoading(true);
+        await invoke('init_db');
+        const telemtryRows = await invoke('get_recent_telemetry');
 
-  const filteredReports = mockReportData.filter(r => {
+        const processed = processTelemetryToReports(telemtryRows);
+        setReports(processed);
+        if (processed.length > 0) {
+          setSelectedReportId(processed[0].id)
+        }
+    } catch (err) {
+      console.error('Failed to load DB telemetry for reports:', err);
+      setError('Failed to fetch report records from SQLite database.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  loadDbReports();
+}, []);
+
+  const currentReport = reports.find((r) => r.id === selectedReportId) || reports[0];
+
+  const uniquePlots = Array.from(new Set(reports.map((r) => r.plot)));
+
+  const filteredReports = reports.filter(r => {
     return plotFilter === 'ALL' || r.plot === plotFilter;
   });
 
   const handlePrint = () => {
     window.print();
   };
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
+        <Loader2 className="animate-spin" size={24} color="var(--primary-green)" />
+        <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Processing Database Telemetry Records...</span>
+      </div>
+    );
+  }
+
+  if (error || reports.length === 0) {
+    return (
+      <div className="card" style={{ padding: '40px', textAlign: 'center', margin: 'auto', maxWidth: '500px' }}>
+        <AlertCircle size={40} color="#b45309" style={{ marginBottom: '12px' }} />
+        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '6px' }}>No Database Telemetry Available</h3>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+          No recorded field samples were found in SQLite. Save telemetry records to view automatically generated agronomic summaries.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="reports-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
@@ -140,9 +209,10 @@ export default function ReportsView() {
                 outline: 'none'
               }}
             >
-              <option value="ALL">All Plots</option>
-              <option value="North Plot A">North Plot A</option>
-              <option value="South Plot B">South Plot B</option>
+              <option value="ALL">All Plots ({reports.length})</option>
+              {uniquePlots.map((plot) => (
+                <option key = {plot} value={plot}>{plot}</option>
+              ))}
             </select>
           </div>
 
@@ -221,6 +291,7 @@ export default function ReportsView() {
         </div>
 
         {/* Right: Printable Comprehensive Document View */}
+        {currentReport && (
         <div className="card printable-document" ref={printRef} style={{ overflowY: 'auto', padding: '24px', background: '#fff' }}>
           {/* Document Header */}
           <div style={{
@@ -269,7 +340,7 @@ export default function ReportsView() {
           {/* Section 1: Executive KPI Summary */}
           <div style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--primary-dark)', marginBottom: '10px' }}>
-              1. Spatial Telemetry & Aggregate Averages
+              1. Spatial Telemetry & Aggregate Averages ({currentReport.stats.samplesCount} Waypoints)
             </h3>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
               <div style={{ padding: '10px', background: 'var(--bg-main)', borderRadius: '6px', border: '1px solid var(--card-border)' }}>
@@ -296,7 +367,7 @@ export default function ReportsView() {
           {/* Section 2: Sensor Variance Table */}
           <div style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--primary-dark)', marginBottom: '8px' }}>
-              2. Parameter Range & Deviation Analysis ({currentReport.stats.samplesCount} Waypoints)
+              2. Parameter Range & Deviation Analysis
             </h3>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
               <thead>
@@ -309,26 +380,29 @@ export default function ReportsView() {
                 </tr>
               </thead>
               <tbody>
-                {currentReport.parameterVariance.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '8px 10px', fontWeight: 600 }}>{row.parameter}</td>
-                    <td style={{ padding: '8px 10px' }}>{row.min}</td>
-                    <td style={{ padding: '8px 10px' }}>{row.max}</td>
-                    <td style={{ padding: '8px 10px', fontWeight: 700, color: 'var(--primary-green)' }}>{row.mean}</td>
-                    <td style={{ padding: '8px 10px' }}>
-                      <span style={{
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        padding: '2px 8px',
-                        borderRadius: '4px',
-                        background: row.status === 'Optimal' || row.status === 'Balanced' ? '#dcfce7' : '#f1f5f9',
-                        color: row.status === 'Optimal' || row.status === 'Balanced' ? '#166534' : 'var(--text-muted)'
-                      }}>
-                        {row.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {currentReport.parameterVariance.map((row, i) => {
+                  const isOptimal = ['Optimal', 'Balanced', 'Adequate', 'Normal'].includes(row.status);
+                  return (
+                    <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '8px 10px', fontWeight: 600 }}>{row.parameter}</td>
+                      <td style={{ padding: '8px 10px' }}>{row.min}</td>
+                      <td style={{ padding: '8px 10px' }}>{row.max}</td>
+                      <td style={{ padding: '8px 10px', fontWeight: 700, color: 'var(--primary-green)' }}>{row.mean}</td>
+                      <td style={{ padding: '8px 10px' }}>
+                        <span style={{
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          background: isOptimal ? '#dcfce7' : '#fef3f7',
+                          color: isOptimal ? '#166534' : 'var(--text-muted)'
+                        }}>
+                          {row.status}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -386,6 +460,7 @@ export default function ReportsView() {
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );
