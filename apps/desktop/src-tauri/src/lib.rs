@@ -4,13 +4,15 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
-use rusqlite::{Connection, Result};
+use rusqlite::{params, Connection, Result};
 use rusqlite_migration::{Migrations, M};
 use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct TelemetryRow {
     pub id: i64,
+    pub mission_id: Option<String>,
+    pub plot: Option<String>,
     pub timestamp: String,
     pub latitude: f64,
     pub longitude: f64,
@@ -42,32 +44,68 @@ fn get_connection() -> Result<Connection> {
 fn init_db() -> Result<(), String> {
     let conn = get_connection().map_err(|e| e.to_string())?;
 
-    let count: i64 = conn
+    let _count: i64 = conn
         .query_row("SELECT COUNT(*) FROM telemetry", [], |row| row.get(0))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-fn get_recent_telemetry() -> Result<Vec<TelemetryRow>, String> {
+fn get_all_telemetry() -> Result<Vec<TelemetryRow>, String> {
     let conn = get_connection().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium FROM telemetry ORDER BY id DESC LIMIT 5")
+        .prepare("SELECT id, mission_id, plot, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium FROM telemetry ORDER BY id DESC")
         .map_err(|e| e.to_string())?;
 
     let rows = stmt
         .query_map([], |row| {
             Ok(TelemetryRow {
                 id: row.get(0)?,
-                timestamp: row.get(1)?,
-                latitude: row.get(2)?,
-                longitude: row.get(3)?,
-                ph: row.get(4)?,
-                moisture: row.get(5)?,
-                ec: row.get(6)?,
-                nitrogen: row.get(7)?,
-                phosphorus: row.get(8)?,
-                potassium: row.get(9)?,
+                mission_id: row.get(1)?,
+                plot: row.get(2)?,
+                timestamp: row.get(3)?,
+                latitude: row.get(4)?,
+                longitude: row.get(5)?,
+                ph: row.get(6)?,
+                moisture: row.get(7)?,
+                ec: row.get(8)?,
+                nitrogen: row.get(9)?,
+                phosphorus: row.get(10)?,
+                potassium: row.get(11)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row.map_err(|e| e.to_string())?);
+    }
+
+    Ok(records)
+}
+
+#[tauri::command]
+fn get_recent_telemetry() -> Result<Vec<TelemetryRow>, String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, mission_id, plot, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium FROM telemetry ORDER BY id DESC LIMIT 5")
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(TelemetryRow {
+                id: row.get(0)?,
+                mission_id: row.get(1)?,
+                plot: row.get(2)?,
+                timestamp: row.get(3)?,
+                latitude: row.get(4)?,
+                longitude: row.get(5)?,
+                ph: row.get(6)?,
+                moisture: row.get(7)?,
+                ec: row.get(8)?,
+                nitrogen: row.get(9)?,
+                phosphorus: row.get(10)?,
+                potassium: row.get(11)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -253,7 +291,12 @@ pub fn run() {
             start_serial_listener(app.handle().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![init_db, get_recent_telemetry])
+        // Updated handler list to include all three database commands
+        .invoke_handler(tauri::generate_handler![
+            init_db,
+            get_all_telemetry,
+            get_recent_telemetry
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

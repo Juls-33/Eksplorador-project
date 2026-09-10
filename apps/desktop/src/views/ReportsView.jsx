@@ -22,24 +22,31 @@ function processTelemetryToReports(records){
   if (!records || records.length === 0) return [];
 
   // Group records by plot or mission_id (fallback to 'Main Field' if unassigned)
-  const grouped = records.reduce((acc, row) => {
-    const key = row.plot || row.mission_id || 'Main Field';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(row);
+  const groupedByMission = records.reduce((acc, row) => {
+    const mission = row.mission_id || "Unassigned";
+    if (!acc[mission]) acc[mission] = [];
+    acc[mission].push(row);
     return acc;
   }, {});
 
-  return Object.entries(grouped).map(([plotName,rows], index) => {
+  return Object.entries(groupedByMission).map(([missionId,rows], index) => {
     const count = rows.length;
+
+    // FIXED: Derived plotName safely from the first record in the mission group
+    const plotName = rows[0]?.plot || `Plot ${index + 1}`;
 
     // Helper math functions
     const calcStats = (key) => {
-      const vals = rows.map((r) => Number(r[key]) || 0).filter((v) => v !== 0);
-      if (vals.length === 0) return { min: 0, max: 0, mean: 0};
-      const min = Math.min (...vals);
-      const max = Math.max (...vals);
-      const mean = vals.reduce((a,b) => a + b, 0) / vals.length;
-      return {min,max,mean};
+      const vals = rows
+        .map((r) => r[key])
+        .filter((v) => v !== null && v !== undefined && v !== '' && !isNaN(Number(v)))
+        .map((v) => Number(v));
+
+      if (vals.length === 0) return { min: 0, max: 0, mean: 0 };
+      const min = Math.min(...vals);
+      const max = Math.max(...vals);
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      return { min, max, mean };
     };
 
     const moisture = calcStats('moisture');
@@ -121,7 +128,7 @@ export default function ReportsView() {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selectedReportId, setSelectedReportId] = useState('null');
+  const [selectedReportId, setSelectedReportId] = useState(null);
   const [plotFilter, setPlotFilter] = useState('ALL');
   const printRef = useRef(null);
 
@@ -130,7 +137,10 @@ export default function ReportsView() {
       try {
         setLoading(true);
         await invoke('init_db');
-        const telemtryRows = await invoke('get_recent_telemetry');
+        const rawData = await invoke('get_all_telemetry');
+        // Ensure payload is an array regardless of wrapper
+        const telemtryRows = Array.isArray(rawData) ? rawData : (rawData?.rows || rawData?.data || []);
+        console.log('Raw SQLite output from Tauri:', telemtryRows);
 
         const processed = processTelemetryToReports(telemtryRows);
         setReports(processed);
@@ -148,13 +158,9 @@ export default function ReportsView() {
   loadDbReports();
 }, []);
 
-  const currentReport = reports.find((r) => r.id === selectedReportId) || reports[0];
-
   const uniquePlots = Array.from(new Set(reports.map((r) => r.plot)));
-
-  const filteredReports = reports.filter(r => {
-    return plotFilter === 'ALL' || r.plot === plotFilter;
-  });
+  const filteredReports = reports.filter(r => plotFilter === 'ALL' || r.plot === plotFilter);
+  const currentReport = filteredReports.find((r) => r.id === selectedReportId) || filteredReports[0] || reports[0];
 
   const handlePrint = () => {
     window.print();
@@ -243,6 +249,7 @@ export default function ReportsView() {
           </div>
 
           <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {/* THIS IS THE LOOP THAT RENDERS EACH SIDEBAR CARD */}
             {filteredReports.map(report => {
               const isSelected = selectedReportId === report.id;
               return (
