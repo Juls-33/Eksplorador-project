@@ -505,6 +505,23 @@ export default function FieldMapView() {
           </div>
 
           <div style={{ flex: 1, position: 'relative' }}>
+            {/* <HeatmapMap
+              center={[14.6095, 120.9895]}
+              zoom={18}
+              boundary={activeBoundary}
+              waypoints={displayedWaypoints}
+              heatPoints={heatPointsForLayer}
+              roverPos={roverPos}
+              onMapClick={handleMapClick}
+              interactionMode={
+                wizardStep === 'DRAWING_BOUNDARY'
+                  ? 'DRAW_BOUNDARY'
+                  : wizardStep === 'PLACING_PINS'
+                  ? 'SET_WAYPOINTS'
+                  : 'NONE'
+              }
+              gradient={activeConfig.gradient}
+            />*/}
             <HeatmapMap
               center={[14.6095, 120.9895]}
               zoom={18}
