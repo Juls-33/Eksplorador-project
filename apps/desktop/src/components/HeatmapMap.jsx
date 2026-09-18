@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet.heat';
+import { Crosshair } from 'lucide-react';
 import { generateIDWHeatmapGrid } from '../utils/geo';
 
 export default function HeatmapMap({
@@ -31,6 +32,17 @@ export default function HeatmapMap({
 
   const interactionModeRef = useRef(interactionMode);
   const onMapClickRef = useRef(onMapClick);
+
+  // Whether the map should automatically re-center on the rover's position
+  // as it updates. Turns itself off if the user manually drags the map
+  // (so it doesn't fight someone trying to look elsewhere), and can be
+  // re-enabled with the toggle button.
+  const [followRover, setFollowRover] = useState(true);
+  const followRoverRef = useRef(true);
+
+  useEffect(() => {
+    followRoverRef.current = followRover;
+  }, [followRover]);
 
   useEffect(() => {
     interactionModeRef.current = interactionMode;
@@ -98,6 +110,15 @@ export default function HeatmapMap({
       }
     });
 
+    // Dragstart only fires on real user mouse/touch interaction, not on
+    // programmatic panTo/setView calls — so this cleanly detects "the user
+    // wants to look somewhere else" without also triggering on our own
+    // auto-follow pans.
+    mapInstanceRef.current.on('dragstart', () => {
+      followRoverRef.current = false;
+      setFollowRover(false);
+    });
+
     return () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
@@ -161,12 +182,16 @@ export default function HeatmapMap({
     }
   }, [heatPoints, boundary, gradient]);
 
-  // Update Rover GPS Marker
+  // Update Rover GPS Marker (and re-center the map if auto-follow is on)
   useEffect(() => {
     // Guard here too — this effect runs on every roverPos change, so a null
     // (no GPS fix) must not crash setLatLng.
     if (roverMarkerRef.current && Array.isArray(roverPos) && roverPos.length === 2) {
       roverMarkerRef.current.setLatLng(roverPos);
+
+      if (followRoverRef.current && mapInstanceRef.current) {
+        mapInstanceRef.current.panTo(roverPos, { animate: true, duration: 0.5 });
+      }
     }
   }, [roverPos]);
 
@@ -202,5 +227,40 @@ export default function HeatmapMap({
     routePolylineRef.current.setLatLngs(waypoints);
   }, [waypoints]);
 
-  return <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />;
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
+      <button
+        onClick={() => {
+          setFollowRover(true);
+          followRoverRef.current = true;
+          if (mapInstanceRef.current && Array.isArray(roverPos) && roverPos.length === 2) {
+            mapInstanceRef.current.panTo(roverPos, { animate: true, duration: 0.5 });
+          }
+        }}
+        title={followRover ? 'Following rover' : 'Click to re-center on rover'}
+        style={{
+          position: 'absolute',
+          bottom: '12px',
+          right: '12px',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          padding: '6px 10px',
+          borderRadius: '8px',
+          border: '1px solid var(--card-border, #e2e8f0)',
+          background: followRover ? 'var(--primary-green, #1F5132)' : '#fff',
+          color: followRover ? '#fff' : 'var(--text-dark, #1e293b)',
+          fontSize: '0.75rem',
+          fontWeight: 700,
+          cursor: 'pointer',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+        }}
+      >
+        <Crosshair size={14} />
+        {followRover ? 'Following' : 'Follow Rover'}
+      </button>
+    </div>
+  );
 }

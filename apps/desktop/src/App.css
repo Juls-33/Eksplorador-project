@@ -272,6 +272,7 @@ body {
   grid-template-rows: minmax(360px, 1.4fr) minmax(180px, 0.8fr);
   gap: 14px;
   flex: 1;
+  min-height: 0;
 }
 
 .card {
@@ -281,6 +282,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
 }
 
