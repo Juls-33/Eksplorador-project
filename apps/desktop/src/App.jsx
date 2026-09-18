@@ -73,23 +73,29 @@ export default function App() {
 
   const lastPacketTime = useRef(null);
 
-  // DB-backed telemetry history. Drives the Heatmap and the Recent
-  // Geo-tagged Samples table — these show validated/aggregated readings
-  // pulled from SQLite rather than raw live packets, so the map and
-  // table don't fill up with every single transmission (including
-  // invalid/no-fix ones) as the rover runs.
+  // DB-backed telemetry history. Drives the Recent Geo-tagged Samples
+  // table only now — the heatmap itself plots live readings as they
+  // arrive (see rawLiveReadings below), so it updates in real time
+  // instead of waiting on the periodic DB refresh.
   const [telemetryData, setTelemetryData] = useState([]);
+
+  // Raw live readings accumulated as valid packets arrive, kept
+  // unnormalized so switching the layer dropdown recolors the whole
+  // heatmap immediately rather than only affecting new points.
+  const [rawLiveReadings, setRawLiveReadings] = useState([]);
 
   const activeLayerConfig = LAYER_CONFIG[selectedLayer] ?? LAYER_CONFIG.ph;
 
-  // Heatmap points derived from DB records, using whichever layer is
+  // Heatmap points computed from live readings, using whichever layer is
   // currently selected in the dropdown
-  const dbHeatPoints = telemetryData
-    .filter((row) => row.latitude !== 0 || row.longitude !== 0)
-    .map((row) => [row.latitude, row.longitude, activeLayerConfig.extract(row)]);
+  const liveHeatPoints = rawLiveReadings.map((r) => [
+    r.lat,
+    r.lng,
+    activeLayerConfig.extract(r)
+  ]);
 
-  // Most recent DB record's position, used to center the map / show the
-  // last-known rover marker when no live GPS fix is currently available
+  // Most recent DB record's position, used as a fallback center/marker
+  // before any live GPS fix has come in this session
   const latestDbPos =
     telemetryData.length > 0 ? [telemetryData[0].latitude, telemetryData[0].longitude] : null;
 
@@ -101,6 +107,26 @@ export default function App() {
       if (data.error) {
         console.warn('Receiver reported an error:', data.error);
         return;
+      }
+
+      // Plot on the heatmap only once GPS has a fix and the soil probe
+      // reading is valid — same filter the backend uses for DB inserts,
+      // so the live map and the eventual historical record agree on
+      // what counts as a "real" sample.
+      const hasFix = data.lat && (data.lat !== 0 || data.lng !== 0);
+      if (hasFix && data.soilValid === 1) {
+        setRawLiveReadings((prev) =>
+          [...prev, {
+            lat: data.lat,
+            lng: data.lng,
+            moisture: data.moisture,
+            ph: data.ph,
+            ec: data.ec,
+            nitrogen: data.nitrogen,
+            phosphorus: data.phosphorus,
+            potassium: data.potassium
+          }].slice(-500)
+        );
       }
 
       setLiveData(data);
@@ -344,7 +370,7 @@ export default function App() {
                 <HeatmapMap
                   center={hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos || [14.6095, 120.9890]}
                   zoom={18}
-                  heatPoints={dbHeatPoints}
+                  heatPoints={liveHeatPoints}
                   roverPos={hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos}
                   gradient={activeLayerConfig.gradient}
                 />
@@ -360,7 +386,8 @@ export default function App() {
                       Last packet #{liveData.seq} received just now.
                       {!hasGpsFix && ' Waiting for GPS fix.'}
                       {hasGpsFix && !soilOk && ' GPS locked, but soil probe reading invalid.'}
-                      {' '}Map and table update from saved records.
+                      {hasGpsFix && soilOk && ' Plotted on the heatmap.'}
+                      {' '}Samples table updates from saved records.
                     </p>
                   ) : (
                     <p>Awaiting next telemetry ping from rover...</p>
