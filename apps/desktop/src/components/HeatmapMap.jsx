@@ -56,16 +56,71 @@ export default function HeatmapMap({
     }
   }, [interactionMode, onMapClick]);
 
+  const FastFallbackTileLayer = L.TileLayer.extend({
+    createTile: function (coords, done) {
+      const tile = document.createElement('img');
+
+      L.DomEvent.on(tile, 'load', L.Util.bind(this._tileOnLoad, this, done, tile));
+
+      // Local disk tile path
+      const localUrl = `/tiles/${coords.z}/${coords.x}/${coords.y}.png`;
+      const onlineUrl = this.getTileUrl(coords);
+
+      // Handle fallback if online fails while navigator.onLine was technically true
+      L.DomEvent.on(tile, 'error', () => {
+        if (tile.src !== localUrl) {
+          tile.src = localUrl;
+        } else {
+          this._tileOnError(done, tile, new Error('Tile not found locally or online'));
+        }
+      });
+
+      if (this.options.crossOrigin || this.options.crossOrigin === '') {
+        tile.crossOrigin = this.options.crossOrigin === true ? '' : this.options.crossOrigin;
+      }
+
+      tile.alt = '';
+      tile.setAttribute('role', 'presentation');
+
+      //  OPTIMIZATION: If offline, fetch directly from local disk immediately
+      // Do not attempt to hit the network and wait for a socket timeout.
+      if (!navigator.onLine) {
+        tile.src = localUrl;
+      } else {
+        tile.src = onlineUrl;
+      }
+
+      return tile;
+    }
+  });
   useEffect(() => {
+
     if (!mapContainerRef.current) return;
 
+    const REGION_BOUNDS = [
+      [14.05, 120.70], // Southwest (South Laguna / Batangas border)
+      [16.05, 121.60], // Northeast (North Nueva Ecija)
+    ];
+
     mapInstanceRef.current = L.map(mapContainerRef.current, {
-      zoomControl: true
+      zoomControl: true,
+      minZoom: 10,
+      maxZoom: 18,
+      maxBounds: REGION_BOUNDS,
+      maxBoundsViscosity: 1.0,
+      // Performance optimization flags:
+      preferCanvas: true,          // Renders vectors to Canvas instead of slow SVG DOM nodes
+      zoomAnimation: true,
+      fadeAnimation: false,        // Disabling tile fade-in makes zooming feel snappy and instant
+      updateWhenZooming: false,    // Don't fetch/render intermediate tiles mid-pinch or mid-scroll
+      updateWhenIdle: true,        // Wait until panning/zooming settles before rendering tiles
     }).setView(center, zoom);
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // Initialize with Online as primary, fallback to /tiles/
+    new FastFallbackTileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 20
+      maxZoom: 20,
+      subdomains: ['a', 'b', 'c']
     }).addTo(mapInstanceRef.current);
 
     boundaryPolygonRef.current = L.polygon([], {
