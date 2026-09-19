@@ -314,6 +314,25 @@ body {
   grid-row: 2;
 }
 
+.historical-sample-row {
+  cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.historical-sample-row:hover {
+  background: rgba(31, 81, 50, 0.07);
+}
+
+.historical-sample-row.selected {
+  background: rgba(31, 81, 50, 0.14);
+  box-shadow: inset 3px 0 0 var(--primary-green);
+}
+
+.historical-sample-row.unavailable {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .crop-suitability-card {
   grid-column: 2;
   grid-row: 2;
