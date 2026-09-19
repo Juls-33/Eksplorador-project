@@ -34,29 +34,40 @@ const STALE_TIMEOUT_MS = 15000;
 // and normalized to 0-1 for the heat gradient, plus that layer's own color
 // scale. Normalization ranges are approximate and can be tuned against real
 // field data once enough samples are collected.
+const normalizeHeatValue = (value, min, max) => {
+  if (value === null || value === undefined || value === '') return null;
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return null;
+
+  // Leaflet renders an intensity of 0 as transparent. Keep valid low values
+  // visible at the bottom of the gradient while retaining their relative rank.
+  const normalized = Math.max(0, Math.min(1, (numericValue - min) / (max - min)));
+  return 0.2 + normalized * 0.8;
+};
+
 const LAYER_CONFIG = {
   moisture: {
-    extract: (row) => Math.max(0, Math.min(1, (row.moisture - 20) / 50)),
+    extract: (row) => normalizeHeatValue(row.moisture, 20, 70),
     gradient: { 0.2: '#ef4444', 0.4: '#f97316', 0.7: '#22c55e', 1.0: '#0284c7' }
   },
   ph: {
-    extract: (row) => Math.max(0, Math.min(1, (row.ph - 4.5) / 4.0)),
+    extract: (row) => normalizeHeatValue(row.ph, 4.5, 8.5),
     gradient: { 0.2: '#dc2626', 0.5: '#eab308', 0.8: '#16a34a', 1.0: '#7c3aed' }
   },
   ec: {
-    extract: (row) => Math.max(0, Math.min(1, row.ec / 4)),
+    extract: (row) => normalizeHeatValue(row.ec, 0, 4),
     gradient: { 0.2: '#dc2626', 0.4: '#ea580c', 0.6: '#eab308', 0.8: '#84cc16', 1.0: '#15803d' }
   },
   nitrogen: {
-    extract: (row) => Math.max(0, Math.min(1, (row.nitrogen ?? 0) / 60)),
+    extract: (row) => normalizeHeatValue(row.nitrogen, 0, 60),
     gradient: { 0.2: '#dc2626', 0.5: '#d97706', 0.8: '#15803d', 1.0: '#1e40af' }
   },
   phosphorus: {
-    extract: (row) => Math.max(0, Math.min(1, (row.phosphorus ?? 0) / 80)),
+    extract: (row) => normalizeHeatValue(row.phosphorus, 0, 80),
     gradient: { 0.2: '#dc2626', 0.5: '#d97706', 0.8: '#15803d', 1.0: '#1e40af' }
   },
   potassium: {
-    extract: (row) => Math.max(0, Math.min(1, (row.potassium ?? 0) / 100)),
+    extract: (row) => normalizeHeatValue(row.potassium, 0, 100),
     gradient: { 0.2: '#dc2626', 0.5: '#d97706', 0.8: '#15803d', 1.0: '#1e40af' }
   }
 };
@@ -79,6 +90,11 @@ export default function App() {
   // instead of waiting on the periodic DB refresh.
   const [telemetryData, setTelemetryData] = useState([]);
 
+  // One table row represents one complete historical sample. When selected,
+  // that record temporarily becomes the map's data source so its saved values
+  // can be reviewed independently from the live session.
+  const [selectedHistoricalRecord, setSelectedHistoricalRecord] = useState(null);
+
   // Raw live readings accumulated as valid packets arrive, kept
   // unnormalized so switching the layer dropdown recolors the whole
   // heatmap immediately rather than only affecting new points.
@@ -88,11 +104,29 @@ export default function App() {
 
   // Heatmap points computed from live readings, using whichever layer is
   // currently selected in the dropdown
-  const liveHeatPoints = rawLiveReadings.map((r) => [
-    r.lat,
-    r.lng,
-    activeLayerConfig.extract(r)
-  ]);
+  const liveHeatPoints = rawLiveReadings
+    .map((r) => [r.lat, r.lng, activeLayerConfig.extract(r)])
+    .filter((point) => point[2] !== null);
+
+  const selectedHistoricalIntensity = selectedHistoricalRecord
+    ? activeLayerConfig.extract(selectedHistoricalRecord)
+    : null;
+
+  const selectedHistoricalHeatPoints = selectedHistoricalRecord && selectedHistoricalIntensity !== null
+    ? [[
+        selectedHistoricalRecord.latitude,
+        selectedHistoricalRecord.longitude,
+        selectedHistoricalIntensity
+      ]]
+    : [];
+
+  const displayedHeatPoints = selectedHistoricalRecord
+    ? selectedHistoricalHeatPoints
+    : liveHeatPoints;
+
+  const selectedHistoricalPos = selectedHistoricalRecord
+    ? [selectedHistoricalRecord.latitude, selectedHistoricalRecord.longitude]
+    : null;
 
   // Most recent DB record's position, used as a fallback center/marker
   // before any live GPS fix has come in this session
@@ -368,10 +402,10 @@ export default function App() {
                   </div>
                 </div>
                 <HeatmapMap
-                  center={hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos || [14.6095, 120.9890]}
+                  center={selectedHistoricalPos || (hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos || [14.6095, 120.9890])}
                   zoom={18}
-                  heatPoints={liveHeatPoints}
-                  roverPos={hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos}
+                  heatPoints={displayedHeatPoints}
+                  roverPos={selectedHistoricalPos || (hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos)}
                   gradient={activeLayerConfig.gradient}
                 />
               </div>
@@ -419,8 +453,21 @@ export default function App() {
                           </td>
                         </tr>
                       ) : (
-                        telemetryData.map((row) => (
-                          <tr key={row.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        telemetryData.map((row) => {
+                          const hasSavedLocation = row.latitude !== 0 || row.longitude !== 0;
+                          const isSelected = selectedHistoricalRecord?.id === row.id;
+
+                          return (
+                          <tr
+                            key={row.id}
+                            className={`historical-sample-row${isSelected ? ' selected' : ''}${!hasSavedLocation ? ' unavailable' : ''}`}
+                            onClick={() => {
+                              if (hasSavedLocation) setSelectedHistoricalRecord(row);
+                            }}
+                            aria-selected={isSelected}
+                            title={hasSavedLocation ? 'Show this historical record on the heatmap' : 'This record has no saved GPS fix'}
+                            style={{ borderBottom: '1px solid #f1f5f9' }}
+                          >
                             <td style={{ padding: '8px' }}>{row.timestamp}</td>
                             <td style={{ padding: '8px' }}>
                               {row.latitude !== 0 || row.longitude !== 0
@@ -434,7 +481,8 @@ export default function App() {
                               {row.nitrogen ?? '--'} / {row.phosphorus ?? '--'} / {row.potassium ?? '--'}
                             </td>
                           </tr>
-                        ))
+                          );
+                        })
                       )}
                     </tbody>
                   </table>

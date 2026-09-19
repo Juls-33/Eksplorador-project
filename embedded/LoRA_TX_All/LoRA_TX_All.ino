@@ -21,6 +21,11 @@
 #define I2C_SCL      22
 const uint8_t MPU_ADDR = 0x68;
 
+// Minimum moisture (%) below which we treat the probe as having no real
+// soil contact, purely to filter out sensor noise near zero (not a
+// meaningful soil-moisture threshold).
+const float MOISTURE_CONTACT_THRESHOLD = 1.0;
+
 // ================= OBJECTS & STATE =================
 HardwareSerial rs485Serial(2);
 HardwareSerial gpsSerial(1);
@@ -226,7 +231,25 @@ void loop() {
         temperature = rawTemp / 10.0;
         moisture    = rawMoist / 10.0;
         ph          = rawPh / 100.0;
-        soilValid   = true;
+
+        // A passed CRC only confirms the Modbus transmission itself was
+        // received correctly — it says nothing about whether the probe
+        // is actually in soil. The pH channel in particular returns a
+        // fixed idle baseline (~7.00, corresponding to 0mV) when the
+        // electrode has no real contact, which would otherwise look
+        // like a perfectly plausible neutral-soil reading.
+        //
+        // Moisture and EC are both physical measurements that correctly
+        // read 0 with no soil contact, so we use either one as evidence
+        // of real contact (an OR, so one noisy/glitching channel doesn't
+        // wrongly invalidate a genuine reading). Only when a full
+        // reading is both CRC-valid AND shows real contact evidence do
+        // we mark it soilValid — this one flag then correctly gates the
+        // dashboard's "Probe OK" badge, the live heatmap, and the
+        // database insert buffer, without needing a separate patch for
+        // pH specifically.
+        bool hasContactEvidence = (moisture >= MOISTURE_CONTACT_THRESHOLD) || (ec > 0);
+        soilValid = hasContactEvidence;
       }
     }
 
