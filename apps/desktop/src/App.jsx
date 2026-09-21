@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -90,10 +90,9 @@ export default function App() {
   // instead of waiting on the periodic DB refresh.
   const [telemetryData, setTelemetryData] = useState([]);
 
-  // One table row represents one complete historical sample. When selected,
-  // that record temporarily becomes the map's data source so its saved values
-  // can be reviewed independently from the live session.
-  const [selectedHistoricalRecord, setSelectedHistoricalRecord] = useState(null);
+  // Up to five table rows can be reviewed together as one historical heatmap.
+  // Keeping the complete rows here lets layer changes reuse their saved values.
+  const [selectedHistoricalRecords, setSelectedHistoricalRecords] = useState([]);
 
   // Raw live readings accumulated as valid packets arrive, kept
   // unnormalized so switching the layer dropdown recolors the whole
@@ -108,25 +107,98 @@ export default function App() {
     .map((r) => [r.lat, r.lng, activeLayerConfig.extract(r)])
     .filter((point) => point[2] !== null);
 
-  const selectedHistoricalIntensity = selectedHistoricalRecord
-    ? activeLayerConfig.extract(selectedHistoricalRecord)
-    : null;
+  const selectedHistoricalHeatPoints = useMemo(
+    () => selectedHistoricalRecords
+      .map((record) => [
+        record.latitude,
+        record.longitude,
+        activeLayerConfig.extract(record)
+      ])
+      .filter((point) => point[2] !== null),
+    [selectedHistoricalRecords, activeLayerConfig]
+  );
 
-  const selectedHistoricalHeatPoints = selectedHistoricalRecord && selectedHistoricalIntensity !== null
-    ? [[
-        selectedHistoricalRecord.latitude,
-        selectedHistoricalRecord.longitude,
-        selectedHistoricalIntensity
-      ]]
-    : [];
-
-  const displayedHeatPoints = selectedHistoricalRecord
+  const displayedHeatPoints = selectedHistoricalRecords.length > 0
     ? selectedHistoricalHeatPoints
     : liveHeatPoints;
 
-  const selectedHistoricalPos = selectedHistoricalRecord
-    ? [selectedHistoricalRecord.latitude, selectedHistoricalRecord.longitude]
+  const selectedHistoricalPositions = useMemo(
+    () => selectedHistoricalRecords.map((record) => [record.latitude, record.longitude]),
+    [selectedHistoricalRecords]
+  );
+
+  const selectedHistoricalPos = selectedHistoricalPositions.length > 0
+    ? selectedHistoricalPositions[selectedHistoricalPositions.length - 1]
     : null;
+
+  const cropSuitability = useMemo(() => {
+    const usingHistory = selectedHistoricalRecords.length > 0;
+    const sourceRecords = usingHistory
+      ? selectedHistoricalRecords
+      : liveData && liveData.soilValid === 1
+        ? [liveData]
+        : [];
+
+    if (sourceRecords.length === 0) return null;
+
+    const average = (key) => {
+      const values = sourceRecords
+        .map((record) => record[key])
+        .filter((value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)))
+        .map(Number);
+
+      return values.length > 0
+        ? values.reduce((sum, value) => sum + value, 0) / values.length
+        : null;
+    };
+
+    const ph = average('ph');
+    const moisture = average('moisture');
+    const nitrogen = average('nitrogen');
+    const phosphorus = average('phosphorus');
+    const potassium = average('potassium');
+    const recommendedCrops = [];
+
+    // Dashboard recommendations are intentionally limited to the three crops
+    // selected for Eksplorador's current assessment scope.
+    if (ph !== null && moisture !== null && ph >= 5.5 && ph <= 6.8 && moisture >= 35) {
+      recommendedCrops.push('Rice');
+    }
+    if (ph !== null && moisture !== null && ph >= 5.0 && ph <= 7.5 && moisture >= 40) {
+      recommendedCrops.push('Cacao');
+    }
+    if (ph !== null && moisture !== null && ph >= 5.0 && ph <= 6.5 && moisture >= 30) {
+      recommendedCrops.push('Coffee');
+    }
+
+    const formatValue = (value) => value === null ? '--' : value.toFixed(1);
+
+    return {
+      recommendedCrops,
+      sourceLabel: usingHistory
+        ? `average of ${sourceRecords.length} selected historical record${sourceRecords.length === 1 ? '' : 's'}`
+        : 'current live reading',
+      ph: formatValue(ph),
+      nitrogen: formatValue(nitrogen),
+      phosphorus: formatValue(phosphorus),
+      potassium: formatValue(potassium)
+    };
+  }, [selectedHistoricalRecords, liveData]);
+
+  const toggleHistoricalRecord = (row) => {
+    const hasSavedLocation = row.latitude !== 0 || row.longitude !== 0;
+    if (!hasSavedLocation) return;
+
+    setSelectedHistoricalRecords((current) => {
+      const alreadySelected = current.some((record) => record.id === row.id);
+      if (alreadySelected) {
+        return current.filter((record) => record.id !== row.id);
+      }
+
+      if (current.length >= 5) return current;
+      return [...current, row];
+    });
+  };
 
   // Most recent DB record's position, used as a fallback center/marker
   // before any live GPS fix has come in this session
@@ -406,6 +478,7 @@ export default function App() {
                   zoom={18}
                   heatPoints={displayedHeatPoints}
                   roverPos={selectedHistoricalPos || (hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos)}
+                  focusPoints={selectedHistoricalPositions}
                   gradient={activeLayerConfig.gradient}
                 />
               </div>
@@ -432,11 +505,24 @@ export default function App() {
               <div className="card recent-samples-card">
                 <div className="card-header">
                   <span className="card-title">Recent Geo-tagged Samples</span>
+                  <div className="historical-selection-controls">
+                    <span>{selectedHistoricalRecords.length}/5 selected</span>
+                    {selectedHistoricalRecords.length > 0 && (
+                      <button
+                        type="button"
+                        className="clear-history-btn"
+                        onClick={() => setSelectedHistoricalRecords([])}
+                      >
+                        Clear selection
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div style={{ padding: '12px', fontSize: '0.8rem', overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                     <thead>
                       <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
+                        <th aria-label="Select record" style={{ padding: '6px 8px', width: '32px' }}></th>
                         <th style={{ padding: '6px 8px' }}>Time</th>
                         <th style={{ padding: '6px 8px' }}>Lat / Lng</th>
                         <th style={{ padding: '6px 8px' }}>pH</th>
@@ -448,26 +534,50 @@ export default function App() {
                     <tbody>
                       {telemetryData.length === 0 ? (
                         <tr>
-                          <td colSpan={6} style={{ padding: '8px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                          <td colSpan={7} style={{ padding: '8px', textAlign: 'center', color: 'var(--text-muted)' }}>
                             No telemetry records found.
                           </td>
                         </tr>
                       ) : (
                         telemetryData.map((row) => {
                           const hasSavedLocation = row.latitude !== 0 || row.longitude !== 0;
-                          const isSelected = selectedHistoricalRecord?.id === row.id;
+                          const isSelected = selectedHistoricalRecords.some((record) => record.id === row.id);
+                          const selectionLimitReached = selectedHistoricalRecords.length >= 5 && !isSelected;
 
                           return (
                           <tr
                             key={row.id}
-                            className={`historical-sample-row${isSelected ? ' selected' : ''}${!hasSavedLocation ? ' unavailable' : ''}`}
-                            onClick={() => {
-                              if (hasSavedLocation) setSelectedHistoricalRecord(row);
+                            className={`historical-sample-row${isSelected ? ' selected' : ''}${!hasSavedLocation || selectionLimitReached ? ' unavailable' : ''}`}
+                            onClick={() => toggleHistoricalRecord(row)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                toggleHistoricalRecord(row);
+                              }
                             }}
+                            tabIndex={hasSavedLocation && !selectionLimitReached ? 0 : -1}
                             aria-selected={isSelected}
-                            title={hasSavedLocation ? 'Show this historical record on the heatmap' : 'This record has no saved GPS fix'}
+                            title={
+                              !hasSavedLocation
+                                ? 'This record has no saved GPS fix'
+                                : selectionLimitReached
+                                  ? 'You can select up to five records'
+                                  : isSelected
+                                    ? 'Remove this record from the heatmap'
+                                    : 'Add this record to the historical heatmap'
+                            }
                             style={{ borderBottom: '1px solid #f1f5f9' }}
                           >
+                            <td style={{ padding: '8px' }}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                disabled={!hasSavedLocation || selectionLimitReached}
+                                onChange={() => toggleHistoricalRecord(row)}
+                                onClick={(event) => event.stopPropagation()}
+                                aria-label={`Select sample from ${row.timestamp}`}
+                              />
+                            </td>
                             <td style={{ padding: '8px' }}>{row.timestamp}</td>
                             <td style={{ padding: '8px' }}>
                               {row.latitude !== 0 || row.longitude !== 0
@@ -495,11 +605,15 @@ export default function App() {
                 </div>
                 <div style={{ padding: '16px', fontSize: '0.85rem' }}>
                   <div style={{ fontWeight: 700, color: 'var(--primary-green)', marginBottom: '4px' }}>
-                    {soilOk ? 'High Suitability: Rice & Corn' : 'Awaiting valid soil data'}
+                    {cropSuitability
+                      ? cropSuitability.recommendedCrops.length > 0
+                        ? `Recommended: ${cropSuitability.recommendedCrops.join(' & ')}`
+                        : 'No strong match among Rice, Cacao, or Coffee'
+                      : 'Awaiting valid soil data'}
                   </div>
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                    {soilOk
-                      ? `Based on current NPK and ${liveData.ph} pH readings.`
+                    {cropSuitability
+                      ? `Based on the ${cropSuitability.sourceLabel}: pH ${cropSuitability.ph}, NPK ${cropSuitability.nitrogen} / ${cropSuitability.phosphorus} / ${cropSuitability.potassium} mg/kg.`
                       : 'Recommendations will appear once a valid soil reading is received.'}
                   </p>
                 </div>

@@ -8,6 +8,7 @@ export default function HeatmapMap({
   center = [14.6095, 120.9895],
   zoom = 18,
   heatPoints = [],
+  focusPoints = [],
   roverPos = [14.6095, 120.9895],
   waypoints = [],
   boundary = [],
@@ -181,6 +182,23 @@ export default function HeatmapMap({
       }
     }
   }, [heatPoints, boundary, gradient]);
+
+  // Historical review can contain up to five samples. Frame the complete
+  // selection so every heat point remains visible when rows are toggled.
+  useEffect(() => {
+    if (!mapInstanceRef.current || focusPoints.length === 0) return;
+
+    if (focusPoints.length === 1) {
+      mapInstanceRef.current.setView(focusPoints[0], 18, { animate: true });
+      return;
+    }
+
+    mapInstanceRef.current.fitBounds(L.latLngBounds(focusPoints), {
+      padding: [32, 32],
+      maxZoom: 18,
+      animate: true
+    });
+  }, [focusPoints]);
 
   // Update Rover GPS Marker (and re-center the map if auto-follow is on)
   useEffect(() => {
