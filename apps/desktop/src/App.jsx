@@ -25,10 +25,55 @@ import SamplingView from './views/SamplingView';
 import SoilRecordsView from './views/SoilRecordsView';
 import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
+import { calculateDistanceMeters } from './utils/geo';
 import './App.css';
 
 // How long (ms) without a new packet before we treat the rover as disconnected
 const STALE_TIMEOUT_MS = 15000;
+const HISTORICAL_ASSESSMENT_MIN = 10;
+const HISTORICAL_SELECTION_MAX = 20;
+const HISTORICAL_MATCH_RADIUS_M = 100;
+const HISTORICAL_MATCH_WINDOW_MS = 2 * 60 * 60 * 1000;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+const parseTelemetryTime = (timestamp) => {
+  if (timestamp === null || timestamp === undefined || timestamp === '') return null;
+
+  if (typeof timestamp === 'string') {
+    const timeOnlyMatch = timestamp.trim().match(/^(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d+))?$/);
+    if (timeOnlyMatch) {
+      const [, hours, minutes, seconds, fraction = '0'] = timeOnlyMatch;
+      const milliseconds = Number(`0.${fraction}`) * 1000;
+      return {
+        value:
+          Number(hours) * 60 * 60 * 1000 +
+          Number(minutes) * 60 * 1000 +
+          Number(seconds) * 1000 +
+          milliseconds,
+        timeOnly: true
+      };
+    }
+  }
+
+  const normalized = typeof timestamp === 'string' ? timestamp.replace(' ', 'T') : timestamp;
+  const time = new Date(normalized).getTime();
+  return Number.isFinite(time) ? { value: time, timeOnly: false } : null;
+};
+
+const calculateTimeDifference = (firstTimestamp, secondTimestamp) => {
+  const first = parseTelemetryTime(firstTimestamp);
+  const second = parseTelemetryTime(secondTimestamp);
+  if (!first || !second || first.timeOnly !== second.timeOnly) return Infinity;
+
+  const difference = Math.abs(first.value - second.value);
+  return first.timeOnly ? Math.min(difference, ONE_DAY_MS - difference) : difference;
+};
+
+const hasValidSavedLocation = (record) => {
+  const latitude = Number(record.latitude);
+  const longitude = Number(record.longitude);
+  return Number.isFinite(latitude) && Number.isFinite(longitude) && (latitude !== 0 || longitude !== 0);
+};
 
 // Maps each heatmap layer option to how its value is pulled from a DB row
 // and normalized to 0-1 for the heat gradient, plus that layer's own color
@@ -90,9 +135,14 @@ export default function App() {
   // instead of waiting on the periodic DB refresh.
   const [telemetryData, setTelemetryData] = useState([]);
 
-  // Up to five table rows can be reviewed together as one historical heatmap.
+  // Up to twenty table rows can be reviewed together as one historical heatmap.
   // Keeping the complete rows here lets layer changes reuse their saved values.
   const [selectedHistoricalRecords, setSelectedHistoricalRecords] = useState([]);
+
+  // Historical crop recommendations are intentionally opt-in and use a
+  // snapshot of at least ten selected rows. This keeps ordinary heatmap
+  // exploration from replacing the live recommendation automatically.
+  const [assessedHistoricalRecords, setAssessedHistoricalRecords] = useState([]);
 
   // Raw live readings accumulated as valid packets arrive, kept
   // unnormalized so switching the layer dropdown recolors the whole
@@ -127,14 +177,26 @@ export default function App() {
     [selectedHistoricalRecords]
   );
 
+  const historicalMapMarkers = useMemo(
+  () => selectedHistoricalRecords.length > 0
+    ? [{
+        lat: selectedHistoricalRecords[0].latitude,
+        lng: selectedHistoricalRecords[0].longitude,
+        label: 1,
+        isAnchor: true
+      }]
+    : [],
+  [selectedHistoricalRecords]
+);
+
   const selectedHistoricalPos = selectedHistoricalPositions.length > 0
     ? selectedHistoricalPositions[selectedHistoricalPositions.length - 1]
     : null;
 
   const cropSuitability = useMemo(() => {
-    const usingHistory = selectedHistoricalRecords.length > 0;
+    const usingHistory = assessedHistoricalRecords.length >= HISTORICAL_ASSESSMENT_MIN;
     const sourceRecords = usingHistory
-      ? selectedHistoricalRecords
+      ? assessedHistoricalRecords
       : liveData && liveData.soilValid === 1
         ? [liveData]
         : [];
@@ -183,21 +245,41 @@ export default function App() {
       phosphorus: formatValue(phosphorus),
       potassium: formatValue(potassium)
     };
-  }, [selectedHistoricalRecords, liveData]);
+  }, [assessedHistoricalRecords, liveData]);
 
-  const toggleHistoricalRecord = (row) => {
-    const hasSavedLocation = row.latitude !== 0 || row.longitude !== 0;
-    if (!hasSavedLocation) return;
+  const selectHistoricalGroup = (anchorRecord) => {
+    if (!hasValidSavedLocation(anchorRecord)) return;
 
-    setSelectedHistoricalRecords((current) => {
-      const alreadySelected = current.some((record) => record.id === row.id);
-      if (alreadySelected) {
-        return current.filter((record) => record.id !== row.id);
-      }
+    const anchorPosition = [anchorRecord.latitude, anchorRecord.longitude];
 
-      if (current.length >= 5) return current;
-      return [...current, row];
-    });
+    const relatedRecords = telemetryData
+      .filter((record) => record.id !== anchorRecord.id && hasValidSavedLocation(record))
+      .map((record) => {
+        const timeDifference = calculateTimeDifference(
+          anchorRecord.timestamp,
+          record.timestamp
+        );
+        const distance = calculateDistanceMeters(
+          anchorPosition,
+          [record.latitude, record.longitude]
+        );
+
+        return { record, timeDifference, distance };
+      })
+      .filter(({ timeDifference, distance }) =>
+        timeDifference <= HISTORICAL_MATCH_WINDOW_MS && distance <= HISTORICAL_MATCH_RADIUS_M
+      )
+      .sort((a, b) => a.timeDifference - b.timeDifference || a.distance - b.distance)
+      .slice(0, HISTORICAL_SELECTION_MAX - 1)
+      .map(({ record }) => record);
+
+    setAssessedHistoricalRecords([]);
+    setSelectedHistoricalRecords([anchorRecord, ...relatedRecords]);
+  };
+
+  const clearHistoricalSelection = () => {
+    setSelectedHistoricalRecords([]);
+    setAssessedHistoricalRecords([]);
   };
 
   // Most recent DB record's position, used as a fallback center/marker
@@ -479,6 +561,7 @@ export default function App() {
                   heatPoints={displayedHeatPoints}
                   roverPos={selectedHistoricalPos || (hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos)}
                   focusPoints={selectedHistoricalPositions}
+                  labeledPoints={historicalMapMarkers}
                   gradient={activeLayerConfig.gradient}
                 />
               </div>
@@ -506,12 +589,29 @@ export default function App() {
                 <div className="card-header">
                   <span className="card-title">Recent Geo-tagged Samples</span>
                   <div className="historical-selection-controls">
-                    <span>{selectedHistoricalRecords.length}/5 selected</span>
+                    <span
+                      title={`Anchor plus records within ${HISTORICAL_MATCH_RADIUS_M} m and ±2 hours`}
+                    >
+                      {selectedHistoricalRecords.length}/{HISTORICAL_SELECTION_MAX} related
+                    </span>
+                    <button
+                      type="button"
+                      className="assess-history-btn"
+                      disabled={selectedHistoricalRecords.length < HISTORICAL_ASSESSMENT_MIN}
+                      onClick={() => setAssessedHistoricalRecords([...selectedHistoricalRecords])}
+                      title={
+                        selectedHistoricalRecords.length < HISTORICAL_ASSESSMENT_MIN
+                          ? `Select at least ${HISTORICAL_ASSESSMENT_MIN} records to assess crop suitability`
+                          : 'Calculate crop suitability from the selected historical records'
+                      }
+                    >
+                      Assess historical records
+                    </button>
                     {selectedHistoricalRecords.length > 0 && (
                       <button
                         type="button"
                         className="clear-history-btn"
-                        onClick={() => setSelectedHistoricalRecords([])}
+                        onClick={clearHistoricalSelection}
                       >
                         Clear selection
                       </button>
@@ -523,6 +623,7 @@ export default function App() {
                     <thead>
                       <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
                         <th aria-label="Select record" style={{ padding: '6px 8px', width: '32px' }}></th>
+                        <th style={{ padding: '6px 8px', width: '58px' }}>Map ID</th>
                         <th style={{ padding: '6px 8px' }}>Time</th>
                         <th style={{ padding: '6px 8px' }}>Lat / Lng</th>
                         <th style={{ padding: '6px 8px' }}>pH</th>
@@ -534,37 +635,34 @@ export default function App() {
                     <tbody>
                       {telemetryData.length === 0 ? (
                         <tr>
-                          <td colSpan={7} style={{ padding: '8px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                          <td colSpan={8} style={{ padding: '8px', textAlign: 'center', color: 'var(--text-muted)' }}>
                             No telemetry records found.
                           </td>
                         </tr>
                       ) : (
                         telemetryData.map((row) => {
-                          const hasSavedLocation = row.latitude !== 0 || row.longitude !== 0;
-                          const isSelected = selectedHistoricalRecords.some((record) => record.id === row.id);
-                          const selectionLimitReached = selectedHistoricalRecords.length >= 5 && !isSelected;
+                          const hasSavedLocation = hasValidSavedLocation(row);
+                          const selectedIndex = selectedHistoricalRecords.findIndex((record) => record.id === row.id);
+                          const isSelected = selectedIndex >= 0;
+                          const mapId = isSelected ? selectedIndex + 1 : null;
 
                           return (
                           <tr
                             key={row.id}
-                            className={`historical-sample-row${isSelected ? ' selected' : ''}${!hasSavedLocation || selectionLimitReached ? ' unavailable' : ''}`}
-                            onClick={() => toggleHistoricalRecord(row)}
+                            className={`historical-sample-row${isSelected ? ' selected' : ''}${!hasSavedLocation ? ' unavailable' : ''}`}
+                            onClick={() => selectHistoricalGroup(row)}
                             onKeyDown={(event) => {
                               if (event.key === 'Enter' || event.key === ' ') {
                                 event.preventDefault();
-                                toggleHistoricalRecord(row);
+                                selectHistoricalGroup(row);
                               }
                             }}
-                            tabIndex={hasSavedLocation && !selectionLimitReached ? 0 : -1}
+                            tabIndex={hasSavedLocation ? 0 : -1}
                             aria-selected={isSelected}
                             title={
                               !hasSavedLocation
                                 ? 'This record has no saved GPS fix'
-                                : selectionLimitReached
-                                  ? 'You can select up to five records'
-                                  : isSelected
-                                    ? 'Remove this record from the heatmap'
-                                    : 'Add this record to the historical heatmap'
+                                : 'Use this record as the anchor for an automatic historical group'
                             }
                             style={{ borderBottom: '1px solid #f1f5f9' }}
                           >
@@ -572,11 +670,32 @@ export default function App() {
                               <input
                                 type="checkbox"
                                 checked={isSelected}
-                                disabled={!hasSavedLocation || selectionLimitReached}
-                                onChange={() => toggleHistoricalRecord(row)}
+                                disabled={!hasSavedLocation}
+                                onChange={() => selectHistoricalGroup(row)}
                                 onClick={(event) => event.stopPropagation()}
                                 aria-label={`Select sample from ${row.timestamp}`}
                               />
+                            </td>
+                            <td style={{ padding: '8px' }}>
+                              {mapId !== null && (
+                                <span
+                                  title={mapId === 1 ? 'Anchor sample' : `Related sample ${mapId}`}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: '24px',
+                                    height: '24px',
+                                    borderRadius: '50%',
+                                    background: mapId === 1 ? 'var(--accent-gold)' : 'var(--primary-green)',
+                                    color: '#fff',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 800
+                                  }}
+                                >
+                                  {mapId}
+                                </span>
+                              )}
                             </td>
                             <td style={{ padding: '8px' }}>{row.timestamp}</td>
                             <td style={{ padding: '8px' }}>
