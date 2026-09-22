@@ -127,7 +127,7 @@ fn export_telemetry_to_project() -> Result<String, String> {
         "telemetry": records
     });
 
-    let target_dir = PathBuf::from("data/exports");
+    let target_dir = PathBuf::from("../data/exports");
     if !target_dir.exists() {
         fs::create_dir_all(&target_dir).map_err(|e| format!("Failed to create exports directory: {}", e))?;
     }

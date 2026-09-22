@@ -1,6 +1,6 @@
 {
   "app_version": "1.0",
-  "exported_at": 1790068631,
+  "exported_at": 1790074504,
   "record_count": 8,
   "telemetry": [
     {
@@ -8,7 +8,7 @@
       "id": 1,
       "latitude": 14.621,
       "longitude": 121.098,
-      "moisture": 6969,
+      "moisture": 42.5,
       "nitrogen": 28.0,
       "ph": 6.4,
       "phosphorus": 24.0,
