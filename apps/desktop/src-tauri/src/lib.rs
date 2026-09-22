@@ -7,6 +7,10 @@ use tauri::Emitter;
 use rusqlite::{params, Connection, Result};
 use rusqlite_migration::{Migrations, M};
 use serde::Serialize;
+use serde::Deserialize;
+use std::fs;
+use std::path::PathBuf;
+// use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize)]
 pub struct TelemetryRow {
@@ -21,6 +25,120 @@ pub struct TelemetryRow {
     pub phosphorus: Option<f64>,
     pub potassium: Option<f64>,
 }
+#[derive(Deserialize)]
+struct TelemetryImportRecord {
+    id: Option<i64>,
+    timestamp: Option<String>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    ph: Option<f64>,
+    moisture: Option<f64>,
+    ec: Option<f64>,
+    nitrogen: Option<f64>,
+    phosphorus: Option<f64>,
+    potassium: Option<f64>,
+}
+
+#[tauri::command]
+fn import_telemetry_json(file_content: String) -> Result<usize, String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+
+    let parsed: serde_json::Value = serde_json::from_str(&file_content)
+        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
+    let telemetry_array = parsed
+        .get("telemetry")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Missing 'telemetry' array in JSON".to_string())?;
+
+    let mut count = 0;
+
+    for item in telemetry_array {
+        let rec: TelemetryImportRecord = match serde_json::from_value(item.clone()) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        conn.execute(
+            "INSERT OR REPLACE INTO telemetry (
+                id, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                rec.id,
+                rec.timestamp,
+                rec.latitude.unwrap_or(0.0),
+                rec.longitude.unwrap_or(0.0),
+                rec.ph,
+                rec.moisture,
+                rec.ec,
+                rec.nitrogen,
+                rec.phosphorus,
+                rec.potassium,
+            ],
+        ).map_err(|e| format!("Failed to insert record: {}", e))?;
+
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+
+#[tauri::command]
+fn export_telemetry_to_project() -> Result<String, String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium FROM telemetry")
+        .map_err(|e| e.to_string())?;
+
+    let records_iter = stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, Option<i64>>(0)?,
+                "timestamp": row.get::<_, Option<String>>(1)?,
+                "latitude": row.get::<_, Option<f64>>(2)?,
+                "longitude": row.get::<_, Option<f64>>(3)?,
+                "ph": row.get::<_, Option<f64>>(4)?,
+                "moisture": row.get::<_, Option<f64>>(5)?,
+                "ec": row.get::<_, Option<f64>>(6)?,
+                "nitrogen": row.get::<_, Option<f64>>(7)?,
+                "phosphorus": row.get::<_, Option<f64>>(8)?,
+                "potassium": row.get::<_, Option<f64>>(9)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut records = Vec::new();
+    for rec in records_iter {
+        if let Ok(r) = rec {
+            records.push(r);
+        }
+    }
+
+    let timestamp_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let payload = serde_json::json!({
+        "app_version": "1.0",
+        "exported_at": timestamp_secs,
+        "record_count": records.len(),
+        "telemetry": records
+    });
+
+    let target_dir = PathBuf::from("data/exports");
+    if !target_dir.exists() {
+        fs::create_dir_all(&target_dir).map_err(|e| format!("Failed to create exports directory: {}", e))?;
+    }
+
+    let file_path = target_dir.join(format!("telemetry_export_{}.json", timestamp_secs));
+
+    let json_string = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    fs::write(&file_path, json_string).map_err(|e| format!("Failed to write export file: {}", e))?;
+
+    Ok(file_path.to_string_lossy().into_owned())
+}
 
 fn get_connection() -> Result<Connection> {
     let mut conn = Connection::open("eksplorador.db")?;
@@ -28,7 +146,7 @@ fn get_connection() -> Result<Connection> {
     let migrations = Migrations::new(vec![
         M::up(include_str!("../migrations/V1__create_telemetry_table.sql")),
         M::up(include_str!("../migrations/V2__add_npk_columns.sql")),
-        M::up(include_str!("../migrations/V3_seed_telemetry.sql")),
+        // M::up(include_str!("../migrations/V3_seed_telemetry.sql")),
     ]);
 
     migrations.to_latest(&mut conn).map_err(|e| {
@@ -398,11 +516,14 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             start_serial_listener(app.handle().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![init_db, get_recent_telemetry])
+        .invoke_handler(tauri::generate_handler![init_db, get_recent_telemetry, import_telemetry_json, export_telemetry_to_project])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

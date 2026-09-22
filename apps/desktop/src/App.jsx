@@ -17,7 +17,9 @@ import {
   Radio,
   Navigation,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Download,
+  Upload
 } from 'lucide-react';
 import HeatmapMap from './components/HeatmapMap';
 import FieldMapView from './views/FieldMapView';
@@ -27,6 +29,7 @@ import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
 import { calculateDistanceMeters } from './utils/geo';
 import './App.css';
+import { exportTelemetryPackage, importTelemetryPackage } from './services/db';
 
 // How long (ms) without a new packet before we treat the rover as disconnected
 const STALE_TIMEOUT_MS = 15000;
@@ -117,6 +120,78 @@ const LAYER_CONFIG = {
   }
 };
 
+function TelemetrySyncBar({ onImportSuccess }) {
+  const fileInputRef = useRef(null);
+
+  const handleExport = async () => {
+    try {
+      const result = await exportTelemetryPackage();
+      alert(`Export Successful!\nSaved to project folder:\n${result.path}`);
+    } catch (err) {
+      alert(`Export Failed: ${err.message || err}`);
+    }
+  };
+
+  const handleImport = async () => {
+    try {
+      const result = await importTelemetryPackage();
+      if (result.cancelled) return;
+      
+      alert(`Import Successful!\n${result.count} telemetry records imported into eksplorador.db.`);
+      if (onImportSuccess) onImportSuccess();
+    } catch (err) {
+      alert(`Import Failed: ${err.message || err}`);
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const content = event.target?.result;
+        if (typeof content === 'string') {
+          const result = await importTelemetryPackage(content);
+          alert(`Import Successful!\n${result.count} telemetry records merged into SQLite database.`);
+          if (onImportSuccess) onImportSuccess();
+        }
+      } catch (err) {
+        alert(`Import Failed: ${err.message}`);
+      } finally {
+        // Reset file input so re-importing the same file triggers onChange
+        e.target.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <button
+        type="button"
+        className="badge"
+        onClick={handleExport}
+        style={{ cursor: 'pointer', background: 'var(--primary-green)', color: '#fff', display: 'flex', gap: '6px', padding: '6px 12px' }}
+      >
+        <Upload size={14} />
+        <span>Export Data</span>
+      </button>
+
+      <button
+        type="button"
+        className="badge"
+        onClick={handleImport}
+        style={{ cursor: 'pointer', background: '#fff', color: 'var(--text-dark)', border: '1px solid var(--card-border)', display: 'flex', gap: '6px', padding: '6px 12px' }}
+      >
+        <Download size={14} />
+        <span>Import Data</span>
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('Dashboard');
   const [selectedLayer, setSelectedLayer] = useState('ph');
@@ -178,16 +253,16 @@ export default function App() {
   );
 
   const historicalMapMarkers = useMemo(
-  () => selectedHistoricalRecords.length > 0
-    ? [{
-        lat: selectedHistoricalRecords[0].latitude,
-        lng: selectedHistoricalRecords[0].longitude,
-        label: 1,
-        isAnchor: true
-      }]
-    : [],
-  [selectedHistoricalRecords]
-);
+    () => selectedHistoricalRecords.length > 0
+      ? [{
+          lat: selectedHistoricalRecords[0].latitude,
+          lng: selectedHistoricalRecords[0].longitude,
+          label: 1,
+          isAnchor: true
+        }]
+      : [],
+    [selectedHistoricalRecords]
+  );
 
   const selectedHistoricalPos = selectedHistoricalPositions.length > 0
     ? selectedHistoricalPositions[selectedHistoricalPositions.length - 1]
@@ -433,6 +508,19 @@ export default function App() {
               <div>
                 <h1>Field Monitoring Board</h1>
               </div>
+
+              {/* NEW: Telemetry Sync Actions (Export & Import) */}
+              <TelemetrySyncBar 
+                onImportSuccess={async () => {
+                  // Re-trigger Rust DB query to update telemetry table state live
+                  try {
+                    const records = await invoke('get_recent_telemetry');
+                    setTelemetryData(records);
+                  } catch (err) {
+                    console.error('Failed to reload telemetry after import:', err);
+                  }
+                }} 
+              />
               <div className="status-badges">
                 <div className="badge">
                   <span>Plot:</span>

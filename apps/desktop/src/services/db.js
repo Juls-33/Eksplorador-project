@@ -1,4 +1,8 @@
 import Database from '@tauri-apps/plugin-sql';
+import { invoke } from '@tauri-apps/api/core';
+import { downloadDir } from '@tauri-apps/api/path'; 
+import { open } from '@tauri-apps/plugin-dialog';
+import { readTextFile } from '@tauri-apps/plugin-fs';
 
 let db = null;
 
@@ -7,17 +11,32 @@ export async function initDatabase() {
     db = await Database.load('sqlite:eksplorador.db');
     
     // Create telemetry & sensor readings table for GIS heatmap points
+    // await db.execute(`
+    //   CREATE TABLE IF NOT EXISTS sensor_readings (
+    //     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    //     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    //     latitude REAL NOT NULL,
+    //     longitude REAL NOT NULL,
+    //     moisture REAL,
+    //     temperature REAL,
+    //     nitrogen REAL,
+    //     phosphorus REAL,
+    //     potassium REAL
+    //   );
+    // `);
     await db.execute(`
-      CREATE TABLE IF NOT EXISTS sensor_readings (
+      CREATE TABLE IF NOT EXISTS telemetry (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        latitude REAL NOT NULL,
-        longitude REAL NOT NULL,
+        latitude REAL,
+        longitude REAL,
         moisture REAL,
-        temperature REAL,
+        ph REAL,
+        ec REAL,
         nitrogen REAL,
         phosphorus REAL,
-        potassium REAL
+        potassium REAL,
+        soil_valid INTEGER DEFAULT 1
       );
     `);
   }
@@ -93,5 +112,55 @@ export async function fetchMissionSamples(missionId) {
   } catch (error) {
     console.error('Failed to fetch mission samples:', error);
     return [];
+  }
+}
+
+/**
+ * EXPORT: Dumps all telemetry records into a downloadable JSON package
+ */
+export async function exportTelemetryPackage() {
+  try {
+    const savedPath = await invoke('export_telemetry_to_project');
+    return { success: true, path: savedPath };
+  } catch (error) {
+    console.error('Failed to export telemetry:', error);
+    throw error;
+  }
+}
+
+/**
+ * IMPORT: Opens native Desktop dialog directed to Downloads folder
+ */
+
+export async function importTelemetryPackage() {
+  try {
+    // 1. Point defaultPath directly to the project export directory
+    const defaultExportPath = 'data/exports';
+
+    // 2. Open native Tauri file picker pre-navigated to data/exports
+    const selectedFile = await open({
+      multiple: false,
+      directory: false,
+      defaultPath: defaultExportPath,
+      filters: [{
+        name: 'Telemetry JSON Package',
+        extensions: ['json']
+      }]
+    });
+
+    if (!selectedFile) {
+      return { success: false, count: 0, cancelled: true };
+    }
+
+    const filePath = Array.isArray(selectedFile) ? selectedFile[0] : selectedFile;
+    const fileContent = await readTextFile(filePath);
+
+    // 3. Send JSON content to Rust backend for SQLite database update
+    const insertedCount = await invoke('import_telemetry_json', { fileContent });
+
+    return { success: true, count: insertedCount, cancelled: false };
+  } catch (error) {
+    console.error('Failed to import telemetry:', error);
+    throw error;
   }
 }
