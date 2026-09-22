@@ -9,6 +9,7 @@ export default function HeatmapMap({
   zoom = 18,
   heatPoints = [],
   focusPoints = [],
+  labeledPoints = [],
   roverPos = [14.6095, 120.9895],
   waypoints = [],
   boundary = [],
@@ -30,6 +31,7 @@ export default function HeatmapMap({
   const routePolylineRef = useRef(null);
   const boundaryPolygonRef = useRef(null);
   const boundaryPointsGroupRef = useRef(null);
+  const historicalLabelsGroupRef = useRef(null);
 
   const interactionModeRef = useRef(interactionMode);
   const onMapClickRef = useRef(onMapClick);
@@ -133,6 +135,7 @@ export default function HeatmapMap({
     }).addTo(mapInstanceRef.current);
 
     boundaryPointsGroupRef.current = L.layerGroup().addTo(mapInstanceRef.current);
+    historicalLabelsGroupRef.current = L.layerGroup().addTo(mapInstanceRef.current);
     waypointLayerGroupRef.current = L.layerGroup().addTo(mapInstanceRef.current);
     routePolylineRef.current = L.polyline([], {
       color: '#D99A2B',
@@ -238,7 +241,7 @@ export default function HeatmapMap({
     }
   }, [heatPoints, boundary, gradient]);
 
-  // Historical review can contain up to five samples. Frame the complete
+  // Historical review can contain up to twenty samples. Frame the complete
   // selection so every heat point remains visible when rows are toggled.
   useEffect(() => {
     if (!mapInstanceRef.current || focusPoints.length === 0) return;
@@ -254,6 +257,45 @@ export default function HeatmapMap({
       animate: true
     });
   }, [focusPoints]);
+
+  // Numbered historical markers link each selected table record to its exact
+  // GPS position. The anchor is gold (#1); automatically matched samples use
+  // the standard Eksplorador green.
+  useEffect(() => {
+    if (!historicalLabelsGroupRef.current) return;
+
+    historicalLabelsGroupRef.current.clearLayers();
+
+    labeledPoints.forEach(({ lat, lng, label, isAnchor }) => {
+      if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+
+      const markerIcon = L.divIcon({
+        className: 'historical-map-label',
+        html: `<div style="
+          width: 28px;
+          height: 28px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: ${isAnchor ? '#D99A2B' : '#1F5132'};
+          color: #fff;
+          border: 2px solid #fff;
+          box-shadow: 0 2px 7px rgba(0, 0, 0, 0.35);
+          font-size: 12px;
+          font-weight: 800;
+        ">${label}</div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+
+      L.marker([lat, lng], {
+        icon: markerIcon,
+        zIndexOffset: 700,
+        title: isAnchor ? `Anchor sample #${label}` : `Historical sample #${label}`
+      }).addTo(historicalLabelsGroupRef.current);
+    });
+  }, [labeledPoints]);
 
   // Update Rover GPS Marker (and re-center the map if auto-follow is on)
   useEffect(() => {
