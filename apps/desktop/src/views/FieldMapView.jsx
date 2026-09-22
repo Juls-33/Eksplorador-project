@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import {
   Play,
+  Pause,
+  RotateCcw,
   MapPin,
   Plus,
   Trash2,
@@ -13,13 +16,11 @@ import {
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
-import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
+import { isPointInPolygon, calculatePolygonArea, calculateDistance } from '../utils/geo';
+import { saveSoilSample, fetchMissionSamples } from '../services/db';
 
-const initialPlots = [
-  'UST Field',
-  'North Plot A',
-  'South Plot B'
-];
+// --- Static Initial Data & Layer Configurations ---
+const initialPlots = ['UST Field', 'North Plot A', 'South Plot B'];
 
 const ustFieldBoundary = [
   [14.6097, 120.9888],
@@ -28,27 +29,23 @@ const ustFieldBoundary = [
   [14.6082, 120.9898]
 ];
 
-// Rich sample objects containing multi-variable sensor readings
 const ustFieldSamples = [
-  { coords: [14.6094, 120.9896], moisture: 46, ph: 6.5, n: 28, p: 38, k: 58, overall: 92 },
-  { coords: [14.6096, 120.9899], moisture: 42, ph: 6.4, n: 24, p: 35, k: 52, overall: 88 },
-  { coords: [14.6091, 120.9902], moisture: 38, ph: 6.1, n: 20, p: 30, k: 45, overall: 75 },
-  { coords: [14.6088, 120.9898], moisture: 34, ph: 5.8, n: 16, p: 25, k: 38, overall: 60 },
-  { coords: [14.6098, 120.9894], moisture: 48, ph: 6.8, n: 32, p: 44, k: 64, overall: 95 },
-  { coords: [14.6085, 120.9905], moisture: 28, ph: 5.5, n: 12, p: 20, k: 30, overall: 45 }
+  { coords: [14.6094, 120.9896], lat: 14.6094, lng: 120.9896, moisture: 46, ph: 6.5, n: 28, p: 38, k: 58, overall: 92 },
+  { coords: [14.6096, 120.9899], lat: 14.6096, lng: 120.9899, moisture: 42, ph: 6.4, n: 24, p: 35, k: 52, overall: 88 },
+  { coords: [14.6091, 120.9902], lat: 14.6091, lng: 120.9902, moisture: 38, ph: 6.1, n: 20, p: 30, k: 45, overall: 75 },
+  { coords: [14.6088, 120.9898], lat: 14.6088, lng: 120.9898, moisture: 34, ph: 5.8, n: 16, p: 25, k: 38, overall: 60 }
 ];
 
-// Color Legends and Gradients for each selected layer
 const layerConfigurations = {
   overall: {
     label: 'Overall Soil Health',
     unit: 'Score / 100',
     gradient: {
-      0.2: '#dc2626', // Red: Critical / Degraded
-      0.4: '#ea580c', // Orange: Low Fertility
-      0.6: '#eab308', // Yellow: Moderate
-      0.8: '#84cc16', // Light Green: Good
-      1.0: '#15803d'  // Dark Green: Optimal
+      0.2: '#dc2626',
+      0.4: '#ea580c',
+      0.6: '#eab308',
+      0.8: '#84cc16',
+      1.0: '#15803d'
     },
     ranges: [
       { color: '#15803d', label: '85 - 100', desc: 'Optimal Fertility' },
@@ -57,16 +54,16 @@ const layerConfigurations = {
       { color: '#ea580c', label: '40 - 54', desc: 'Low Nutrient' },
       { color: '#dc2626', label: '< 40', desc: 'Critical / Degraded' }
     ],
-    extractValue: (s) => s.overall / 100
+    extractValue: (s) => (s.overall || 50) / 100
   },
   moisture: {
     label: 'Soil Moisture',
     unit: '%',
     gradient: {
-      0.2: '#ef4444', // Red: Very Dry (<25%)
-      0.4: '#f97316', // Orange: Low (25-35%)
-      0.7: '#22c55e', // Green: Optimal (40-55%)
-      1.0: '#0284c7'  // Blue: Saturated / Wet (>60%)
+      0.2: '#ef4444',
+      0.4: '#f97316',
+      0.7: '#22c55e',
+      1.0: '#0284c7'
     },
     ranges: [
       { color: '#0284c7', label: '> 60%', desc: 'Saturated / Wet' },
@@ -74,16 +71,16 @@ const layerConfigurations = {
       { color: '#f97316', label: '25% - 39%', desc: 'Low / Drying' },
       { color: '#ef4444', label: '< 25%', desc: 'Deficient / Very Dry' }
     ],
-    extractValue: (s) => Math.min(1.0, Math.max(0.1, (s.moisture - 20) / 50))
+    extractValue: (s) => Math.min(1.0, Math.max(0.1, ((s.moisture || 0) - 20) / 50))
   },
   ph: {
     label: 'Soil pH Level',
     unit: 'pH',
     gradient: {
-      0.2: '#dc2626', // Red: Strong Acid (<5.5)
-      0.5: '#eab308', // Yellow: Slight Acid (5.8 - 6.2)
-      0.8: '#16a34a', // Green: Optimal Neutral (6.3 - 7.0)
-      1.0: '#7c3aed'  // Purple: Alkaline (>7.5)
+      0.2: '#dc2626',
+      0.5: '#eab308',
+      0.8: '#16a34a',
+      1.0: '#7c3aed'
     },
     ranges: [
       { color: '#7c3aed', label: '> 7.5', desc: 'Alkaline' },
@@ -91,16 +88,16 @@ const layerConfigurations = {
       { color: '#eab308', label: '5.8 - 6.2', desc: 'Slightly Acidic' },
       { color: '#dc2626', label: '< 5.5', desc: 'Strongly Acidic' }
     ],
-    extractValue: (s) => Math.min(1.0, Math.max(0.1, (s.ph - 4.5) / 4.0))
+    extractValue: (s) => Math.min(1.0, Math.max(0.1, ((s.ph || 7) - 4.5) / 4.0))
   },
   npk: {
     label: 'NPK Compound Ratio',
     unit: 'mg/kg',
     gradient: {
-      0.2: '#dc2626', // Red: Severely Deficient
-      0.5: '#d97706', // Amber: Low
-      0.8: '#15803d', // Green: Balanced / Optimal
-      1.0: '#1e40af'  // Blue: High / Excess
+      0.2: '#dc2626',
+      0.5: '#d97706',
+      0.8: '#15803d',
+      1.0: '#1e40af'
     },
     ranges: [
       { color: '#1e40af', label: 'High', desc: 'Rich / Excessive NPK' },
@@ -108,7 +105,7 @@ const layerConfigurations = {
       { color: '#d97706', label: 'Low', desc: 'Nutrient Depleted' },
       { color: '#dc2626', label: 'Deficient', desc: 'Severe Shortage' }
     ],
-    extractValue: (s) => Math.min(1.0, Math.max(0.1, (s.n + s.p + s.k) / 160))
+    extractValue: (s) => Math.min(1.0, Math.max(0.1, ((s.n || 0) + (s.p || 0) + (s.k || 0)) / 160))
   }
 };
 
@@ -127,8 +124,8 @@ const initialMissions = [
       [14.6088, 120.9898]
     ],
     samples: ustFieldSamples,
-    summary: 'Active scan on UST Field. Heatmap restricted strictly inside the perimeter.',
-    stats: { avgPh: 6.5, avgMoisture: '44%', avgEC: '1.2 dS/m', totalDistance: '142m', samplesCollected: 16 }
+    summary: 'Active scan on UST Field. Heatmap restricted strictly inside perimeter.',
+    stats: { avgPh: 6.2, avgMoisture: '40%', avgEC: '1.2 dS/m', totalDistance: '142m', samplesCollected: 4 }
   }
 ];
 
@@ -138,6 +135,11 @@ export default function FieldMapView() {
   const [selectedMissionId, setSelectedMissionId] = useState('MSN-001');
   const [selectedLayerKey, setSelectedLayerKey] = useState('overall');
   const [activeMission, setActiveMission] = useState(null);
+
+  // Mission Logging Telemetry State Machine
+  const [missionState, setMissionState] = useState('IDLE'); // IDLE, IN_PROGRESS, PAUSED, FINISHED
+  const [liveSamples, setLiveSamples] = useState([]);
+  const [lastSampleCoord, setLastSampleCoord] = useState(null);
 
   // Live Rover Telemetry
   const [roverPos, setRoverPos] = useState([14.6094, 120.9896]);
@@ -153,15 +155,109 @@ export default function FieldMapView() {
   const [tempWaypoints, setTempWaypoints] = useState([]);
   const [notification, setNotification] = useState(null);
 
-  // Plot CRUD inline state
+  // Plot Management Inline State
   const [isManagingPlots, setIsManagingPlots] = useState(false);
   const [newPlotInput, setNewPlotInput] = useState('');
   const [editingPlotIndex, setEditingPlotIndex] = useState(null);
   const [editPlotInput, setEditPlotInput] = useState('');
   const [plotError, setPlotError] = useState(null);
 
-  const currentSelected = missions.find(m => m.id === selectedMissionId) || missions[0];
+  const currentSelected = missions.find((m) => m.id === selectedMissionId) || missions[0];
   const activeConfig = layerConfigurations[selectedLayerKey];
+  const activeBoundary = wizardStep !== 'IDLE' ? tempBoundary : (currentSelected?.boundary || []);
+  const displayedWaypoints = wizardStep !== 'IDLE' ? tempWaypoints : (currentSelected?.waypoints || []);
+
+  const [latestSensorData, setLatestSensorData] = useState({
+    moisture: '--',
+    ph: '--',
+    ec: '--',
+    nitrogen: '--',
+    phosphorus: '--',
+    potassium: '--',
+    soilValid: 0,
+    lat: null,
+    lng: null
+  });
+
+  // 1. Fetch persistent samples when switching active missions
+  useEffect(() => {
+    async function loadMissionData() {
+      if (selectedMissionId) {
+        try {
+          const records = await fetchMissionSamples(selectedMissionId);
+          if (records && records.length > 0) {
+            setLiveSamples(records);
+          } else {
+            setLiveSamples(currentSelected?.samples || []);
+          }
+        } catch (e) {
+          setLiveSamples(currentSelected?.samples || []);
+        }
+      }
+    }
+    loadMissionData();
+  }, [selectedMissionId]);
+
+  // 2. Tauri Serial/Sensor Live Data Listener
+  useEffect(() => {
+    const unlistenPromise = listen('sensor-data', async (event) => {
+      const data = event.payload;
+      if (data.error) return;
+
+      // Always update latest real-time readings for the telemetry monitor card
+      setLatestSensorData(data);
+
+      // Only process mission database saving if logging is active
+      if (missionState !== 'IN_PROGRESS') return;
+
+      const hasFix = data.lat && (data.lat !== 0 || data.lng !== 0);
+      const isProbeInserted = data.soilValid === 1;
+
+      if (hasFix && isProbeInserted) {
+        const currentCoord = [data.lat, data.lng];
+
+        if (activeBoundary.length >= 3 && !isPointInPolygon(currentCoord, activeBoundary)) {
+          return;
+        }
+
+        if (lastSampleCoord) {
+          const distance = calculateDistance(lastSampleCoord, currentCoord);
+          if (distance < 5) return;
+        }
+
+        const newSample = {
+          mission_id: selectedMissionId,
+          coords: currentCoord,
+          lat: data.lat,
+          lng: data.lng,
+          moisture: data.moisture,
+          ph: data.ph,
+          ec: data.ec,
+          n: data.nitrogen,
+          p: data.phosphorus,
+          k: data.potassium,
+          overall: Math.round((data.moisture + data.ph * 10) / 2),
+          timestamp: new Date().toISOString()
+        };
+
+        await saveSoilSample(newSample);
+        setLiveSamples((prev) => [...prev, newSample]);
+        setLastSampleCoord(currentCoord);
+        setRoverPos(currentCoord);
+      }
+    });
+
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [missionState, selectedMissionId, activeBoundary, lastSampleCoord]);
+
+  // Format dynamic heat points from state
+  const heatPointsForLayer = liveSamples.map((s) => [
+    s.lat || s.coords?.[0],
+    s.lng || s.coords?.[1],
+    activeConfig.extractValue(s)
+  ]);
 
   const groupedMissions = missions.reduce((acc, msn) => {
     acc[msn.location] = acc[msn.location] || [];
@@ -169,7 +265,7 @@ export default function FieldMapView() {
     return acc;
   }, {});
 
-  const isPlotUsed = (plotName) => missions.some(m => m.location === plotName);
+  const isPlotUsed = (plotName) => missions.some((m) => m.location === plotName);
 
   const handleAddPlot = () => {
     const trimmed = newPlotInput.trim();
@@ -178,8 +274,8 @@ export default function FieldMapView() {
       setPlotError('Plot name already exists.');
       return;
     }
-    setPlots(prev => [...prev, trimmed]);
-    setNewMission(prev => ({ ...prev, location: trimmed }));
+    setPlots((prev) => [...prev, trimmed]);
+    setNewMission((prev) => ({ ...prev, location: trimmed }));
     setNewPlotInput('');
     setPlotError(null);
   };
@@ -200,11 +296,11 @@ export default function FieldMapView() {
       return;
     }
 
-    setPlots(prev => prev.map((p, i) => (i === index ? trimmed : p)));
-    setMissions(prev => prev.map(m => m.location === oldName ? { ...m, location: trimmed } : m));
+    setPlots((prev) => prev.map((p, i) => (i === index ? trimmed : p)));
+    setMissions((prev) => prev.map((m) => (m.location === oldName ? { ...m, location: trimmed } : m)));
 
     if (newMission.location === oldName) {
-      setNewMission(prev => ({ ...prev, location: trimmed }));
+      setNewMission((prev) => ({ ...prev, location: trimmed }));
     }
 
     setEditingPlotIndex(null);
@@ -217,23 +313,23 @@ export default function FieldMapView() {
       setPlotError(`Cannot delete "${plotName}" because it is linked to existing missions.`);
       return;
     }
-    const updated = plots.filter(p => p !== plotName);
+    const updated = plots.filter((p) => p !== plotName);
     setPlots(updated);
     if (newMission.location === plotName) {
-      setNewMission(prev => ({ ...prev, location: updated[0] || '' }));
+      setNewMission((prev) => ({ ...prev, location: updated[0] || '' }));
     }
     setPlotError(null);
   };
 
   const handleMapClick = (coords) => {
     if (wizardStep === 'DRAWING_BOUNDARY') {
-      setTempBoundary(prev => [...prev, coords]);
+      setTempBoundary((prev) => [...prev, coords]);
     } else if (wizardStep === 'PLACING_PINS') {
       if (tempBoundary.length >= 3 && !isPointInPolygon(coords, tempBoundary)) {
         setNotification({ type: 'error', message: 'Waypoints must be placed inside the defined field boundary.' });
         return;
       }
-      setTempWaypoints(prev => [...prev, coords]);
+      setTempWaypoints((prev) => [...prev, coords]);
     }
   };
 
@@ -243,33 +339,23 @@ export default function FieldMapView() {
     setWizardStep('DRAWING_BOUNDARY');
     setTempBoundary([]);
     setTempWaypoints([]);
-    setNotification({ type: 'info', message: 'Step 1: Click around the perimeter of the field to draw the boundary.' });
+    setNotification({ type: 'info', message: 'Step 1: Click around the perimeter of the field to draw boundary.' });
   };
 
   const handleConfirmBoundary = () => {
     if (tempBoundary.length < 3) {
-      setNotification({ type: 'error', message: 'Please click at least 3 points on the map to define a closed boundary.' });
+      setNotification({ type: 'error', message: 'Please click at least 3 points on map to define a closed boundary.' });
       return;
     }
     setWizardStep('PLACING_PINS');
-    setNotification({ type: 'info', message: 'Step 2: Now click inside the boundary to place rover traversal waypoints.' });
+    setNotification({ type: 'info', message: 'Step 2: Click inside boundary to place rover waypoints.' });
   };
 
   const handleLaunchMission = () => {
     if (tempWaypoints.length === 0) {
-      setNotification({ type: 'error', message: 'Please add at least 1 traversal waypoint inside the boundary.' });
+      setNotification({ type: 'error', message: 'Please add at least 1 traversal waypoint inside boundary.' });
       return;
     }
-
-    const syntheticSamples = tempWaypoints.map((pt, i) => ({
-      coords: pt,
-      moisture: 38 + (i * 4) % 15,
-      ph: 6.0 + (i * 0.2) % 0.8,
-      n: 20 + (i * 3) % 15,
-      p: 30 + (i * 2) % 15,
-      k: 45 + (i * 4) % 20,
-      overall: 70 + (i * 6) % 25
-    }));
 
     const missionObj = {
       id: `MSN-00${missions.length + 1}`,
@@ -279,54 +365,38 @@ export default function FieldMapView() {
       status: 'Active',
       boundary: tempBoundary,
       waypoints: tempWaypoints,
-      samples: syntheticSamples,
-      summary: 'Mission in progress. Real-time multi-variable heatmap calculated.',
-      stats: {
-        avgPh: 6.4,
-        avgMoisture: '42%',
-        avgEC: '1.2 dS/m',
-        totalDistance: `${calculatePolygonArea(tempBoundary)} m²`,
-        samplesCollected: tempWaypoints.length
-      }
+      samples: [],
+      summary: 'Mission initiated. Real-time multi-variable heatmap calculated.',
+      stats: { avgPh: 'N/A', avgMoisture: 'N/A', avgEC: 'N/A', totalDistance: `${calculatePolygonArea(tempBoundary)} m²`, samplesCollected: 0 }
     };
 
-    setMissions(prev => [missionObj, ...prev]);
+    setMissions((prev) => [missionObj, ...prev]);
     setActiveMission(missionObj);
     setSelectedMissionId(missionObj.id);
+    setLiveSamples([]);
     setCurrentWaypointIdx(0);
     setWizardStep('IDLE');
-    setNotification({ type: 'success', message: `Mission "${missionObj.name}" launched with multi-layer heatmap!` });
+    setMissionState('IN_PROGRESS'); // Auto-start telemetry logging state
+    setNotification({ type: 'success', message: `Mission "${missionObj.name}" launched!` });
   };
 
   const handleFinishMission = (id) => {
-    setMissions(prev => prev.map(m => m.id === id ? { ...m, status: 'Finished', summary: 'Mission finished. Boundary and telemetry stored.' } : m));
+    setMissions((prev) => prev.map((m) => (m.id === id ? { ...m, status: 'Finished', summary: 'Mission finished. Boundary and telemetry stored.' } : m)));
+    setMissionState('FINISHED');
     if (activeMission?.id === id) setActiveMission(null);
     setNotification({ type: 'success', message: `Mission completed and findings logged.` });
   };
 
   const handleAdvanceWaypoint = () => {
-    const activePins = wizardStep !== 'IDLE' ? tempWaypoints : (currentSelected?.waypoints || []);
+    const activePins = wizardStep !== 'IDLE' ? tempWaypoints : currentSelected?.waypoints || [];
     if (currentWaypointIdx < activePins.length - 1) {
       setRoverPos(activePins[currentWaypointIdx]);
-      setCurrentWaypointIdx(prev => prev + 1);
+      setCurrentWaypointIdx((prev) => prev + 1);
     } else {
       setRoverPos(activePins[currentWaypointIdx]);
       setCurrentWaypointIdx(activePins.length);
     }
   };
-
-  const activeBoundary = wizardStep !== 'IDLE' ? tempBoundary : (currentSelected?.boundary || []);
-  const displayedWaypoints = wizardStep !== 'IDLE' ? tempWaypoints : (currentSelected?.waypoints || []);
-
-  // Format heat points dynamically based on the selected layer
-  const currentSamples = currentSelected?.samples || [];
-  const heatPointsForLayer = currentSamples.map(s => [
-    s.coords[0],
-    s.coords[1],
-    activeConfig.extractValue(s)
-  ]);
-
-  const fieldAreaSqMeters = calculatePolygonArea(activeBoundary);
 
   return (
     <div className="field-map-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
@@ -335,7 +405,7 @@ export default function FieldMapView() {
         <div>
           <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Field Map & Heatmap Analysis</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            Multi-variable GIS heatmap layers, bounded spatial interpolation, and color-coded soil health gradients.
+            Multi-variable GIS heatmap layers, bounded spatial interpolation, and real-time telemetry updates.
           </p>
         </div>
 
@@ -349,11 +419,7 @@ export default function FieldMapView() {
               >
                 <Check size={16} /> Complete Boundary ({tempBoundary.length} points)
               </button>
-              <button
-                className="badge"
-                onClick={() => { setWizardStep('IDLE'); setTempBoundary([]); }}
-                style={{ cursor: 'pointer' }}
-              >
+              <button className="badge" onClick={() => { setWizardStep('IDLE'); setTempBoundary([]); }} style={{ cursor: 'pointer' }}>
                 Cancel
               </button>
             </>
@@ -368,11 +434,7 @@ export default function FieldMapView() {
               >
                 <Play size={16} /> Launch Mission ({tempWaypoints.length} Pins)
               </button>
-              <button
-                className="badge"
-                onClick={() => { setWizardStep('DRAWING_BOUNDARY'); setTempWaypoints([]); }}
-                style={{ cursor: 'pointer' }}
-              >
+              <button className="badge" onClick={() => { setWizardStep('DRAWING_BOUNDARY'); setTempWaypoints([]); }} style={{ cursor: 'pointer' }}>
                 Back to Boundary
               </button>
             </>
@@ -403,7 +465,7 @@ export default function FieldMapView() {
           color: notification.type === 'success' ? '#166534' : notification.type === 'error' ? '#991b1b' : '#92400e',
           fontSize: '0.85rem',
           display: 'flex',
-          justifyContent: 'space-between',
+          justify: 'space-between',
           alignItems: 'center'
         }}>
           <span>{notification.message}</span>
@@ -425,7 +487,7 @@ export default function FieldMapView() {
                   <MapPin size={12} /> {loc}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {list.map(m => (
+                  {list.map((m) => (
                     <div
                       key={m.id}
                       onClick={() => {
@@ -468,7 +530,7 @@ export default function FieldMapView() {
           </div>
         </div>
 
-        {/* Center Column: Interactive Map with Layer Selection & Color Guide */}
+        {/* Center Column: Interactive Map & Step 4 Control Toolbar */}
         <div className="card" style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
           <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="card-title">
@@ -479,49 +541,70 @@ export default function FieldMapView() {
                 : `Heatmap: ${currentSelected?.name || 'Active'}`}
             </span>
 
-            {/* Layer Selection Dropdown */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Layers size={14} color="var(--primary-green)" />
-              <select
-                value={selectedLayerKey}
-                onChange={(e) => setSelectedLayerKey(e.target.value)}
-                style={{
-                  padding: '4px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--card-border)',
-                  fontSize: '0.8rem',
-                  fontWeight: 700,
-                  outline: 'none',
-                  background: '#fff',
-                  color: 'var(--text-dark)'
-                }}
-              >
-                <option value="overall">Overall Soil Health</option>
-                <option value="moisture">Soil Moisture</option>
-                <option value="ph">Soil pH</option>
-                <option value="npk">NPK Ratio</option>
-              </select>
+            {/* STEP 4: Live Telemetry Logging Controls & Layer Switcher */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              {wizardStep === 'IDLE' && (
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', borderRight: '1px solid #e2e8f0', paddingRight: '10px' }}>
+                  {missionState === 'IDLE' && (
+                    <button
+                      className="badge"
+                      style={{ background: 'var(--primary-green)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px' }}
+                      onClick={() => setMissionState('IN_PROGRESS')}
+                    >
+                      <Play size={12} /> Start Logging
+                    </button>
+                  )}
+
+                  {missionState === 'IN_PROGRESS' && (
+                    <button
+                      className="badge"
+                      style={{ background: '#eab308', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                      onClick={() => setMissionState('PAUSED')}
+                    >
+                      <span className="pulse-dot" style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#fff' }} />
+                      <Pause size={12} /> Pause Logging
+                    </button>
+                  )}
+
+                  {missionState === 'PAUSED' && (
+                    <button
+                      className="badge"
+                      style={{ background: 'var(--primary-green)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px' }}
+                      onClick={() => setMissionState('IN_PROGRESS')}
+                    >
+                      <RotateCcw size={12} /> Resume
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Layer Selection Dropdown */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Layers size={14} color="var(--primary-green)" />
+                <select
+                  value={selectedLayerKey}
+                  onChange={(e) => setSelectedLayerKey(e.target.value)}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--card-border)',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    outline: 'none',
+                    background: '#fff',
+                    color: 'var(--text-dark)'
+                  }}
+                >
+                  <option value="overall">Overall Soil Health</option>
+                  <option value="moisture">Soil Moisture</option>
+                  <option value="ph">Soil pH</option>
+                  <option value="npk">NPK Ratio</option>
+                </select>
+              </div>
             </div>
           </div>
 
           <div style={{ flex: 1, position: 'relative' }}>
-            {/* <HeatmapMap
-              center={[14.6095, 120.9895]}
-              zoom={18}
-              boundary={activeBoundary}
-              waypoints={displayedWaypoints}
-              heatPoints={heatPointsForLayer}
-              roverPos={roverPos}
-              onMapClick={handleMapClick}
-              interactionMode={
-                wizardStep === 'DRAWING_BOUNDARY'
-                  ? 'DRAW_BOUNDARY'
-                  : wizardStep === 'PLACING_PINS'
-                  ? 'SET_WAYPOINTS'
-                  : 'NONE'
-              }
-              gradient={activeConfig.gradient}
-            />*/}
             <HeatmapMap
               center={[14.6095, 120.9895]}
               zoom={18}
@@ -540,7 +623,7 @@ export default function FieldMapView() {
               gradient={activeConfig.gradient}
             />
 
-            {/* Floating Color Legend Guide Overlay */}
+            {/* Floating Color Legend Guide */}
             <div style={{
               position: 'absolute',
               bottom: '12px',
@@ -566,13 +649,7 @@ export default function FieldMapView() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 {activeConfig.ranges.map((range, idx) => (
                   <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div style={{
-                      width: '12px',
-                      height: '12px',
-                      borderRadius: '3px',
-                      background: range.color,
-                      flexShrink: 0
-                    }} />
+                    <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: range.color, flexShrink: 0 }} />
                     <span style={{ fontWeight: 700, minWidth: '60px' }}>{range.label}</span>
                     <span style={{ color: 'var(--text-muted)' }}>{range.desc}</span>
                   </div>
@@ -582,9 +659,8 @@ export default function FieldMapView() {
           </div>
         </div>
 
-        {/* Right Column: Mission Overview & Operator Traversal Guide */}
+        {/* Right Column: Overview & Traversal */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
-          {/* Mission Overview */}
           <div className="card" style={{ flexShrink: 0 }}>
             <div className="card-header">
               <span className="card-title">Mission Overview: {currentSelected?.id}</span>
@@ -614,39 +690,78 @@ export default function FieldMapView() {
                   <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{currentSelected?.stats.avgEC}</div>
                 </div>
                 <div style={{ padding: '6px 8px', background: 'var(--bg-main)', borderRadius: '6px' }}>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Sample Density</div>
-                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{displayedWaypoints.length} pts</div>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Samples Recorded</div>
+                  <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{liveSamples.length} pts</div>
                 </div>
               </div>
             </div>
           </div>
-
-          {/* Crop Suitability Matrix */}
+          
+          {/* Live Sensor Telemetry Monitor Card */}
           <div className="card" style={{ flexShrink: 0 }}>
-            <div className="card-header">
-              <span className="card-title">Crop Suitability Matrix</span>
+            <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="card-title">Live Rover Telemetry</span>
+              <span style={{
+                fontSize: '0.68rem',
+                padding: '2px 8px',
+                borderRadius: '12px',
+                fontWeight: 700,
+                background: latestSensorData.soilValid === 1 ? '#dcfce7' : '#fee2e2',
+                color: latestSensorData.soilValid === 1 ? '#166534' : '#991b1b',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}>
+                <span style={{
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  background: latestSensorData.soilValid === 1 ? '#22c55e' : '#ef4444'
+                }} />
+                {latestSensorData.soilValid === 1 ? 'Probe Engaged' : 'Probe Lifted'}
+              </span>
             </div>
-            <div style={{ padding: '8px 12px', fontSize: '0.78rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #f1f5f9' }}>
-                <span>🌾 Rice / Paddy</span>
-                <strong style={{ color: 'var(--primary-green)' }}>94% Highly Suitable</strong>
+
+            <div style={{ padding: '10px 12px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                <div style={{ padding: '6px', background: 'var(--bg-main)', borderRadius: '6px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Moisture</div>
+                  <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--primary-green)' }}>
+                    {latestSensorData.moisture}{typeof latestSensorData.moisture === 'number' ? '%' : ''}
+                  </div>
+                </div>
+
+                <div style={{ padding: '6px', background: 'var(--bg-main)', borderRadius: '6px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>pH Level</div>
+                  <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--earth-light)' }}>
+                    {latestSensorData.ph}
+                  </div>
+                </div>
+
+                <div style={{ padding: '6px', background: 'var(--bg-main)', borderRadius: '6px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>EC (dS/m)</div>
+                  <div style={{ fontWeight: 800, fontSize: '0.9rem' }}>
+                    {latestSensorData.ec}
+                  </div>
+                </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #f1f5f9' }}>
-                <span>🌽 Sweet Corn</span>
-                <strong style={{ color: 'var(--primary-green)' }}>88% Suitable</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #f1f5f9' }}>
-                <span>🥔 Cassava / Tuber</span>
-                <strong style={{ color: 'var(--accent-gold)' }}>65% Moderate</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                <span>🥬 Leafy Greens</span>
-                <strong style={{ color: 'var(--earth-light)' }}>42% Low</strong>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                <div style={{ padding: '6px', background: 'var(--bg-main)', borderRadius: '6px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Nitrogen (N)</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.82rem' }}>{latestSensorData.nitrogen}</div>
+                </div>
+                <div style={{ padding: '6px', background: 'var(--bg-main)', borderRadius: '6px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Phosphorus (P)</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.82rem' }}>{latestSensorData.phosphorus}</div>
+                </div>
+                <div style={{ padding: '6px', background: 'var(--bg-main)', borderRadius: '6px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Potassium (K)</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.82rem' }}>{latestSensorData.potassium}</div>
+                </div>
               </div>
             </div>
           </div>
-
-          {/* Traversal Guidance Card */}
           <div style={{ flex: 1, minHeight: '190px' }}>
             <OperatorNavGuide
               roverPos={roverPos}
@@ -682,10 +797,7 @@ export default function FieldMapView() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Create New Mission</h3>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
-              >
+              <button onClick={() => setIsModalOpen(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
                 <X size={18} />
               </button>
             </div>
@@ -712,7 +824,7 @@ export default function FieldMapView() {
                 type="text"
                 placeholder="e.g., UST Field Spatial Scan"
                 value={newMission.name}
-                onChange={e => setNewMission({ ...newMission, name: e.target.value })}
+                onChange={(e) => setNewMission({ ...newMission, name: e.target.value })}
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--card-border)', marginTop: '4px' }}
               />
             </div>
@@ -723,14 +835,7 @@ export default function FieldMapView() {
                 <button
                   type="button"
                   onClick={() => { setIsManagingPlots(!isManagingPlots); setPlotError(null); }}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--primary-green)',
-                    fontSize: '0.78rem',
-                    fontWeight: 700,
-                    cursor: 'pointer'
-                  }}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--primary-green)', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}
                 >
                   {isManagingPlots ? 'Done Managing' : 'Manage Plots'}
                 </button>
@@ -739,10 +844,10 @@ export default function FieldMapView() {
               {!isManagingPlots ? (
                 <select
                   value={newMission.location}
-                  onChange={e => setNewMission({ ...newMission, location: e.target.value })}
+                  onChange={(e) => setNewMission({ ...newMission, location: e.target.value })}
                   style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--card-border)', marginTop: '4px' }}
                 >
-                  {plots.map(plot => (
+                  {plots.map((plot) => (
                     <option key={plot} value={plot}>{plot}</option>
                   ))}
                 </select>
@@ -762,20 +867,13 @@ export default function FieldMapView() {
                       type="text"
                       placeholder="Add new plot..."
                       value={newPlotInput}
-                      onChange={e => setNewPlotInput(e.target.value)}
+                      onChange={(e) => setNewPlotInput(e.target.value)}
                       style={{ flex: 1, padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--card-border)', fontSize: '0.8rem' }}
                     />
                     <button
                       type="button"
                       onClick={handleAddPlot}
-                      style={{
-                        background: 'var(--primary-green)',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: '6px',
-                        padding: '6px 10px',
-                        cursor: 'pointer'
-                      }}
+                      style={{ background: 'var(--primary-green)', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 10px', cursor: 'pointer' }}
                     >
                       <Plus size={16} />
                     </button>
@@ -805,21 +903,13 @@ export default function FieldMapView() {
                               <input
                                 type="text"
                                 value={editPlotInput}
-                                onChange={e => setEditPlotInput(e.target.value)}
+                                onChange={(e) => setEditPlotInput(e.target.value)}
                                 style={{ flex: 1, padding: '2px 6px', fontSize: '0.8rem', borderRadius: '4px', border: '1px solid var(--card-border)' }}
                               />
-                              <button
-                                type="button"
-                                onClick={() => handleSaveEditPlot(index)}
-                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--primary-green)' }}
-                              >
+                              <button type="button" onClick={() => handleSaveEditPlot(index)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--primary-green)' }}>
                                 <Check size={14} />
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => setEditingPlotIndex(null)}
-                                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
-                              >
+                              <button type="button" onClick={() => setEditingPlotIndex(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
                                 <X size={14} />
                               </button>
                             </div>
@@ -829,25 +919,14 @@ export default function FieldMapView() {
                                 {plot} {used && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: '4px' }}>(in use)</span>}
                               </span>
                               <div style={{ display: 'flex', gap: '6px' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => handleStartEditPlot(index)}
-                                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
-                                  title="Edit Plot Name"
-                                >
+                                <button type="button" onClick={() => handleStartEditPlot(index)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
                                   <Edit2 size={13} />
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => handleDeletePlot(plot)}
                                   disabled={used}
-                                  style={{
-                                    background: 'transparent',
-                                    border: 'none',
-                                    cursor: used ? 'not-allowed' : 'pointer',
-                                    color: used ? '#cbd5e1' : '#ef4444'
-                                  }}
-                                  title={used ? 'Cannot delete plot with existing missions' : 'Delete Plot'}
+                                  style={{ background: 'transparent', border: 'none', cursor: used ? 'not-allowed' : 'pointer', color: used ? '#cbd5e1' : '#ef4444' }}
                                 >
                                   <Trash2 size={13} />
                                 </button>
@@ -867,23 +946,24 @@ export default function FieldMapView() {
               <input
                 type="date"
                 value={newMission.date}
-                onChange={e => setNewMission({ ...newMission, date: e.target.value })}
+                onChange={(e) => setNewMission({ ...newMission, date: e.target.value })}
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--card-border)', marginTop: '4px' }}
               />
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
-              <button
-                className="badge"
-                onClick={() => setIsModalOpen(false)}
-                style={{ cursor: 'pointer' }}
-              >
+              <button className="badge" onClick={() => setIsModalOpen(false)} style={{ cursor: 'pointer' }}>
                 Cancel
               </button>
               <button
                 className="badge"
+                disabled={!newMission.name.trim()}
                 onClick={handleStartMissionSetup}
-                style={{ background: 'var(--primary-green)', color: '#fff', cursor: 'pointer' }}
+                style={{
+                  background: newMission.name.trim() ? 'var(--primary-green)' : '#ccc',
+                  color: '#fff',
+                  cursor: newMission.name.trim() ? 'pointer' : 'not-allowed'
+                }}
               >
                 Next: Draw Field Boundary
               </button>

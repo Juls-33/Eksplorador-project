@@ -28,6 +28,7 @@ fn get_connection() -> Result<Connection> {
     let migrations = Migrations::new(vec![
         M::up(include_str!("../migrations/V1__create_telemetry_table.sql")),
         M::up(include_str!("../migrations/V2__add_npk_columns.sql")),
+        M::up(include_str!("../migrations/V3_seed_telemetry.sql")),
     ]);
 
     migrations.to_latest(&mut conn).map_err(|e| {
