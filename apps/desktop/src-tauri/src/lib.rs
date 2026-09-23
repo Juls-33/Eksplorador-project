@@ -59,23 +59,23 @@ fn import_telemetry_json(file_content: String) -> Result<usize, String> {
             Err(_) => continue,
         };
 
-        conn.execute(
-            "INSERT OR REPLACE INTO telemetry (
-                id, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                rec.id,
-                rec.timestamp,
-                rec.latitude.unwrap_or(0.0),
-                rec.longitude.unwrap_or(0.0),
-                rec.ph,
-                rec.moisture,
-                rec.ec,
-                rec.nitrogen,
-                rec.phosphorus,
-                rec.potassium,
-            ],
-        ).map_err(|e| format!("Failed to insert record: {}", e))?;
+       conn.execute(
+    "INSERT INTO telemetry (
+        timestamp, latitude, longitude, ph, moisture, ec,
+        nitrogen, phosphorus, potassium
+    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    params![
+        rec.timestamp,
+        rec.latitude.unwrap_or(0.0),
+        rec.longitude.unwrap_or(0.0),
+        rec.ph,
+        rec.moisture,
+        rec.ec,
+        rec.nitrogen,
+        rec.phosphorus,
+        rec.potassium,
+    ],
+).map_err(|e| format!("Failed to insert record: {}", e))?;
 
         count += 1;
     }
