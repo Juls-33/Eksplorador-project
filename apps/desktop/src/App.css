@@ -176,12 +176,17 @@ body {
 /* Header & Status */
 .top-bar {
   display: flex;
-  flex-direction: column;
   justify-content: space-between;
-  align-items: stretch;
-  gap: 10px;
-  min-height: 80px;
-  flex-shrink: 0;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* Hover effects for Sync buttons */
+.top-bar .badge button:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+  transition: all 0.15s ease-in-out;
 }
 
 .top-bar > div:first-child {

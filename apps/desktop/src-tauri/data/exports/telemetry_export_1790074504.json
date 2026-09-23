@@ -1,0 +1,103 @@
+{
+  "app_version": "1.0",
+  "exported_at": 1790074504,
+  "record_count": 8,
+  "telemetry": [
+    {
+      "ec": 1.2,
+      "id": 1,
+      "latitude": 14.621,
+      "longitude": 121.098,
+      "moisture": 42.5,
+      "nitrogen": 28.0,
+      "ph": 6.4,
+      "phosphorus": 24.0,
+      "potassium": 38.0,
+      "timestamp": "2026-09-09 08:30:00"
+    },
+    {
+      "ec": 1.18,
+      "id": 2,
+      "latitude": 14.6212,
+      "longitude": 121.0982,
+      "moisture": 40.1,
+      "nitrogen": 26.0,
+      "ph": 6.3,
+      "phosphorus": 22.0,
+      "potassium": 36.0,
+      "timestamp": "2026-09-09 08:45:00"
+    },
+    {
+      "ec": 1.25,
+      "id": 3,
+      "latitude": 14.6215,
+      "longitude": 121.0985,
+      "moisture": 44.8,
+      "nitrogen": 30.0,
+      "ph": 6.5,
+      "phosphorus": 25.0,
+      "potassium": 40.0,
+      "timestamp": "2026-09-09 09:00:00"
+    },
+    {
+      "ec": 1.15,
+      "id": 4,
+      "latitude": 14.6218,
+      "longitude": 121.0988,
+      "moisture": 41.2,
+      "nitrogen": 25.0,
+      "ph": 6.2,
+      "phosphorus": 21.0,
+      "potassium": 35.0,
+      "timestamp": "2026-09-09 09:15:00"
+    },
+    {
+      "ec": 0.85,
+      "id": 5,
+      "latitude": 14.63,
+      "longitude": 121.105,
+      "moisture": 22.5,
+      "nitrogen": 12.0,
+      "ph": 5.4,
+      "phosphorus": 14.0,
+      "potassium": 18.0,
+      "timestamp": "2026-09-10 14:00:00"
+    },
+    {
+      "ec": 0.9,
+      "id": 6,
+      "latitude": 14.6302,
+      "longitude": 121.1052,
+      "moisture": 24.0,
+      "nitrogen": 15.0,
+      "ph": 5.6,
+      "phosphorus": 15.0,
+      "potassium": 20.0,
+      "timestamp": "2026-09-10 14:15:00"
+    },
+    {
+      "ec": 0.8,
+      "id": 7,
+      "latitude": 14.6305,
+      "longitude": 121.1055,
+      "moisture": 21.0,
+      "nitrogen": 10.0,
+      "ph": 5.3,
+      "phosphorus": 12.0,
+      "potassium": 15.0,
+      "timestamp": "2026-09-10 14:30:00"
+    },
+    {
+      "ec": 0.88,
+      "id": 8,
+      "latitude": 14.6308,
+      "longitude": 121.1058,
+      "moisture": 23.2,
+      "nitrogen": 14.0,
+      "ph": 5.5,
+      "phosphorus": 16.0,
+      "potassium": 19.0,
+      "timestamp": "2026-09-10 14:45:00"
+    }
+  ]
+}
