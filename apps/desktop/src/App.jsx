@@ -429,7 +429,7 @@ export default function App() {
   }, []);
 
   const navItems = [
-    { id: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'Dashboard', label: 'Live Monitoring', icon: LayoutDashboard },
     { id: 'Field Map', label: 'Field Map', icon: MapIcon },
     { id: 'Sampling', label: 'Sampling', icon: FlaskConical },
     { id: 'Soil Records', label: 'Soil Records', icon: ClipboardList },
@@ -506,7 +506,7 @@ export default function App() {
           <>
             <header className="top-bar">
               <div>
-                <h1>Field Monitoring Board</h1>
+                <h1>Live Monitoring Board</h1>
               </div>
 
               {/* NEW: Telemetry Sync Actions (Export & Import) */}
@@ -711,7 +711,7 @@ export default function App() {
                     <thead>
                       <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
                         <th aria-label="Select record" style={{ padding: '6px 8px', width: '32px' }}></th>
-                        <th style={{ padding: '6px 8px', width: '58px' }}>Map ID</th>
+                        <th style={{ padding: '6px 8px', width: '58px' }}>ID</th>
                         <th style={{ padding: '6px 8px' }}>Time</th>
                         <th style={{ padding: '6px 8px' }}>Lat / Lng</th>
                         <th style={{ padding: '6px 8px' }}>pH</th>
