@@ -29,7 +29,6 @@ import { calculateDistanceMeters } from './utils/geo';
 import './App.css';
 import { exportTelemetryPackage, importTelemetryPackage } from './services/db';
 
-// How long (ms) without a new packet before we treat the rover as disconnected
 const STALE_TIMEOUT_MS = 15000;
 const HISTORICAL_ASSESSMENT_MIN = 10;
 const HISTORICAL_SELECTION_MAX = 20;
@@ -87,17 +86,11 @@ const hasValidSavedLocation = (record) => {
   return Number.isFinite(latitude) && Number.isFinite(longitude) && (latitude !== 0 || longitude !== 0);
 };
 
-// Maps each heatmap layer option to how its value is pulled from a DB row
-// and normalized to 0-1 for the heat gradient, plus that layer's own color
-// scale. Normalization ranges are approximate and can be tuned against real
-// field data once enough samples are collected.
 const normalizeHeatValue = (value, min, max) => {
   if (value === null || value === undefined || value === '') return null;
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return null;
 
-  // Leaflet renders an intensity of 0 as transparent. Keep valid low values
-  // visible at the bottom of the gradient while retaining their relative rank.
   const normalized = Math.max(0, Math.min(1, (numericValue - min) / (max - min)));
   return 0.2 + normalized * 0.8;
 };
@@ -129,13 +122,16 @@ const LAYER_CONFIG = {
   }
 };
 
-function TelemetrySyncBar({ onImportSuccess }) {
-  const fileInputRef = useRef(null);
+function TelemetrySyncBar({ onImportSuccess, recentSamples }) {
+  const hasRecentSamples = recentSamples.length > 0;
 
   const handleExport = async () => {
+    if (!hasRecentSamples) return;
+
     try {
-      const result = await exportTelemetryPackage();
-      alert(`Export Successful!\nSaved to project folder:\n${result.path}`);
+      const result = await exportTelemetryPackage(recentSamples);
+      if (result.cancelled) return;
+      alert(`Export Successful!\nSaved to:\n${result.path}`);
     } catch (err) {
       alert(`Export Failed: ${err.message || err}`);
     }
@@ -145,35 +141,16 @@ function TelemetrySyncBar({ onImportSuccess }) {
     try {
       const result = await importTelemetryPackage();
       if (result.cancelled) return;
-      
-      if (onImportSuccess) await onImportSuccess();
-      alert(`Import Successful!\n${result.count} telemetry records imported into eksplorador.db.`);
+
+      try {
+        if (onImportSuccess) await onImportSuccess(result.records);
+        alert(`Import Successful!\n${result.count} telemetry records imported into eksplorador.db.`);
+      } catch (refreshError) {
+        alert(`Imported ${result.count} telemetry records into eksplorador.db, but the recent table could not refresh: ${refreshError.message || refreshError}`);
+      }
     } catch (err) {
       alert(`Import Failed: ${err.message || err}`);
     }
-  };
-
-  const handleFileChange = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const content = event.target?.result;
-        if (typeof content === 'string') {
-          const result = await importTelemetryPackage(content);
-          if (onImportSuccess) await onImportSuccess();
-          alert(`Import Successful!\n${result.count} telemetry records merged into SQLite database.`);
-        }
-      } catch (err) {
-        alert(`Import Failed: ${err.message}`);
-      } finally {
-        // Reset file input so re-importing the same file triggers onChange
-        e.target.value = '';
-      }
-    };
-    reader.readAsText(file);
   };
 
   return (
@@ -182,7 +159,17 @@ function TelemetrySyncBar({ onImportSuccess }) {
         type="button"
         className="badge"
         onClick={handleExport}
-        style={{ cursor: 'pointer', background: 'var(--primary-green)', color: '#fff', display: 'flex', gap: '6px', padding: '6px 12px' }}
+        disabled={!hasRecentSamples}
+        title={hasRecentSamples ? 'Export recent samples shown in the table' : 'No recent samples to export'}
+        style={{
+          cursor: hasRecentSamples ? 'pointer' : 'not-allowed',
+          opacity: hasRecentSamples ? 1 : 0.55,
+          background: 'var(--primary-green)',
+          color: '#fff',
+          display: 'flex',
+          gap: '6px',
+          padding: '6px 12px'
+        }}
       >
         <Upload size={14} />
         <span>Export Data</span>
@@ -192,7 +179,15 @@ function TelemetrySyncBar({ onImportSuccess }) {
         type="button"
         className="badge"
         onClick={handleImport}
-        style={{ cursor: 'pointer', background: '#fff', color: 'var(--text-dark)', border: '1px solid var(--card-border)', display: 'flex', gap: '6px', padding: '6px 12px' }}
+        style={{
+          cursor: 'pointer',
+          background: '#fff',
+          color: 'var(--text-dark)',
+          border: '1px solid var(--card-border)',
+          display: 'flex',
+          gap: '6px',
+          padding: '6px 12px'
+        }}
       >
         <Download size={14} />
         <span>Import Data</span>
@@ -205,38 +200,20 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('Dashboard');
   const [selectedLayer, setSelectedLayer] = useState('ph');
   const [isCollapsed, setIsCollapsed] = useState(false);
-
-  // Live sensor data — null until the first packet arrives.
-  // Drives the status badges and KPI cards (current-moment readings).
   const [liveData, setLiveData] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
-
   const lastPacketTime = useRef(null);
 
-  // Only records saved during this app session appear in the recent table.
-  // Refreshes restore its rows; closing the Tauri window clears them.
-  // The underlying SQLite telemetry table is never cleared.
+  // The recent table is session-specific. SQLite records are retained.
   const [telemetryData, setTelemetryData] = useState(readSessionRows);
   const sessionStartId = useRef(null);
 
-  // Up to twenty table rows can be reviewed together as one historical heatmap.
-  // Keeping the complete rows here lets layer changes reuse their saved values.
   const [selectedHistoricalRecords, setSelectedHistoricalRecords] = useState([]);
-
-  // Historical crop recommendations are intentionally opt-in and use a
-  // snapshot of at least ten selected rows. This keeps ordinary heatmap
-  // exploration from replacing the live recommendation automatically.
   const [assessedHistoricalRecords, setAssessedHistoricalRecords] = useState([]);
-
-  // Raw live readings accumulated as valid packets arrive, kept
-  // unnormalized so switching the layer dropdown recolors the whole
-  // heatmap immediately rather than only affecting new points.
   const [rawLiveReadings, setRawLiveReadings] = useState([]);
 
   const activeLayerConfig = LAYER_CONFIG[selectedLayer] ?? LAYER_CONFIG.ph;
 
-  // Heatmap points computed from live readings, using whichever layer is
-  // currently selected in the dropdown
   const liveHeatPoints = rawLiveReadings
     .map((r) => [r.lat, r.lng, activeLayerConfig.extract(r)])
     .filter((point) => point[2] !== null);
@@ -290,7 +267,12 @@ export default function App() {
     const average = (key) => {
       const values = sourceRecords
         .map((record) => record[key])
-        .filter((value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)))
+        .filter((value) =>
+          value !== null &&
+          value !== undefined &&
+          value !== '' &&
+          Number.isFinite(Number(value))
+        )
         .map(Number);
 
       return values.length > 0
@@ -305,8 +287,6 @@ export default function App() {
     const potassium = average('potassium');
     const recommendedCrops = [];
 
-    // Dashboard recommendations are intentionally limited to the three crops
-    // selected for Eksplorador's current assessment scope.
     if (ph !== null && moisture !== null && ph >= 5.5 && ph <= 6.8 && moisture >= 35) {
       recommendedCrops.push('Rice');
     }
@@ -351,7 +331,8 @@ export default function App() {
         return { record, timeDifference, distance };
       })
       .filter(({ timeDifference, distance }) =>
-        timeDifference <= HISTORICAL_MATCH_WINDOW_MS && distance <= HISTORICAL_MATCH_RADIUS_M
+        timeDifference <= HISTORICAL_MATCH_WINDOW_MS &&
+        distance <= HISTORICAL_MATCH_RADIUS_M
       )
       .sort((a, b) => a.timeDifference - b.timeDifference || a.distance - b.distance)
       .slice(0, HISTORICAL_SELECTION_MAX - 1)
@@ -366,24 +347,19 @@ export default function App() {
     setAssessedHistoricalRecords([]);
   };
 
-  // Most recent session record's position, used before a live GPS fix.
-  const latestDbPos =
-    telemetryData.length > 0 ? [telemetryData[0].latitude, telemetryData[0].longitude] : null;
+  const latestDbPos = telemetryData.length > 0
+    ? [telemetryData[0].latitude, telemetryData[0].longitude]
+    : null;
 
   useEffect(() => {
     const unlisten = listen('sensor-data', (event) => {
       const data = event.payload;
 
-      // Ignore malformed/error packets forwarded from the receiver
       if (data.error) {
         console.warn('Receiver reported an error:', data.error);
         return;
       }
 
-      // Plot on the heatmap only once GPS has a fix and the soil probe
-      // reading is valid — same filter the backend uses for DB inserts,
-      // so the live map and the eventual historical record agree on
-      // what counts as a "real" sample.
       const hasFix = data.lat && (data.lat !== 0 || data.lng !== 0);
       if (hasFix && data.soilValid === 1) {
         setRawLiveReadings((prev) =>
@@ -405,7 +381,6 @@ export default function App() {
       lastPacketTime.current = Date.now();
     });
 
-    // Periodically check whether the last packet is too old to trust
     const staleCheck = setInterval(() => {
       if (lastPacketTime.current && Date.now() - lastPacketTime.current > STALE_TIMEOUT_MS) {
         setIsConnected(false);
@@ -432,7 +407,11 @@ export default function App() {
         await invoke('init_db');
         const records = await invoke('get_recent_telemetry');
         if (!Array.isArray(records)) return;
-        const latestId = Math.max(0, ...records.map((record) => Number(record.id) || 0));
+
+        const latestId = Math.max(
+          0,
+          ...records.map((record) => Number(record.id) || 0)
+        );
 
         if (sessionStartId.current === null) {
           const savedId = sessionStorage.getItem(RECENT_SESSION_START_ID_KEY);
@@ -442,22 +421,24 @@ export default function App() {
           sessionStorage.setItem(RECENT_SESSION_START_ID_KEY, String(sessionStartId.current));
         }
 
-        // Keep only new rows from this run, not the pre-existing database history.
-        // Don't replace cached rows with an empty response during a transient query.
-        const newRows = records.filter((record) => Number(record.id) > sessionStartId.current);
-        if (newRows.length > 0) {
-          setTelemetryData((previous) => {
-            const byId = new Map(previous.map((row) => [Number(row.id), row]));
-            newRows.forEach((row) => byId.set(Number(row.id), row));
-            return Array.from(byId.values()).sort((a, b) => Number(b.id) - Number(a.id));
-          });
-        }
+        setTelemetryData((previous) => {
+          // Check the baseline when React applies the update. An older poll
+          // must not append database rows after a file has been imported.
+          const newRows = records.filter(
+            (record) => Number(record.id) > sessionStartId.current
+          );
+          if (newRows.length === 0) return previous;
+
+          const byId = new Map(previous.map((row) => [Number(row.id), row]));
+          newRows.forEach((row) => byId.set(Number(row.id), row));
+          return Array.from(byId.values()).sort((a, b) => Number(b.id) - Number(a.id));
+        });
       } catch (error) {
         console.error('Failed to load telemetry from Rust Backend:', error);
       }
     }
+
     loadTelemetry();
-    // Pick up records that the Rust backend saves during this app session.
     const refreshInterval = setInterval(loadTelemetry, 10000);
     return () => clearInterval(refreshInterval);
   }, []);
@@ -475,7 +456,6 @@ export default function App() {
 
   return (
     <div className="dashboard-layout">
-      {/* Collapsible Sidebar */}
       <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
         <div>
           <div className="brand-header">
@@ -488,12 +468,20 @@ export default function App() {
                     <div className="brand-subtitle">SOIL MONITORING</div>
                   </div>
                 </div>
-                <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(true)} title="Collapse Sidebar">
+                <button
+                  className="sidebar-toggle-btn"
+                  onClick={() => setIsCollapsed(true)}
+                  title="Collapse Sidebar"
+                >
                   <ChevronLeft size={18} />
                 </button>
               </>
             ) : (
-              <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(false)} title="Expand Sidebar">
+              <button
+                className="sidebar-toggle-btn"
+                onClick={() => setIsCollapsed(false)}
+                title="Expand Sidebar"
+              >
                 <ChevronRight size={20} />
               </button>
             )}
@@ -523,7 +511,6 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Main Content Area */}
       <main className="main-content">
         {activeTab === 'Field Map' ? (
           <FieldMapView />
@@ -540,22 +527,32 @@ export default function App() {
                 <h1>Live Monitoring Board</h1>
               </div>
 
-              {/* Import/export operate on SQLite, not the session-only recent table. */}
               <TelemetrySyncBar
-                onImportSuccess={async () => {
-                  // Imported rows belong to SQLite history, not this live session.
-                  // Preserve existing recent rows, but skip all IDs just imported.
-                  try {
-                    const records = await invoke('get_recent_telemetry');
-                    if (!Array.isArray(records)) return;
-                    const latestId = Math.max(0, ...records.map((record) => Number(record.id) || 0));
-                    sessionStartId.current = Math.max(sessionStartId.current ?? 0, latestId);
-                    sessionStorage.setItem(RECENT_SESSION_START_ID_KEY, String(sessionStartId.current));
-                  } catch (error) {
-                    console.error('Failed to update the recent-session checkpoint after import:', error);
+                recentSamples={telemetryData}
+                onImportSuccess={async (importedRows) => {
+                  if (!Array.isArray(importedRows)) {
+                    throw new Error('The imported file did not return a list of samples.');
                   }
+
+                  // Establish the current maximum ID so later polls pick up
+                  // new readings without pulling older database rows into view.
+                  const recentDbRows = await invoke('get_recent_telemetry');
+                  if (!Array.isArray(recentDbRows)) {
+                    throw new Error('Could not verify the latest database record.');
+                  }
+
+                  const latestId = Math.max(
+                    sessionStartId.current ?? 0,
+                    ...recentDbRows.map((record) => Number(record.id) || 0)
+                  );
+                  sessionStartId.current = latestId;
+                  sessionStorage.setItem(RECENT_SESSION_START_ID_KEY, String(latestId));
+
+                  clearHistoricalSelection();
+                  setTelemetryData(importedRows);
                 }}
               />
+
               <div className="status-badges">
                 <div className="badge">
                   <span>Plot:</span>
@@ -585,17 +582,23 @@ export default function App() {
                   </span>
                 </div>
                 <div className="badge">
-                  {soilOk ? <CheckCircle2 size={14} color="#1F5132" /> : <AlertTriangle size={14} color="#B45309" />}
+                  {soilOk ? (
+                    <CheckCircle2 size={14} color="#1F5132" />
+                  ) : (
+                    <AlertTriangle size={14} color="#B45309" />
+                  )}
                   <span>{liveData ? (soilOk ? 'Probe OK' : 'Probe Not Responding') : 'Probe --'}</span>
                 </div>
               </div>
             </header>
 
-            {/* Dashboard Telemetry Cards */}
             <section className="kpi-row">
               <div className="kpi-card">
                 <div className="kpi-header">
-                  <div className="kpi-icon-wrap" style={{ borderColor: '#1F5132', color: '#1F5132' }}>
+                  <div
+                    className="kpi-icon-wrap"
+                    style={{ borderColor: '#1F5132', color: '#1F5132' }}
+                  >
                     <Droplets size={18} />
                   </div>
                   <span className="kpi-title">Soil Moisture</span>
@@ -608,7 +611,10 @@ export default function App() {
 
               <div className="kpi-card">
                 <div className="kpi-header">
-                  <div className="kpi-icon-wrap" style={{ borderColor: '#8A5A35', color: '#8A5A35' }}>
+                  <div
+                    className="kpi-icon-wrap"
+                    style={{ borderColor: '#8A5A35', color: '#8A5A35' }}
+                  >
                     <span style={{ fontSize: '0.75rem', fontWeight: 800 }}>pH</span>
                   </div>
                   <span className="kpi-title">Soil pH</span>
@@ -621,13 +627,17 @@ export default function App() {
 
               <div className="kpi-card">
                 <div className="kpi-header">
-                  <div className="kpi-icon-wrap" style={{ borderColor: '#5C3A24', color: '#5C3A24' }}>
+                  <div
+                    className="kpi-icon-wrap"
+                    style={{ borderColor: '#5C3A24', color: '#5C3A24' }}
+                  >
                     <span style={{ fontSize: '0.7rem', fontWeight: 800 }}>EC</span>
                   </div>
                   <span className="kpi-title">Conductivity (EC)</span>
                 </div>
                 <div className="kpi-value">
-                  {soilOk ? liveData.ec : '--'} <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>uS/cm</span>
+                  {soilOk ? liveData.ec : '--'}{' '}
+                  <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>uS/cm</span>
                 </div>
                 <div className="kpi-status">
                   <CheckCircle2 size={13} /> {soilOk ? 'Within range' : 'No valid reading'}
@@ -636,13 +646,18 @@ export default function App() {
 
               <div className="kpi-card">
                 <div className="kpi-header">
-                  <div className="kpi-icon-wrap" style={{ borderColor: '#D99A2B', color: '#D99A2B' }}>
+                  <div
+                    className="kpi-icon-wrap"
+                    style={{ borderColor: '#D99A2B', color: '#D99A2B' }}
+                  >
                     <Sprout size={18} />
                   </div>
                   <span className="kpi-title">NPK Ratio</span>
                 </div>
                 <div className="kpi-value">
-                  {soilOk ? `${liveData.nitrogen} / ${liveData.phosphorus} / ${liveData.potassium}` : '-- / -- / --'}
+                  {soilOk
+                    ? `${liveData.nitrogen} / ${liveData.phosphorus} / ${liveData.potassium}`
+                    : '-- / -- / --'}
                   <span style={{ fontSize: '0.75rem', fontWeight: 500 }}> mg/kg</span>
                 </div>
                 <div className="kpi-status">
@@ -651,7 +666,6 @@ export default function App() {
               </div>
             </section>
 
-            {/* Dashboard Workspace */}
             <section className="workspace-grid">
               <div className="card map-card">
                 <div className="card-header">
@@ -679,10 +693,18 @@ export default function App() {
                   </div>
                 </div>
                 <HeatmapMap
-                  center={selectedHistoricalPos || (hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos || [14.6095, 120.9890])}
+                  center={
+                    selectedHistoricalPos ||
+                    (hasGpsFix
+                      ? [liveData.lat, liveData.lng]
+                      : latestDbPos || [14.6095, 120.9890])
+                  }
                   zoom={18}
                   heatPoints={displayedHeatPoints}
-                  roverPos={selectedHistoricalPos || (hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos)}
+                  roverPos={
+                    selectedHistoricalPos ||
+                    (hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos)
+                  }
                   focusPoints={selectedHistoricalPositions}
                   labeledPoints={historicalMapMarkers}
                   gradient={activeLayerConfig.gradient}
@@ -741,10 +763,16 @@ export default function App() {
                     )}
                   </div>
                 </div>
+
                 <div style={{ padding: '12px', fontSize: '0.8rem', overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                     <thead>
-                      <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
+                      <tr
+                        style={{
+                          color: 'var(--text-muted)',
+                          borderBottom: '1px solid var(--card-border)'
+                        }}
+                      >
                         <th aria-label="Select record" style={{ padding: '6px 8px', width: '32px' }}></th>
                         <th style={{ padding: '6px 8px', width: '58px' }}>ID</th>
                         <th style={{ padding: '6px 8px' }}>Time</th>
@@ -758,81 +786,94 @@ export default function App() {
                     <tbody>
                       {telemetryData.length === 0 ? (
                         <tr>
-                          <td colSpan={8} style={{ padding: '8px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                          <td
+                            colSpan={8}
+                            style={{
+                              padding: '8px',
+                              textAlign: 'center',
+                              color: 'var(--text-muted)'
+                            }}
+                          >
                             No telemetry records found.
                           </td>
                         </tr>
                       ) : (
                         telemetryData.map((row) => {
                           const hasSavedLocation = hasValidSavedLocation(row);
-                          const selectedIndex = selectedHistoricalRecords.findIndex((record) => record.id === row.id);
+                          const selectedIndex = selectedHistoricalRecords.findIndex(
+                            (record) => record.id === row.id
+                          );
                           const isSelected = selectedIndex >= 0;
                           const mapId = isSelected ? selectedIndex + 1 : null;
 
                           return (
-                          <tr
-                            key={row.id}
-                            className={`historical-sample-row${isSelected ? ' selected' : ''}${!hasSavedLocation ? ' unavailable' : ''}`}
-                            onClick={() => selectHistoricalGroup(row)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                selectHistoricalGroup(row);
+                            <tr
+                              key={row.id}
+                              className={`historical-sample-row${isSelected ? ' selected' : ''}${!hasSavedLocation ? ' unavailable' : ''}`}
+                              onClick={() => selectHistoricalGroup(row)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault();
+                                  selectHistoricalGroup(row);
+                                }
+                              }}
+                              tabIndex={hasSavedLocation ? 0 : -1}
+                              aria-selected={isSelected}
+                              title={
+                                !hasSavedLocation
+                                  ? 'This record has no saved GPS fix'
+                                  : 'Use this record as the anchor for an automatic historical group'
                               }
-                            }}
-                            tabIndex={hasSavedLocation ? 0 : -1}
-                            aria-selected={isSelected}
-                            title={
-                              !hasSavedLocation
-                                ? 'This record has no saved GPS fix'
-                                : 'Use this record as the anchor for an automatic historical group'
-                            }
-                            style={{ borderBottom: '1px solid #f1f5f9' }}
-                          >
-                            <td style={{ padding: '8px' }}>
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                disabled={!hasSavedLocation}
-                                onChange={() => selectHistoricalGroup(row)}
-                                onClick={(event) => event.stopPropagation()}
-                                aria-label={`Select sample from ${row.timestamp}`}
-                              />
-                            </td>
-                            <td style={{ padding: '8px' }}>
-                              {mapId !== null && (
-                                <span
-                                  title={mapId === 1 ? 'Anchor sample' : `Related sample ${mapId}`}
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '24px',
-                                    height: '24px',
-                                    borderRadius: '50%',
-                                    background: mapId === 1 ? 'var(--accent-gold)' : 'var(--primary-green)',
-                                    color: '#fff',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 800
-                                  }}
-                                >
-                                  {mapId}
-                                </span>
-                              )}
-                            </td>
-                            <td style={{ padding: '8px' }}>{row.timestamp}</td>
-                            <td style={{ padding: '8px' }}>
-                              {row.latitude !== 0 || row.longitude !== 0
-                                ? `${row.latitude.toFixed(5)}, ${row.longitude.toFixed(5)}`
-                                : 'No fix'}
-                            </td>
-                            <td style={{ padding: '8px' }}>{row.ph}</td>
-                            <td style={{ padding: '8px' }}>{row.moisture}%</td>
-                            <td style={{ padding: '8px' }}>{row.ec} uS/cm</td>
-                            <td style={{ padding: '8px' }}>
-                              {row.nitrogen ?? '--'} / {row.phosphorus ?? '--'} / {row.potassium ?? '--'}
-                            </td>
-                          </tr>
+                              style={{ borderBottom: '1px solid #f1f5f9' }}
+                            >
+                              <td style={{ padding: '8px' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  disabled={!hasSavedLocation}
+                                  onChange={() => selectHistoricalGroup(row)}
+                                  onClick={(event) => event.stopPropagation()}
+                                  aria-label={`Select sample from ${row.timestamp}`}
+                                />
+                              </td>
+                              <td style={{ padding: '8px' }}>
+                                {mapId !== null && (
+                                  <span
+                                    title={mapId === 1 ? 'Anchor sample' : `Related sample ${mapId}`}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      width: '24px',
+                                      height: '24px',
+                                      borderRadius: '50%',
+                                      background: mapId === 1
+                                        ? 'var(--accent-gold)'
+                                        : 'var(--primary-green)',
+                                      color: '#fff',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 800
+                                    }}
+                                  >
+                                    {mapId}
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ padding: '8px' }}>
+                                {String(row.timestamp ?? '').match(/\b\d{1,2}:\d{2}:\d{2}\b/)?.[0] ?? '--'}
+                              </td>
+                              <td style={{ padding: '8px' }}>
+                                {row.latitude !== 0 || row.longitude !== 0
+                                  ? `${row.latitude.toFixed(5)}, ${row.longitude.toFixed(5)}`
+                                  : 'No fix'}
+                              </td>
+                              <td style={{ padding: '8px' }}>{row.ph}</td>
+                              <td style={{ padding: '8px' }}>{row.moisture}%</td>
+                              <td style={{ padding: '8px' }}>{row.ec} uS/cm</td>
+                              <td style={{ padding: '8px' }}>
+                                {row.nitrogen ?? '--'} / {row.phosphorus ?? '--'} / {row.potassium ?? '--'}
+                              </td>
+                            </tr>
                           );
                         })
                       )}
@@ -846,7 +887,13 @@ export default function App() {
                   <span className="card-title">Crop Suitability</span>
                 </div>
                 <div style={{ padding: '16px', fontSize: '0.85rem' }}>
-                  <div style={{ fontWeight: 700, color: 'var(--primary-green)', marginBottom: '4px' }}>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      color: 'var(--primary-green)',
+                      marginBottom: '4px'
+                    }}
+                  >
                     {cropSuitability
                       ? cropSuitability.recommendedCrops.length > 0
                         ? `Recommended: ${cropSuitability.recommendedCrops.join(' & ')}`
