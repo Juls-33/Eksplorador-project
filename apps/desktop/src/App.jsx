@@ -129,13 +129,16 @@ const LAYER_CONFIG = {
   }
 };
 
-function TelemetrySyncBar({ onImportSuccess }) {
+function TelemetrySyncBar({ onImportSuccess, hasRecentSamples }) {
   const fileInputRef = useRef(null);
 
   const handleExport = async () => {
+    if (!hasRecentSamples) return;
+
     try {
       const result = await exportTelemetryPackage();
-      alert(`Export Successful!\nSaved to project folder:\n${result.path}`);
+      if (result.cancelled) return;
+      alert(`Export Successful!\nSaved to:\n${result.path}`);
     } catch (err) {
       alert(`Export Failed: ${err.message || err}`);
     }
@@ -145,9 +148,13 @@ function TelemetrySyncBar({ onImportSuccess }) {
     try {
       const result = await importTelemetryPackage();
       if (result.cancelled) return;
-      
-      if (onImportSuccess) await onImportSuccess();
-      alert(`Import Successful!\n${result.count} telemetry records imported into eksplorador.db.`);
+
+      try {
+        if (onImportSuccess) await onImportSuccess(result.count);
+        alert(`Import Successful!\n${result.count} telemetry records imported into eksplorador.db.`);
+      } catch (refreshError) {
+        alert(`Imported ${result.count} telemetry records into eksplorador.db, but the recent table could not refresh: ${refreshError.message || refreshError}`);
+      }
     } catch (err) {
       alert(`Import Failed: ${err.message || err}`);
     }
@@ -163,7 +170,7 @@ function TelemetrySyncBar({ onImportSuccess }) {
         const content = event.target?.result;
         if (typeof content === 'string') {
           const result = await importTelemetryPackage(content);
-          if (onImportSuccess) await onImportSuccess();
+          if (onImportSuccess) await onImportSuccess(result.count);
           alert(`Import Successful!\n${result.count} telemetry records merged into SQLite database.`);
         }
       } catch (err) {
@@ -182,7 +189,17 @@ function TelemetrySyncBar({ onImportSuccess }) {
         type="button"
         className="badge"
         onClick={handleExport}
-        style={{ cursor: 'pointer', background: 'var(--primary-green)', color: '#fff', display: 'flex', gap: '6px', padding: '6px 12px' }}
+        disabled={!hasRecentSamples}
+        title={hasRecentSamples ? 'Export saved telemetry data' : 'No recent samples to export'}
+        style={{
+          cursor: hasRecentSamples ? 'pointer' : 'not-allowed',
+          opacity: hasRecentSamples ? 1 : 0.55,
+          background: 'var(--primary-green)',
+          color: '#fff',
+          display: 'flex',
+          gap: '6px',
+          padding: '6px 12px'
+        }}
       >
         <Upload size={14} />
         <span>Export Data</span>
@@ -192,7 +209,15 @@ function TelemetrySyncBar({ onImportSuccess }) {
         type="button"
         className="badge"
         onClick={handleImport}
-        style={{ cursor: 'pointer', background: '#fff', color: 'var(--text-dark)', border: '1px solid var(--card-border)', display: 'flex', gap: '6px', padding: '6px 12px' }}
+        style={{
+          cursor: 'pointer',
+          background: '#fff',
+          color: 'var(--text-dark)',
+          border: '1px solid var(--card-border)',
+          display: 'flex',
+          gap: '6px',
+          padding: '6px 12px'
+        }}
       >
         <Download size={14} />
         <span>Import Data</span>
@@ -540,20 +565,21 @@ export default function App() {
                 <h1>Live Monitoring Board</h1>
               </div>
 
-              {/* Import/export operate on SQLite, not the session-only recent table. */}
+              {/* Imported records are shown in this session without changing SQLite storage. */}
               <TelemetrySyncBar
-                onImportSuccess={async () => {
-                  // Imported rows belong to SQLite history, not this live session.
-                  // Preserve existing recent rows, but skip all IDs just imported.
-                  try {
-                    const records = await invoke('get_recent_telemetry');
-                    if (!Array.isArray(records)) return;
-                    const latestId = Math.max(0, ...records.map((record) => Number(record.id) || 0));
-                    sessionStartId.current = Math.max(sessionStartId.current ?? 0, latestId);
-                    sessionStorage.setItem(RECENT_SESSION_START_ID_KEY, String(sessionStartId.current));
-                  } catch (error) {
-                    console.error('Failed to update the recent-session checkpoint after import:', error);
+                hasRecentSamples={telemetryData.length > 0}
+                onImportSuccess={async (importedCount) => {
+                  const records = await invoke('get_recent_telemetry');
+                  if (!Array.isArray(records) || (importedCount > 0 && records.length === 0)) {
+                    throw new Error('No imported records were returned by the database query.');
                   }
+
+                  // Explicit Import displays the database's recent rows for this
+                  // session. A normal launch still starts with an empty table.
+                  setTelemetryData(records);
+                  const latestId = Math.max(0, ...records.map((record) => Number(record.id) || 0));
+                  sessionStartId.current = Math.max(sessionStartId.current ?? 0, latestId);
+                  sessionStorage.setItem(RECENT_SESSION_START_ID_KEY, String(sessionStartId.current));
                 }}
               />
               <div className="status-badges">
@@ -770,69 +796,71 @@ export default function App() {
                           const mapId = isSelected ? selectedIndex + 1 : null;
 
                           return (
-                          <tr
-                            key={row.id}
-                            className={`historical-sample-row${isSelected ? ' selected' : ''}${!hasSavedLocation ? ' unavailable' : ''}`}
-                            onClick={() => selectHistoricalGroup(row)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                selectHistoricalGroup(row);
+                            <tr
+                              key={row.id}
+                              className={`historical-sample-row${isSelected ? ' selected' : ''}${!hasSavedLocation ? ' unavailable' : ''}`}
+                              onClick={() => selectHistoricalGroup(row)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault();
+                                  selectHistoricalGroup(row);
+                                }
+                              }}
+                              tabIndex={hasSavedLocation ? 0 : -1}
+                              aria-selected={isSelected}
+                              title={
+                                !hasSavedLocation
+                                  ? 'This record has no saved GPS fix'
+                                  : 'Use this record as the anchor for an automatic historical group'
                               }
-                            }}
-                            tabIndex={hasSavedLocation ? 0 : -1}
-                            aria-selected={isSelected}
-                            title={
-                              !hasSavedLocation
-                                ? 'This record has no saved GPS fix'
-                                : 'Use this record as the anchor for an automatic historical group'
-                            }
-                            style={{ borderBottom: '1px solid #f1f5f9' }}
-                          >
-                            <td style={{ padding: '8px' }}>
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                disabled={!hasSavedLocation}
-                                onChange={() => selectHistoricalGroup(row)}
-                                onClick={(event) => event.stopPropagation()}
-                                aria-label={`Select sample from ${row.timestamp}`}
-                              />
+                              style={{ borderBottom: '1px solid #f1f5f9' }}
+                            >
+                              <td style={{ padding: '8px' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  disabled={!hasSavedLocation}
+                                  onChange={() => selectHistoricalGroup(row)}
+                                  onClick={(event) => event.stopPropagation()}
+                                  aria-label={`Select sample from ${row.timestamp}`}
+                                />
+                              </td>
+                              <td style={{ padding: '8px' }}>
+                                {mapId !== null && (
+                                  <span
+                                    title={mapId === 1 ? 'Anchor sample' : `Related sample ${mapId}`}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      width: '24px',
+                                      height: '24px',
+                                      borderRadius: '50%',
+                                      background: mapId === 1 ? 'var(--accent-gold)' : 'var(--primary-green)',
+                                      color: '#fff',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 800
+                                    }}
+                                  >
+                                    {mapId}
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ padding: '8px' }}>
+                              {String(row.timestamp ?? '').match(/\b\d{1,2}:\d{2}:\d{2}\b/)?.[0] ?? '--'}
                             </td>
-                            <td style={{ padding: '8px' }}>
-                              {mapId !== null && (
-                                <span
-                                  title={mapId === 1 ? 'Anchor sample' : `Related sample ${mapId}`}
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '24px',
-                                    height: '24px',
-                                    borderRadius: '50%',
-                                    background: mapId === 1 ? 'var(--accent-gold)' : 'var(--primary-green)',
-                                    color: '#fff',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 800
-                                  }}
-                                >
-                                  {mapId}
-                                </span>
-                              )}
-                            </td>
-                            <td style={{ padding: '8px' }}>{row.timestamp}</td>
-                            <td style={{ padding: '8px' }}>
-                              {row.latitude !== 0 || row.longitude !== 0
-                                ? `${row.latitude.toFixed(5)}, ${row.longitude.toFixed(5)}`
-                                : 'No fix'}
-                            </td>
-                            <td style={{ padding: '8px' }}>{row.ph}</td>
-                            <td style={{ padding: '8px' }}>{row.moisture}%</td>
-                            <td style={{ padding: '8px' }}>{row.ec} uS/cm</td>
-                            <td style={{ padding: '8px' }}>
-                              {row.nitrogen ?? '--'} / {row.phosphorus ?? '--'} / {row.potassium ?? '--'}
-                            </td>
-                          </tr>
+                              <td style={{ padding: '8px' }}>
+                                {row.latitude !== 0 || row.longitude !== 0
+                                  ? `${row.latitude.toFixed(5)}, ${row.longitude.toFixed(5)}`
+                                  : 'No fix'}
+                              </td>
+                              <td style={{ padding: '8px' }}>{row.ph}</td>
+                              <td style={{ padding: '8px' }}>{row.moisture}%</td>
+                              <td style={{ padding: '8px' }}>{row.ec} uS/cm</td>
+                              <td style={{ padding: '8px' }}>
+                                {row.nitrogen ?? '--'} / {row.phosphorus ?? '--'} / {row.potassium ?? '--'}
+                              </td>
+                            </tr>
                           );
                         })
                       )}

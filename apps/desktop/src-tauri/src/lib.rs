@@ -25,6 +25,7 @@ pub struct TelemetryRow {
     pub phosphorus: Option<f64>,
     pub potassium: Option<f64>,
 }
+
 #[derive(Deserialize)]
 struct TelemetryImportRecord {
     id: Option<i64>,
@@ -59,23 +60,23 @@ fn import_telemetry_json(file_content: String) -> Result<usize, String> {
             Err(_) => continue,
         };
 
-       conn.execute(
-    "INSERT INTO telemetry (
-        timestamp, latitude, longitude, ph, moisture, ec,
-        nitrogen, phosphorus, potassium
-    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-    params![
-        rec.timestamp,
-        rec.latitude.unwrap_or(0.0),
-        rec.longitude.unwrap_or(0.0),
-        rec.ph,
-        rec.moisture,
-        rec.ec,
-        rec.nitrogen,
-        rec.phosphorus,
-        rec.potassium,
-    ],
-).map_err(|e| format!("Failed to insert record: {}", e))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO telemetry (
+                id, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                rec.id,
+                rec.timestamp,
+                rec.latitude.unwrap_or(0.0),
+                rec.longitude.unwrap_or(0.0),
+                rec.ph,
+                rec.moisture,
+                rec.ec,
+                rec.nitrogen,
+                rec.phosphorus,
+                rec.potassium,
+            ],
+        ).map_err(|e| format!("Failed to insert record: {}", e))?;
 
         count += 1;
     }
@@ -83,12 +84,14 @@ fn import_telemetry_json(file_content: String) -> Result<usize, String> {
     Ok(count)
 }
 
-
 #[tauri::command]
-fn export_telemetry_to_project() -> Result<String, String> {
+fn export_telemetry_to_project(file_path: String, overwrite: bool) -> Result<String, String> {
     let conn = get_connection().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium FROM telemetry")
+        .prepare(
+            "SELECT id, timestamp, latitude, longitude, ph, moisture, ec, \
+             nitrogen, phosphorus, potassium FROM telemetry"
+        )
         .map_err(|e| e.to_string())?;
 
     let records_iter = stmt
@@ -109,10 +112,8 @@ fn export_telemetry_to_project() -> Result<String, String> {
         .map_err(|e| e.to_string())?;
 
     let mut records = Vec::new();
-    for rec in records_iter {
-        if let Ok(r) = rec {
-            records.push(r);
-        }
+    for record in records_iter {
+        records.push(record.map_err(|e| e.to_string())?);
     }
 
     let timestamp_secs = SystemTime::now()
@@ -127,17 +128,41 @@ fn export_telemetry_to_project() -> Result<String, String> {
         "telemetry": records
     });
 
-    let target_dir = PathBuf::from("../data/exports");
-    if !target_dir.exists() {
-        fs::create_dir_all(&target_dir).map_err(|e| format!("Failed to create exports directory: {}", e))?;
+    let mut target_path = PathBuf::from(file_path);
+    if !target_path.is_absolute() {
+        return Err("Please choose a full file path in Save As.".to_string());
+    }
+    if !target_path
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .ends_with(".json")
+    {
+        target_path.as_mut_os_string().push(".json");
     }
 
-    let file_path = target_dir.join(format!("telemetry_export_{}.json", timestamp_secs));
+    let json_string =
+        serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
 
-    let json_string = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-    fs::write(&file_path, json_string).map_err(|e| format!("Failed to write export file: {}", e))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    if overwrite {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
 
-    Ok(file_path.to_string_lossy().into_owned())
+    let mut output = options.open(&target_path).map_err(|e| {
+        if e.kind() == ErrorKind::AlreadyExists {
+            "EXPORT_FILE_EXISTS".to_string()
+        } else {
+            format!("Failed to create export file: {}", e)
+        }
+    })?;
+
+    std::io::Write::write_all(&mut output, json_string.as_bytes())
+        .map_err(|e| format!("Failed to write export file: {}", e))?;
+
+    Ok(target_path.to_string_lossy().into_owned())
 }
 
 fn get_connection() -> Result<Connection> {
