@@ -1,0 +1,55 @@
+{
+  "app_version": "1.0",
+  "exported_at": 1790352358,
+  "record_count": 4,
+  "telemetry": [
+    {
+      "ec": 0.0,
+      "id": 609,
+      "latitude": 14.607199,
+      "longitude": 120.988877,
+      "moisture": 11.18,
+      "nitrogen": 0.0,
+      "ph": 7.622,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:05:40"
+    },
+    {
+      "ec": 0.0,
+      "id": 608,
+      "latitude": 14.607238,
+      "longitude": 120.988795,
+      "moisture": 10.98,
+      "nitrogen": 0.0,
+      "ph": 7.593999999999999,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:05:30"
+    },
+    {
+      "ec": 0.0,
+      "id": 607,
+      "latitude": 14.607202,
+      "longitude": 120.988727,
+      "moisture": 11.000000000000002,
+      "nitrogen": 0.0,
+      "ph": 7.55,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:05:20"
+    },
+    {
+      "ec": 0.0,
+      "id": 606,
+      "latitude": 14.607218,
+      "longitude": 120.988855,
+      "moisture": 11.7,
+      "nitrogen": 0.0,
+      "ph": 7.17,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:05:10"
+    }
+  ]
+}

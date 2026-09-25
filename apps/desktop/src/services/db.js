@@ -70,11 +70,11 @@ export async function fetchMissionSamples(missionId) {
   }
 }
 
-/**
- * Export all saved telemetry records as a JSON package.
- * The operator chooses the filename and destination in the Save As dialog.
- */
-export async function exportTelemetryPackage() {
+export async function exportTelemetryPackage(records) {
+  if (!Array.isArray(records) || records.length === 0) {
+    throw new Error('No recent samples to export.');
+  }
+
   try {
     const suggestedName =
       'telemetry_export_' +
@@ -89,8 +89,8 @@ export async function exportTelemetryPackage() {
 
     if (!filePath) return { success: false, cancelled: true };
 
-    const exportToPath = overwrite =>
-      invoke('export_telemetry_to_project', { filePath, overwrite });
+    const exportToPath = (overwrite) =>
+      invoke('export_telemetry_to_project', { filePath, overwrite, records });
 
     try {
       const path = await exportToPath(false);
@@ -118,9 +118,6 @@ export async function exportTelemetryPackage() {
   }
 }
 
-/**
- * Open an exported JSON package and import it into SQLite.
- */
 export async function importTelemetryPackage() {
   try {
     const selectedFile = await open({
@@ -136,9 +133,26 @@ export async function importTelemetryPackage() {
 
     const filePath = Array.isArray(selectedFile) ? selectedFile[0] : selectedFile;
     const fileContent = await readTextFile(filePath);
+    const parsed = JSON.parse(fileContent);
+
+    if (!Array.isArray(parsed?.telemetry)) {
+      throw new Error('The selected JSON file has no telemetry array.');
+    }
+
     const insertedCount = await invoke('import_telemetry_json', { fileContent });
 
-    return { success: true, count: insertedCount, cancelled: false };
+    if (insertedCount !== parsed.telemetry.length) {
+      throw new Error(
+        `Only ${insertedCount} of ${parsed.telemetry.length} records were imported. The recent table was not updated.`
+      );
+    }
+
+    return {
+      success: true,
+      count: insertedCount,
+      records: parsed.telemetry,
+      cancelled: false
+    };
   } catch (error) {
     console.error('Failed to import telemetry:', error);
     throw error;

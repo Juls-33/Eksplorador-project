@@ -12,7 +12,7 @@ use std::fs;
 use std::path::PathBuf;
 // use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct TelemetryRow {
     pub id: i64,
     pub timestamp: String,
@@ -85,35 +85,13 @@ fn import_telemetry_json(file_content: String) -> Result<usize, String> {
 }
 
 #[tauri::command]
-fn export_telemetry_to_project(file_path: String, overwrite: bool) -> Result<String, String> {
-    let conn = get_connection().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, timestamp, latitude, longitude, ph, moisture, ec, \
-             nitrogen, phosphorus, potassium FROM telemetry"
-        )
-        .map_err(|e| e.to_string())?;
-
-    let records_iter = stmt
-        .query_map([], |row| {
-            Ok(serde_json::json!({
-                "id": row.get::<_, Option<i64>>(0)?,
-                "timestamp": row.get::<_, Option<String>>(1)?,
-                "latitude": row.get::<_, Option<f64>>(2)?,
-                "longitude": row.get::<_, Option<f64>>(3)?,
-                "ph": row.get::<_, Option<f64>>(4)?,
-                "moisture": row.get::<_, Option<f64>>(5)?,
-                "ec": row.get::<_, Option<f64>>(6)?,
-                "nitrogen": row.get::<_, Option<f64>>(7)?,
-                "phosphorus": row.get::<_, Option<f64>>(8)?,
-                "potassium": row.get::<_, Option<f64>>(9)?,
-            }))
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut records = Vec::new();
-    for record in records_iter {
-        records.push(record.map_err(|e| e.to_string())?);
+fn export_telemetry_to_project(
+    file_path: String,
+    overwrite: bool,
+    records: Vec<TelemetryRow>,
+) -> Result<String, String> {
+    if records.is_empty() {
+        return Err("No recent samples to export.".to_string());
     }
 
     let timestamp_secs = SystemTime::now()
@@ -181,11 +159,6 @@ fn get_connection() -> Result<Connection> {
     Ok(conn)
 }
 
-// One validated live reading, held in the buffer until it's time to
-// average and insert. Only readings with a valid soil probe response and
-// a real GPS fix are buffered — this is the "computed, not raw" filter
-// discussed with the team, so the DB doesn't fill up with every single
-// transmission (including invalid/no-fix ones).
 #[derive(Clone)]
 struct BufferedReading {
     latitude: f64,
@@ -198,15 +171,8 @@ struct BufferedReading {
     potassium: f64,
 }
 
-// How long to accumulate readings before averaging and writing one row,
-// and a count-based cap so a burst of readings doesn't wait the full
-// duration before committing.
 const INSERT_WINDOW: Duration = Duration::from_secs(30);
 const INSERT_MAX_BUFFER: usize = 5;
-
-// Formats the current wall-clock time as HH:MM:SS, matching the existing
-// timestamp column format, without pulling in a full date/time crate.
-// Philippines is UTC+8 with no daylight saving — fixed offset is safe here.
 const PH_UTC_OFFSET_SECS: u64 = 8 * 3600;
 
 fn current_time_hms() -> String {
@@ -224,11 +190,6 @@ fn current_time_hms() -> String {
     )
 }
 
-// Averages every reading in the buffer and inserts one row into the
-// telemetry table. Uses the most recent reading's GPS position rather
-// than averaging coordinates, since averaging lat/lng across a curved
-// path the rover drove during the window would produce a meaningless
-// midpoint rather than a real location.
 fn flush_buffer_to_db(buffer: &[BufferedReading]) {
     if buffer.is_empty() {
         return;
@@ -280,13 +241,8 @@ fn flush_buffer_to_db(buffer: &[BufferedReading]) {
     }
 }
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn init_db() -> Result<(), String> {
-    // Just ensures the connection opens and migrations run, creating the
-    // telemetry table if it doesn't exist yet. No seed/demo rows are
-    // inserted — the table starts empty and only fills with real readings
-    // once the rover actually reports valid data.
     get_connection().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -324,23 +280,13 @@ fn get_recent_telemetry() -> Result<Vec<TelemetryRow>, String> {
 }
 
 const BAUD_RATE: u32 = 115200;
-
-// Remembers the last port that worked, so a reconnect can try it directly
-// instead of re-scanning every port on the system.
 static LAST_KNOWN_PORT: Mutex<Option<String>> = Mutex::new(None);
 
-// Deasserts DTR and RTS so the board's auto-reset circuit (common on ESP32
-// dev boards) doesn't hold the chip in reset for as long as the port stays
-// open. Arduino's Serial Monitor manages these lines automatically; the
-// serialport crate does not, so we do it ourselves here.
 fn release_reset_lines(port: &mut Box<dyn serialport::SerialPort>) {
     let _ = port.write_data_terminal_ready(false);
     let _ = port.write_request_to_send(false);
 }
 
-// Tries a single port for a few seconds, looking for a line that parses as
-// JSON and contains a "seq" key — this is specific enough to the receiver's
-// payload shape that it won't false-match some other device on the same bus.
 fn probe_port(port_name: &str) -> bool {
     let mut port = match serialport::new(port_name, BAUD_RATE)
         .timeout(Duration::from_millis(500))
@@ -351,8 +297,6 @@ fn probe_port(port_name: &str) -> bool {
     };
 
     release_reset_lines(&mut port);
-    // Give the board a moment to finish booting (if it did reset) before
-    // we start reading — ESP32 boot + LoRa/sensor init can take a second or two.
     thread::sleep(Duration::from_millis(1000));
 
     let mut reader = BufReader::new(port);
@@ -361,7 +305,7 @@ fn probe_port(port_name: &str) -> bool {
     while Instant::now() < deadline {
         let mut line = String::new();
         match reader.read_line(&mut line) {
-            Ok(0) => continue, // no data yet within this read attempt
+            Ok(0) => continue,
             Ok(_) => {
                 let trimmed = line.trim();
                 if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
@@ -377,8 +321,6 @@ fn probe_port(port_name: &str) -> bool {
     false
 }
 
-// Scans all available serial ports and returns the first one that responds
-// with a recognizable JSON payload from the receiver.
 fn scan_all_ports() -> Option<String> {
     let ports = serialport::available_ports().ok()?;
     println!(
@@ -397,9 +339,6 @@ fn scan_all_ports() -> Option<String> {
     None
 }
 
-// Tries the last known-good port first (fast path). Only falls back to a
-// full scan of every port if that one no longer responds — e.g. the
-// receiver was moved to a different USB slot.
 fn find_receiver_port() -> Option<String> {
     let cached = LAST_KNOWN_PORT.lock().unwrap().clone();
 
@@ -457,10 +396,6 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
 
                                 match serde_json::from_str::<Value>(trimmed) {
                                     Ok(json) => {
-                                        // Buffer this reading for DB insertion if it's a
-                                        // genuinely valid, geo-tagged soil reading — same
-                                        // validity filter the frontend uses for its own
-                                        // live display.
                                         let soil_valid =
                                             json.get("soilValid").and_then(|v| v.as_i64()) == Some(1);
                                         let lat = json.get("lat").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -495,13 +430,10 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                                         let _ = app_handle.emit("sensor-data", json);
                                     }
                                     Err(e) => {
-                                        // Not valid JSON — likely a boot message or debug line
                                         println!("[serial] skipped non-JSON line ({})", e);
                                     }
                                 }
 
-                                // Flush whenever the window elapses or the buffer fills,
-                                // whichever comes first.
                                 if !reading_buffer.is_empty()
                                     && (last_flush.elapsed() >= INSERT_WINDOW
                                         || reading_buffer.len() >= INSERT_MAX_BUFFER)
@@ -513,9 +445,6 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                             }
                             Err(e) => {
                                 if e.kind() == ErrorKind::TimedOut {
-                                    // Normal — just means no new line arrived within the
-                                    // timeout window (e.g. sender polls every 2s). Keep
-                                    // listening instead of tearing down the connection.
                                     continue;
                                 }
                                 println!("[serial] read error: {}. Reconnecting...", e);
@@ -548,7 +477,12 @@ pub fn run() {
             start_serial_listener(app.handle().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![init_db, get_recent_telemetry, import_telemetry_json, export_telemetry_to_project])
+        .invoke_handler(tauri::generate_handler![
+            init_db,
+            get_recent_telemetry,
+            import_telemetry_json,
+            export_telemetry_to_project
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

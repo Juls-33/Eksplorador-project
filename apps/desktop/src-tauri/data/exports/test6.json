@@ -1,0 +1,67 @@
+{
+  "app_version": "1.0",
+  "exported_at": 1790355432,
+  "record_count": 5,
+  "telemetry": [
+    {
+      "ec": 0.0,
+      "id": 618,
+      "latitude": 14.607368,
+      "longitude": 120.989443,
+      "moisture": 20.575000000000003,
+      "nitrogen": 0.0,
+      "ph": 7.0600000000000005,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:56:52"
+    },
+    {
+      "ec": 0.0,
+      "id": 617,
+      "latitude": 14.607338,
+      "longitude": 120.989489,
+      "moisture": 20.74,
+      "nitrogen": 0.0,
+      "ph": 7.0200000000000005,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:56:20"
+    },
+    {
+      "ec": 0.0,
+      "id": 616,
+      "latitude": 14.607411,
+      "longitude": 120.989479,
+      "moisture": 22.44,
+      "nitrogen": 0.0,
+      "ph": 7.029999999999999,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:56:10"
+    },
+    {
+      "ec": 0.0,
+      "id": 615,
+      "latitude": 14.607526,
+      "longitude": 120.989486,
+      "moisture": 23.28,
+      "nitrogen": 0.0,
+      "ph": 7.040000000000001,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:56:00"
+    },
+    {
+      "ec": 0.0,
+      "id": 614,
+      "latitude": 14.607396,
+      "longitude": 120.989407,
+      "moisture": 21.74,
+      "nitrogen": 0.0,
+      "ph": 7.056,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:55:50"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "app_version": "1.0",
+  "exported_at": 1790352509,
+  "record_count": 2,
+  "telemetry": [
+    {
+      "ec": 0.0,
+      "id": 612,
+      "latitude": 14.60733,
+      "longitude": 120.988687,
+      "moisture": 11.02,
+      "nitrogen": 0.0,
+      "ph": 7.241999999999999,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:08:16"
+    },
+    {
+      "ec": 0.0,
+      "id": 611,
+      "latitude": 14.607268,
+      "longitude": 120.988798,
+      "moisture": 10.7,
+      "nitrogen": 0.0,
+      "ph": 7.145999999999999,
+      "phosphorus": 0.0,
+      "potassium": 0.0,
+      "timestamp": "00:08:06"
+    }
+  ]
+}
