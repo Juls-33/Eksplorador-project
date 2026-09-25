@@ -175,17 +175,17 @@ export default function ReportsView() {
     );
   }
 
-  if (error || reports.length === 0) {
-    return (
-      <div className="card" style={{ padding: '40px', textAlign: 'center', margin: 'auto', maxWidth: '500px' }}>
-        <AlertCircle size={40} color="#b45309" style={{ marginBottom: '12px' }} />
-        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '6px' }}>No Database Telemetry Available</h3>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-          No recorded field samples were found in SQLite. Save telemetry records to view automatically generated agronomic summaries.
-        </p>
-      </div>
-    );
-  }
+  // if (error || reports.length === 0) {
+  //   return (
+  //     <div className="card" style={{ padding: '40px', textAlign: 'center', margin: 'auto', maxWidth: '500px' }}>
+  //       <AlertCircle size={40} color="#b45309" style={{ marginBottom: '12px' }} />
+  //       <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '6px' }}>No Database Telemetry Available</h3>
+  //       <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+  //         No recorded field samples were found in SQLite. Save telemetry records to view automatically generated agronomic summaries.
+  //       </p>
+  //     </div>
+  //   );
+  // }
 
   return (
     <div className="reports-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
