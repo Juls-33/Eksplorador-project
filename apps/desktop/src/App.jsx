@@ -4,7 +4,6 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   LayoutDashboard,
   Map as MapIcon,
-  FlaskConical,
   ClipboardList,
   Sprout,
   BarChart3,
@@ -23,7 +22,6 @@ import {
 } from 'lucide-react';
 import HeatmapMap from './components/HeatmapMap';
 import FieldMapView from './views/FieldMapView';
-import SamplingView from './views/SamplingView';
 import SoilRecordsView from './views/SoilRecordsView';
 import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
@@ -38,6 +36,17 @@ const HISTORICAL_SELECTION_MAX = 20;
 const HISTORICAL_MATCH_RADIUS_M = 100;
 const HISTORICAL_MATCH_WINDOW_MS = 2 * 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const RECENT_SESSION_START_ID_KEY = 'eksplorador.recentSessionStartId';
+const RECENT_SESSION_ROWS_KEY = 'eksplorador.recentSessionRows';
+
+const readSessionRows = () => {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(RECENT_SESSION_ROWS_KEY) || '[]');
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+};
 
 const parseTelemetryTime = (timestamp) => {
   if (timestamp === null || timestamp === undefined || timestamp === '') return null;
@@ -137,8 +146,8 @@ function TelemetrySyncBar({ onImportSuccess }) {
       const result = await importTelemetryPackage();
       if (result.cancelled) return;
       
+      if (onImportSuccess) await onImportSuccess();
       alert(`Import Successful!\n${result.count} telemetry records imported into eksplorador.db.`);
-      if (onImportSuccess) onImportSuccess();
     } catch (err) {
       alert(`Import Failed: ${err.message || err}`);
     }
@@ -154,8 +163,8 @@ function TelemetrySyncBar({ onImportSuccess }) {
         const content = event.target?.result;
         if (typeof content === 'string') {
           const result = await importTelemetryPackage(content);
+          if (onImportSuccess) await onImportSuccess();
           alert(`Import Successful!\n${result.count} telemetry records merged into SQLite database.`);
-          if (onImportSuccess) onImportSuccess();
         }
       } catch (err) {
         alert(`Import Failed: ${err.message}`);
@@ -204,11 +213,11 @@ export default function App() {
 
   const lastPacketTime = useRef(null);
 
-  // DB-backed telemetry history. Drives the Recent Geo-tagged Samples
-  // table only now — the heatmap itself plots live readings as they
-  // arrive (see rawLiveReadings below), so it updates in real time
-  // instead of waiting on the periodic DB refresh.
-  const [telemetryData, setTelemetryData] = useState([]);
+  // Only records saved during this app session appear in the recent table.
+  // Refreshes restore its rows; closing the Tauri window clears them.
+  // The underlying SQLite telemetry table is never cleared.
+  const [telemetryData, setTelemetryData] = useState(readSessionRows);
+  const sessionStartId = useRef(null);
 
   // Up to twenty table rows can be reviewed together as one historical heatmap.
   // Keeping the complete rows here lets layer changes reuse their saved values.
@@ -357,8 +366,7 @@ export default function App() {
     setAssessedHistoricalRecords([]);
   };
 
-  // Most recent DB record's position, used as a fallback center/marker
-  // before any live GPS fix has come in this session
+  // Most recent session record's position, used before a live GPS fix.
   const latestDbPos =
     telemetryData.length > 0 ? [telemetryData[0].latitude, telemetryData[0].longitude] : null;
 
@@ -411,19 +419,45 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    try {
+      sessionStorage.setItem(RECENT_SESSION_ROWS_KEY, JSON.stringify(telemetryData));
+    } catch (error) {
+      console.warn('Could not cache recent samples for refresh:', error);
+    }
+  }, [telemetryData]);
+
+  useEffect(() => {
     async function loadTelemetry() {
       try {
         await invoke('init_db');
         const records = await invoke('get_recent_telemetry');
-        setTelemetryData(records);
+        if (!Array.isArray(records)) return;
+        const latestId = Math.max(0, ...records.map((record) => Number(record.id) || 0));
+
+        if (sessionStartId.current === null) {
+          const savedId = sessionStorage.getItem(RECENT_SESSION_START_ID_KEY);
+          sessionStartId.current = savedId !== null && Number.isFinite(Number(savedId))
+            ? Number(savedId)
+            : latestId;
+          sessionStorage.setItem(RECENT_SESSION_START_ID_KEY, String(sessionStartId.current));
+        }
+
+        // Keep only new rows from this run, not the pre-existing database history.
+        // Don't replace cached rows with an empty response during a transient query.
+        const newRows = records.filter((record) => Number(record.id) > sessionStartId.current);
+        if (newRows.length > 0) {
+          setTelemetryData((previous) => {
+            const byId = new Map(previous.map((row) => [Number(row.id), row]));
+            newRows.forEach((row) => byId.set(Number(row.id), row));
+            return Array.from(byId.values()).sort((a, b) => Number(b.id) - Number(a.id));
+          });
+        }
       } catch (error) {
         console.error('Failed to load telemetry from Rust Backend:', error);
       }
     }
     loadTelemetry();
-    // Refresh periodically so the heatmap/table pick up new DB rows
-    // as they're inserted (e.g. once averaged-sample inserts are added
-    // on the Rust side)
+    // Pick up records that the Rust backend saves during this app session.
     const refreshInterval = setInterval(loadTelemetry, 10000);
     return () => clearInterval(refreshInterval);
   }, []);
@@ -431,7 +465,6 @@ export default function App() {
   const navItems = [
     { id: 'Dashboard', label: 'Live Monitoring', icon: LayoutDashboard },
     { id: 'Field Map', label: 'Field Map', icon: MapIcon },
-    { id: 'Sampling', label: 'Sampling', icon: FlaskConical },
     { id: 'Soil Records', label: 'Soil Records', icon: ClipboardList },
     { id: 'Crop Assessment', label: 'Crop Assessment', icon: Sprout },
     { id: 'Reports', label: 'Reports', icon: BarChart3 }
@@ -494,8 +527,6 @@ export default function App() {
       <main className="main-content">
         {activeTab === 'Field Map' ? (
           <FieldMapView />
-        ) : activeTab === 'Sampling' ? (
-          <SamplingView />
         ) : activeTab === 'Soil Records' ? (
           <SoilRecordsView />
         ) : activeTab === 'Crop Assessment' ? (
@@ -509,17 +540,21 @@ export default function App() {
                 <h1>Live Monitoring Board</h1>
               </div>
 
-              {/* NEW: Telemetry Sync Actions (Export & Import) */}
-              <TelemetrySyncBar 
+              {/* Import/export operate on SQLite, not the session-only recent table. */}
+              <TelemetrySyncBar
                 onImportSuccess={async () => {
-                  // Re-trigger Rust DB query to update telemetry table state live
+                  // Imported rows belong to SQLite history, not this live session.
+                  // Preserve existing recent rows, but skip all IDs just imported.
                   try {
                     const records = await invoke('get_recent_telemetry');
-                    setTelemetryData(records);
-                  } catch (err) {
-                    console.error('Failed to reload telemetry after import:', err);
+                    if (!Array.isArray(records)) return;
+                    const latestId = Math.max(0, ...records.map((record) => Number(record.id) || 0));
+                    sessionStartId.current = Math.max(sessionStartId.current ?? 0, latestId);
+                    sessionStorage.setItem(RECENT_SESSION_START_ID_KEY, String(sessionStartId.current));
+                  } catch (error) {
+                    console.error('Failed to update the recent-session checkpoint after import:', error);
                   }
-                }} 
+                }}
               />
               <div className="status-badges">
                 <div className="badge">
