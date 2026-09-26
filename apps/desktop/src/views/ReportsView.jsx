@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { getAllTelemetry } from '../services/db';
 import {
   FileText,
   Printer,
@@ -32,7 +32,6 @@ function processTelemetryToReports(records){
   return Object.entries(groupedByMission).map(([missionId,rows], index) => {
     const count = rows.length;
 
-    // FIXED: Derived plotName safely from the first record in the mission group
     const plotName = rows[0]?.plot || `Plot ${index + 1}`;
 
     // Helper math functions
@@ -136,27 +135,24 @@ export default function ReportsView() {
     async function loadDbReports() {
       try {
         setLoading(true);
-        await invoke('init_db');
-        const rawData = await invoke('get_all_telemetry');
-        // Ensure payload is an array regardless of wrapper
-        const telemtryRows = Array.isArray(rawData) ? rawData : (rawData?.rows || rawData?.data || []);
-        console.log('Raw SQLite output from Tauri:', telemtryRows);
+        const telemtryRows = await getAllTelemetry();
+        console.log('Raw SQLite output from db.js:', telemtryRows);
 
         const processed = processTelemetryToReports(telemtryRows);
         setReports(processed);
         if (processed.length > 0) {
-          setSelectedReportId(processed[0].id)
+          setSelectedReportId(processed[0].id);
         }
-    } catch (err) {
-      console.error('Failed to load DB telemetry for reports:', err);
-      setError('Failed to fetch report records from SQLite database.');
-    } finally {
-      setLoading(false);
+      } catch (err) {
+        console.error('Failed to load DB telemetry for reports:', err);
+        setError('Failed to fetch report records from SQLite database.');
+      } finally {
+        setLoading(false);
+      }
     }
-  }
 
-  loadDbReports();
-}, []);
+    loadDbReports();
+  }, []);
 
   const uniquePlots = Array.from(new Set(reports.map((r) => r.plot)));
   const filteredReports = reports.filter(r => plotFilter === 'ALL' || r.plot === plotFilter);
@@ -175,20 +171,37 @@ export default function ReportsView() {
     );
   }
 
-  // if (error || reports.length === 0) {
-  //   return (
-  //     <div className="card" style={{ padding: '40px', textAlign: 'center', margin: 'auto', maxWidth: '500px' }}>
-  //       <AlertCircle size={40} color="#b45309" style={{ marginBottom: '12px' }} />
-  //       <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '6px' }}>No Database Telemetry Available</h3>
-  //       <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-  //         No recorded field samples were found in SQLite. Save telemetry records to view automatically generated agronomic summaries.
-  //       </p>
-  //     </div>
-  //   );
-  // }
-
   return (
     <div className="reports-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
+     
+     <style>{`
+        @media print {
+          body * {
+            visibility: hidden;
+          }
+          .printable-document, .printable-document * {
+            visibility: visible;
+          }
+          .printable-document {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: auto !important;
+            overflow: visible !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            box-shadow: none !important;
+          }
+          @page {
+            size: portrait;
+            margin: 1.5cm;
+          }
+        }
+      `}</style>
+     
+     
       {/* Top Banner & Print Actions */}
       <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
@@ -217,7 +230,7 @@ export default function ReportsView() {
             >
               <option value="ALL">All Plots ({reports.length})</option>
               {uniquePlots.map((plot) => (
-                <option key = {plot} value={plot}>{plot}</option>
+                <option key={plot} value={plot}>{plot}</option>
               ))}
             </select>
           </div>
@@ -249,7 +262,12 @@ export default function ReportsView() {
           </div>
 
           <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {/* THIS IS THE LOOP THAT RENDERS EACH SIDEBAR CARD */}
+            {filteredReports.length === 0 ? (
+                <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '20px', padding: '10px' }}>
+                    No telemetry data found. Run a mission in the Field Map to generate reports.
+                </div>
+            ) : null}
+
             {filteredReports.map(report => {
               const isSelected = selectedReportId === report.id;
               return (
@@ -312,10 +330,10 @@ export default function ReportsView() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                 <span style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--primary-green)', letterSpacing: '0.05em' }}>
-                  EKSPLORADOR
+                 
                 </span>
                 <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-gold)', textTransform: 'uppercase' }}>
-                  Soil Spatial Intelligence
+                
                 </span>
               </div>
               <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-dark)' }}>{currentReport.title}</h1>

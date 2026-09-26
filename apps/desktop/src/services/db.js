@@ -3,69 +3,92 @@ import { invoke } from '@tauri-apps/api/core';
 import { open, save, confirm } from '@tauri-apps/plugin-dialog';
 import { readTextFile } from '@tauri-apps/plugin-fs';
 
-let db = null;
+let dbPromise = null;
 
 export async function initDatabase() {
-  if (!db) {
-    db = await Database.load('sqlite:eksplorador.db');
-    await db.execute(
-      'CREATE TABLE IF NOT EXISTS telemetry (' +
-        'id INTEGER PRIMARY KEY AUTOINCREMENT, ' +
-        'timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, ' +
-        'latitude REAL, longitude REAL, moisture REAL, ph REAL, ec REAL, ' +
-        'nitrogen REAL, phosphorus REAL, potassium REAL, ' +
-        'soil_valid INTEGER DEFAULT 1)'
-    );
+  if (!dbPromise) {
+    dbPromise = Database.load('sqlite:eksplorador.db').then(async (db) => {
+      await db.execute(
+        `CREATE TABLE IF NOT EXISTS telemetry (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          mission_id TEXT,
+          plot TEXT,
+          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+          latitude REAL,
+          longitude REAL,
+          moisture REAL,
+          ph REAL,
+          ec REAL,
+          nitrogen REAL,
+          phosphorus REAL,
+          potassium REAL,
+          overall REAL
+        )`
+      );
+      return db;
+    });
   }
-  return db;
+  return dbPromise;
 }
 
-export async function insertReading(reading) {
-  const database = await initDatabase();
-  return await database.execute(
-    'INSERT INTO sensor_readings ' +
-      '(latitude, longitude, moisture, temperature, nitrogen, phosphorus, potassium) ' +
-      'VALUES ($1, $2, $3, $4, $5, $6, $7)',
-    [
-      reading.latitude,
-      reading.longitude,
-      reading.moisture,
-      reading.temperature,
-      reading.nitrogen,
-      reading.phosphorus,
-      reading.potassium
-    ]
-  );
-}
-
-export async function getHeatmapPoints(parameter = 'moisture') {
-  const database = await initDatabase();
-  const rows = await database.select(
-    'SELECT latitude, longitude, ' + parameter +
-    ' AS intensity FROM sensor_readings WHERE latitude IS NOT NULL AND longitude IS NOT NULL'
-  );
-  return rows.map(r => [r.latitude, r.longitude, r.intensity || 0.5]);
-}
-
+// Called by FieldMapView.jsx during active logging
 export async function saveSoilSample(sample) {
   try {
-    const key = 'samples_' + sample.mission_id;
-    const existing = JSON.parse(localStorage.getItem(key) || '[]');
-    existing.push(sample);
-    localStorage.setItem(key, JSON.stringify(existing));
+    const db = await initDatabase();
+    await db.execute(
+      `INSERT INTO telemetry 
+      (mission_id, plot, timestamp, latitude, longitude, moisture, ph, ec, nitrogen, phosphorus, potassium, overall) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [
+        sample.mission_id || 'UNASSIGNED',
+        sample.plot || 'Main Field',
+        sample.timestamp,
+        sample.lat || sample.coords[0],
+        sample.lng || sample.coords[1],
+        sample.moisture,
+        sample.ph,
+        sample.ec,
+        sample.n,
+        sample.p,
+        sample.k,
+        sample.overall || 50
+      ]
+    );
     return true;
   } catch (error) {
-    console.error('Failed to save soil sample:', error);
+    console.error('Failed to save soil sample to SQLite:', error);
     return null;
   }
 }
 
+// Called by FieldMapView.jsx to restore lines on mission switch
 export async function fetchMissionSamples(missionId) {
   try {
-    const data = localStorage.getItem('samples_' + missionId);
-    return data ? JSON.parse(data) : [];
+    const db = await initDatabase();
+    const rows = await db.select('SELECT * FROM telemetry WHERE mission_id = $1 ORDER BY timestamp ASC', [missionId]);
+    // Map DB columns back to FieldMap's expected short keys
+    return rows.map(row => ({
+      ...row,
+      lat: row.latitude,
+      lng: row.longitude,
+      coords: [row.latitude, row.longitude],
+      n: row.nitrogen,
+      p: row.phosphorus,
+      k: row.potassium
+    }));
   } catch (error) {
     console.error('Failed to fetch mission samples:', error);
+    return [];
+  }
+}
+
+// NEW: Called by ReportsView.jsx to pull all data for statistics
+export async function getAllTelemetry() {
+  try {
+    const db = await initDatabase();
+    return await db.select('SELECT * FROM telemetry ORDER BY timestamp DESC');
+  } catch (error) {
+    console.error('Failed to fetch all telemetry:', error);
     return [];
   }
 }
