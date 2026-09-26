@@ -6,15 +6,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use rusqlite::{params, Connection, Result};
 use rusqlite_migration::{Migrations, M};
-use serde::Serialize;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-// use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize, Deserialize)]
 pub struct TelemetryRow {
     pub id: i64,
+    pub mission_id: Option<i64>,
     pub timestamp: String,
     pub latitude: f64,
     pub longitude: f64,
@@ -24,11 +23,14 @@ pub struct TelemetryRow {
     pub nitrogen: Option<f64>,
     pub phosphorus: Option<f64>,
     pub potassium: Option<f64>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct TelemetryImportRecord {
     id: Option<i64>,
+    mission_id: Option<i64>,
     timestamp: Option<String>,
     latitude: Option<f64>,
     longitude: Option<f64>,
@@ -38,12 +40,50 @@ struct TelemetryImportRecord {
     nitrogen: Option<f64>,
     phosphorus: Option<f64>,
     potassium: Option<f64>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Crop {
+    pub id: Option<i64>,
+    pub name: String,
+    pub target_ph_min: Option<f64>,
+    pub target_ph_max: Option<f64>,
+    pub target_moisture_min: Option<f64>,
+    pub target_moisture_max: Option<f64>,
+    pub ec_tolerance_max: Option<f64>,
+    pub optimal_nitrogen: Option<f64>,
+    pub optimal_phosphorus: Option<f64>,
+    pub optimal_potassium: Option<f64>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Field {
+    pub id: Option<i64>,
+    pub name: String,
+    pub boundary_geojson: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Mission {
+    pub id: Option<i64>,
+    pub field_id: i64,
+    pub name: String,
+    pub mission_date: Option<String>,
+    pub pins_geojson: Option<String>,
+    pub status: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[tauri::command]
-fn import_telemetry_json(file_content: String) -> Result<usize, String> {
+fn import_telemetry_json(file_content: String) -> std::result::Result<i32, String> {
     let conn = get_connection().map_err(|e| e.to_string())?;
-
     let parsed: serde_json::Value = serde_json::from_str(&file_content)
         .map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
@@ -62,10 +102,16 @@ fn import_telemetry_json(file_content: String) -> Result<usize, String> {
 
         conn.execute(
             "INSERT OR REPLACE INTO telemetry (
-                id, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                id, mission_id, timestamp, latitude, longitude, ph, moisture, ec, 
+                nitrogen, phosphorus, potassium, created_at, updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 
+                COALESCE(?12, CURRENT_TIMESTAMP), 
+                COALESCE(?13, CURRENT_TIMESTAMP)
+            )",
             params![
                 rec.id,
+                rec.mission_id,
                 rec.timestamp,
                 rec.latitude.unwrap_or(0.0),
                 rec.longitude.unwrap_or(0.0),
@@ -75,6 +121,8 @@ fn import_telemetry_json(file_content: String) -> Result<usize, String> {
                 rec.nitrogen,
                 rec.phosphorus,
                 rec.potassium,
+                rec.created_at,
+                rec.updated_at,
             ],
         ).map_err(|e| format!("Failed to insert record: {}", e))?;
 
@@ -89,7 +137,7 @@ fn export_telemetry_to_project(
     file_path: String,
     overwrite: bool,
     records: Vec<TelemetryRow>,
-) -> Result<String, String> {
+) -> std::result::Result<String, String> {
     if records.is_empty() {
         return Err("No recent samples to export.".to_string());
     }
@@ -143,13 +191,149 @@ fn export_telemetry_to_project(
     Ok(target_path.to_string_lossy().into_owned())
 }
 
+// CROPS Commands
+#[tauri::command]
+fn get_crops() -> std::result::Result<Vec<Crop>, String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, target_ph_min, target_ph_max, target_moisture_min, target_moisture_max, ec_tolerance_max, optimal_nitrogen, optimal_phosphorus, optimal_potassium, created_at, updated_at FROM crops ORDER BY name ASC")
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Crop {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                target_ph_min: row.get(2)?,
+                target_ph_max: row.get(3)?,
+                target_moisture_min: row.get(4)?,
+                target_moisture_max: row.get(5)?,
+                ec_tolerance_max: row.get(6)?,
+                optimal_nitrogen: row.get(7)?,
+                optimal_phosphorus: row.get(8)?,
+                optimal_potassium: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row.map_err(|e| e.to_string())?);
+    }
+
+    Ok(records)
+}
+
+// FIELDS Commands
+#[tauri::command]
+fn create_field(name: String, boundary_geojson: Option<String>) -> std::result::Result<i64, String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO fields (name, boundary_geojson) VALUES (?1, ?2)",
+        params![name, boundary_geojson],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+fn get_fields() -> std::result::Result<Vec<Field>, String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, boundary_geojson, created_at, updated_at FROM fields ORDER BY id DESC")
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Field {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                boundary_geojson: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row.map_err(|e| e.to_string())?);
+    }
+
+    Ok(records)
+}
+
+// MISSIONS Commands
+#[tauri::command]
+fn create_mission(
+    field_id: i64,
+    name: String,
+    pins_geojson: Option<String>,
+) -> std::result::Result<i64, String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO missions (field_id, name, pins_geojson, status) VALUES (?1, ?2, ?3, 'planned')",
+        params![field_id, name, pins_geojson],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+fn get_missions() -> std::result::Result<Vec<Mission>, String> {
+    let conn = get_connection().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, field_id, name, mission_date, pins_geojson, status, created_at, updated_at FROM missions ORDER BY id DESC")
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Mission {
+                id: row.get(0)?,
+                field_id: row.get(1)?,
+                name: row.get(2)?,
+                mission_date: row.get(3)?,
+                pins_geojson: row.get(4)?,
+                status: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row.map_err(|e| e.to_string())?);
+    }
+
+    Ok(records)
+}
+
+fn db_path() -> std::path::PathBuf {
+    // Anchored at compile time to this crate's own folder (src-tauri),
+    // so the database always lives next to Cargo.toml regardless of
+    // how the app is launched (cargo tauri dev, a built exe, an IDE
+    // run config, etc). Each developer's local build points at their
+    // own local src-tauri folder, so a fresh clone just works.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("eksplorador.db");
+    eprintln!("[db] using database at: {}", path.display());
+    path
+}
+
 fn get_connection() -> Result<Connection> {
-    let mut conn = Connection::open("eksplorador.db")?;
+    let mut conn = Connection::open(db_path())?;
 
     let migrations = Migrations::new(vec![
         M::up(include_str!("../migrations/V1__create_telemetry_table.sql")),
         M::up(include_str!("../migrations/V2__add_npk_columns.sql")),
-        // M::up(include_str!("../migrations/V3_seed_telemetry.sql")),
+        M::up(include_str!("../migrations/V4__add_mission_and_audit_timestamps.sql")),
+        M::up(include_str!("../migrations/V5__create_additional_tables.sql")),
+        // M::up(include_str!("../migrations/V6__replace_rover_logs_with_crops_fields.sql")),
     ]);
 
     migrations.to_latest(&mut conn).map_err(|e| {
@@ -214,8 +398,8 @@ fn flush_buffer_to_db(buffer: &[BufferedReading]) {
     };
 
     let result = conn.execute(
-        "INSERT INTO telemetry (timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO telemetry (timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         params![
             current_time_hms(),
             latest.latitude,
@@ -242,31 +426,34 @@ fn flush_buffer_to_db(buffer: &[BufferedReading]) {
 }
 
 #[tauri::command]
-fn init_db() -> Result<(), String> {
+fn init_db() -> std::result::Result<(), String> {
     get_connection().map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-fn get_recent_telemetry() -> Result<Vec<TelemetryRow>, String> {
+fn get_recent_telemetry() -> std::result::Result<Vec<TelemetryRow>, String> {
     let conn = get_connection().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium FROM telemetry ORDER BY id DESC LIMIT 200")
+        .prepare("SELECT id, mission_id, timestamp, latitude, longitude, ph, moisture, ec, nitrogen, phosphorus, potassium, created_at, updated_at FROM telemetry ORDER BY id DESC LIMIT 200")
         .map_err(|e| e.to_string())?;
 
     let rows = stmt
         .query_map([], |row| {
             Ok(TelemetryRow {
                 id: row.get(0)?,
-                timestamp: row.get(1)?,
-                latitude: row.get(2)?,
-                longitude: row.get(3)?,
-                ph: row.get(4)?,
-                moisture: row.get(5)?,
-                ec: row.get(6)?,
-                nitrogen: row.get(7)?,
-                phosphorus: row.get(8)?,
-                potassium: row.get(9)?,
+                mission_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                latitude: row.get(3)?,
+                longitude: row.get(4)?,
+                ph: row.get(5)?,
+                moisture: row.get(6)?,
+                ec: row.get(7)?,
+                nitrogen: row.get(8)?,
+                phosphorus: row.get(9)?,
+                potassium: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -308,7 +495,7 @@ fn probe_port(port_name: &str) -> bool {
             Ok(0) => continue,
             Ok(_) => {
                 let trimmed = line.trim();
-                if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     if json.get("seq").is_some() {
                         return true;
                     }
@@ -326,7 +513,7 @@ fn scan_all_ports() -> Option<String> {
     println!(
         "[serial] scanning {} available port(s): {:?}",
         ports.len(),
-        ports.iter().map(|p| p.port_name.clone()).collect::<Vec<_>>()
+        ports.iter().map(|p| p.port_name.clone()).collect::<Vec<String>>()
     );
 
     for p in ports {
@@ -394,7 +581,7 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
 
                                 println!("[serial] raw: {}", trimmed);
 
-                                match serde_json::from_str::<Value>(trimmed) {
+                                match serde_json::from_str::<serde_json::Value>(trimmed) {
                                     Ok(json) => {
                                         let soil_valid =
                                             json.get("soilValid").and_then(|v| v.as_i64()) == Some(1);
@@ -481,7 +668,12 @@ pub fn run() {
             init_db,
             get_recent_telemetry,
             import_telemetry_json,
-            export_telemetry_to_project
+            export_telemetry_to_project,
+            get_crops,
+            create_field,
+            get_fields,
+            create_mission,
+            get_missions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
