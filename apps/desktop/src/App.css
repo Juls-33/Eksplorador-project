@@ -31,7 +31,6 @@ body {
 }
 
 /* Sidebar */
-/* Sidebar Modifications */
 .sidebar {
   width: 240px;
   background-color: var(--primary-dark);
@@ -90,22 +89,6 @@ body {
   justify-content: center;
 }
 
-/* Nav Item Adjustments
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  color: #cbd5e1;
-  font-size: 0.88rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  white-space: nowrap;
-  overflow: hidden;
-} */
-
 .sidebar.collapsed .nav-item {
   justify-content: center;
   padding: 12px 0;
@@ -115,7 +98,6 @@ body {
 .nav-label {
   transition: opacity 0.2s ease;
 }
-  
 
 .brand-title {
   font-size: 1rem;
@@ -337,6 +319,40 @@ body {
 .map-card {
   grid-column: 1;
   grid-row: 1;
+}
+
+/* Live Monitoring GPS warning */
+.gps-map-overlay {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: min(330px, calc(100% - 80px));
+  padding: 11px 13px;
+  border: 1px solid #d99a2b;
+  border-radius: 9px;
+  background: rgba(255, 251, 235, 0.96);
+  color: #78350f;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.15);
+  pointer-events: none;
+}
+
+.gps-map-overlay svg {
+  flex: none;
+}
+
+.gps-map-overlay strong,
+.gps-map-overlay span {
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.gps-map-overlay span {
+  margin-top: 2px;
 }
 
 .live-sampling-card {

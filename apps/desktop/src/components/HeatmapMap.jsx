@@ -1,8 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet.heat';
-import { Crosshair } from 'lucide-react';
+import { AlertTriangle, Crosshair } from 'lucide-react';
 import { generateIDWHeatmapGrid } from '../utils/geo';
+
+const hasMapPosition = (position) =>
+  Array.isArray(position) &&
+  position.length === 2 &&
+  position.every(
+    (value) => value !== null && value !== undefined && value !== ''
+  ) &&
+  Number.isFinite(Number(position[0])) &&
+  Number.isFinite(Number(position[1])) &&
+  Math.abs(Number(position[0])) <= 90 &&
+  Math.abs(Number(position[1])) <= 180 &&
+  (Number(position[0]) !== 0 || Number(position[1]) !== 0);
 
 export default function HeatmapMap({
   center = [14.6095, 120.9895],
@@ -11,12 +23,13 @@ export default function HeatmapMap({
   focusPoints = [],
   labeledPoints = [],
   roverPos = [14.6095, 120.9895],
+  gpsWarning = null,
   waypoints = [],
   waypointsDeletable = false,
   onWaypointDelete = null,
   boundary = [],
   onMapClick = null,
-  interactionMode = 'NONE', // 'NONE' | 'DRAW_BOUNDARY' | 'SET_WAYPOINTS'
+  interactionMode = 'NONE',
   showRover = true,
   showFollowControl = true,
   gradient = {
@@ -45,10 +58,7 @@ export default function HeatmapMap({
     onWaypointDeleteRef.current = onWaypointDelete;
   }, [onWaypointDelete]);
 
-  // Whether the map should automatically re-center on the rover's position
-  // as it updates. Turns itself off if the user manually drags the map
-  // (so it doesn't fight someone trying to look elsewhere), and can be
-  // re-enabled with the toggle button.
+  // Following stops when the operator manually drags the map.
   const [followRover, setFollowRover] = useState(true);
   const followRoverRef = useRef(true);
 
@@ -62,7 +72,8 @@ export default function HeatmapMap({
 
     if (mapContainerRef.current) {
       mapContainerRef.current.style.cursor =
-        interactionMode === 'DRAW_BOUNDARY' || interactionMode === 'SET_WAYPOINTS'
+        interactionMode === 'DRAW_BOUNDARY' ||
+        interactionMode === 'SET_WAYPOINTS'
           ? 'crosshair'
           : '';
     }
@@ -72,30 +83,37 @@ export default function HeatmapMap({
     createTile: function (coords, done) {
       const tile = document.createElement('img');
 
-      L.DomEvent.on(tile, 'load', L.Util.bind(this._tileOnLoad, this, done, tile));
+      L.DomEvent.on(
+        tile,
+        'load',
+        L.Util.bind(this._tileOnLoad, this, done, tile)
+      );
 
-      // Local disk tile path
       const localUrl = `/tiles/${coords.z}/${coords.x}/${coords.y}.png`;
       const onlineUrl = this.getTileUrl(coords);
 
-      // Handle fallback if online fails while navigator.onLine was technically true
       L.DomEvent.on(tile, 'error', () => {
         if (tile.src !== localUrl) {
           tile.src = localUrl;
         } else {
-          this._tileOnError(done, tile, new Error('Tile not found locally or online'));
+          this._tileOnError(
+            done,
+            tile,
+            new Error('Tile not found locally or online')
+          );
         }
       });
 
       if (this.options.crossOrigin || this.options.crossOrigin === '') {
-        tile.crossOrigin = this.options.crossOrigin === true ? '' : this.options.crossOrigin;
+        tile.crossOrigin =
+          this.options.crossOrigin === true
+            ? ''
+            : this.options.crossOrigin;
       }
 
       tile.alt = '';
       tile.setAttribute('role', 'presentation');
 
-      //  OPTIMIZATION: If offline, fetch directly from local disk immediately
-      // Do not attempt to hit the network and wait for a socket timeout.
       if (!navigator.onLine) {
         tile.src = localUrl;
       } else {
@@ -105,13 +123,13 @@ export default function HeatmapMap({
       return tile;
     }
   });
-  useEffect(() => {
 
+  useEffect(() => {
     if (!mapContainerRef.current) return;
 
     const REGION_BOUNDS = [
-      [14.05, 120.70], // Southwest (South Laguna / Batangas border)
-      [16.05, 121.60], // Northeast (North Nueva Ecija)
+      [14.05, 120.70],
+      [16.05, 121.60]
     ];
 
     mapInstanceRef.current = L.map(mapContainerRef.current, {
@@ -120,20 +138,21 @@ export default function HeatmapMap({
       maxZoom: 18,
       maxBounds: REGION_BOUNDS,
       maxBoundsViscosity: 1.0,
-      // Performance optimization flags:
-      preferCanvas: true,          // Renders vectors to Canvas instead of slow SVG DOM nodes
+      preferCanvas: true,
       zoomAnimation: true,
-      fadeAnimation: false,        // Disabling tile fade-in makes zooming feel snappy and instant
-      updateWhenZooming: false,    // Don't fetch/render intermediate tiles mid-pinch or mid-scroll
-      updateWhenIdle: true,        // Wait until panning/zooming settles before rendering tiles
+      fadeAnimation: false,
+      updateWhenZooming: false,
+      updateWhenIdle: true
     }).setView(center, zoom);
 
-    // Initialize with Online as primary, fallback to /tiles/
-    new FastFallbackTileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 20,
-      subdomains: ['a', 'b', 'c']
-    }).addTo(mapInstanceRef.current);
+    new FastFallbackTileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 20,
+        subdomains: ['a', 'b', 'c']
+      }
+    ).addTo(mapInstanceRef.current);
 
     boundaryPolygonRef.current = L.polygon([], {
       color: '#1F5132',
@@ -143,9 +162,18 @@ export default function HeatmapMap({
       dashArray: '5, 8'
     }).addTo(mapInstanceRef.current);
 
-    boundaryPointsGroupRef.current = L.layerGroup().addTo(mapInstanceRef.current);
-    historicalLabelsGroupRef.current = L.layerGroup().addTo(mapInstanceRef.current);
-    waypointLayerGroupRef.current = L.layerGroup().addTo(mapInstanceRef.current);
+    boundaryPointsGroupRef.current = L.layerGroup().addTo(
+      mapInstanceRef.current
+    );
+
+    historicalLabelsGroupRef.current = L.layerGroup().addTo(
+      mapInstanceRef.current
+    );
+
+    waypointLayerGroupRef.current = L.layerGroup().addTo(
+      mapInstanceRef.current
+    );
+
     routePolylineRef.current = L.polyline([], {
       color: '#D99A2B',
       dashArray: '6, 8',
@@ -165,25 +193,29 @@ export default function HeatmapMap({
       iconSize: [18, 18]
     });
 
-    // Guard against a null/invalid roverPos (e.g. no GPS fix yet) so the map
-    // instance always finishes initializing and its cleanup gets registered —
-    // an uncaught error here previously left a stale Leaflet instance attached
-    // to the DOM node, causing "Map container is already initialized" on remount.
-    const initialRoverPos = Array.isArray(roverPos) && roverPos.length === 2 ? roverPos : center;
-    if (showRover) {
-      roverMarkerRef.current = L.marker(initialRoverPos, { icon: roverIcon }).addTo(mapInstanceRef.current);
+    // Create the marker safely, but display it only when allowed
+    // and when an actual position is available.
+    const initialRoverPos = hasMapPosition(roverPos)
+      ? roverPos
+      : center;
+
+    roverMarkerRef.current = L.marker(initialRoverPos, {
+      icon: roverIcon
+    });
+
+    if (showRover && hasMapPosition(roverPos)) {
+      roverMarkerRef.current.addTo(mapInstanceRef.current);
     }
 
     mapInstanceRef.current.on('click', (e) => {
-      if (interactionModeRef.current !== 'NONE' && onMapClickRef.current) {
+      if (
+        interactionModeRef.current !== 'NONE' &&
+        onMapClickRef.current
+      ) {
         onMapClickRef.current([e.latlng.lat, e.latlng.lng]);
       }
     });
 
-    // Dragstart only fires on real user mouse/touch interaction, not on
-    // programmatic panTo/setView calls — so this cleanly detects "the user
-    // wants to look somewhere else" without also triggering on our own
-    // auto-follow pans.
     mapInstanceRef.current.on('dragstart', () => {
       followRoverRef.current = false;
       setFollowRover(false);
@@ -197,9 +229,14 @@ export default function HeatmapMap({
     };
   }, []);
 
-  // Update Field Boundary Polygon
+  // Update the field boundary.
   useEffect(() => {
-    if (!boundaryPolygonRef.current || !boundaryPointsGroupRef.current) return;
+    if (
+      !boundaryPolygonRef.current ||
+      !boundaryPointsGroupRef.current
+    ) {
+      return;
+    }
 
     boundaryPointsGroupRef.current.clearLayers();
 
@@ -219,14 +256,17 @@ export default function HeatmapMap({
           "></div>`,
           iconSize: [10, 10]
         });
-        L.marker(coord, { icon: dotIcon }).addTo(boundaryPointsGroupRef.current);
+
+        L.marker(coord, { icon: dotIcon }).addTo(
+          boundaryPointsGroupRef.current
+        );
       });
     } else {
       boundaryPolygonRef.current.setLatLngs([]);
     }
   }, [boundary]);
 
-  // Compute & Render Dense IDW Heatmap with Selected Gradient
+  // Render the heatmap.
   useEffect(() => {
     if (!mapInstanceRef.current) return;
 
@@ -235,11 +275,15 @@ export default function HeatmapMap({
     }
 
     if (heatPoints.length > 0) {
-      const interpolatedPoints = generateIDWHeatmapGrid(heatPoints, boundary, {
-        gridResolution: 32,
-        power: 2.0,
-        maxInfluenceRadiusM: 55
-      });
+      const interpolatedPoints = generateIDWHeatmapGrid(
+        heatPoints,
+        boundary,
+        {
+          gridResolution: 32,
+          power: 2.0,
+          maxInfluenceRadiusM: 55
+        }
+      );
 
       if (interpolatedPoints.length > 0) {
         heatLayerRef.current = L.heatLayer(interpolatedPoints, {
@@ -252,33 +296,40 @@ export default function HeatmapMap({
     }
   }, [heatPoints, boundary, gradient]);
 
-  // Historical review can contain up to twenty samples. Frame the complete
-  // selection so every heat point remains visible when rows are toggled.
+  // Frame the selected historical samples.
   useEffect(() => {
     if (!mapInstanceRef.current || focusPoints.length === 0) return;
 
     if (focusPoints.length === 1) {
-      mapInstanceRef.current.setView(focusPoints[0], 18, { animate: true });
+      mapInstanceRef.current.setView(focusPoints[0], 18, {
+        animate: true
+      });
       return;
     }
 
-    mapInstanceRef.current.fitBounds(L.latLngBounds(focusPoints), {
-      padding: [32, 32],
-      maxZoom: 18,
-      animate: true
-    });
+    mapInstanceRef.current.fitBounds(
+      L.latLngBounds(focusPoints),
+      {
+        padding: [32, 32],
+        maxZoom: 18,
+        animate: true
+      }
+    );
   }, [focusPoints]);
 
-  // Numbered historical markers link each selected table record to its exact
-  // GPS position. The anchor is gold (#1); automatically matched samples use
-  // the standard Eksplorador green.
+  // Render numbered historical markers.
   useEffect(() => {
     if (!historicalLabelsGroupRef.current) return;
 
     historicalLabelsGroupRef.current.clearLayers();
 
     labeledPoints.forEach(({ lat, lng, label, isAnchor }) => {
-      if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+      if (
+        !Number.isFinite(Number(lat)) ||
+        !Number.isFinite(Number(lng))
+      ) {
+        return;
+      }
 
       const markerIcon = L.divIcon({
         className: 'historical-map-label',
@@ -303,34 +354,47 @@ export default function HeatmapMap({
       L.marker([lat, lng], {
         icon: markerIcon,
         zIndexOffset: 700,
-        title: isAnchor ? `Anchor sample #${label}` : `Historical sample #${label}`
+        title: isAnchor
+          ? `Anchor sample #${label}`
+          : `Historical sample #${label}`
       }).addTo(historicalLabelsGroupRef.current);
     });
   }, [labeledPoints]);
 
-  // Update Rover GPS Marker (and re-center the map if auto-follow is on)
+  // Update the rover marker while respecting Julius's showRover option.
   useEffect(() => {
-    // Guard here too — this effect runs on every roverPos change, so a null
-    // (no GPS fix) must not crash setLatLng.
-    if (roverMarkerRef.current && Array.isArray(roverPos) && roverPos.length === 2) {
+    if (!roverMarkerRef.current || !mapInstanceRef.current) return;
+
+    if (showRover && hasMapPosition(roverPos)) {
       roverMarkerRef.current.setLatLng(roverPos);
 
-      if (followRoverRef.current && mapInstanceRef.current) {
-        mapInstanceRef.current.panTo(roverPos, { animate: true, duration: 0.5 });
+      if (!mapInstanceRef.current.hasLayer(roverMarkerRef.current)) {
+        roverMarkerRef.current.addTo(mapInstanceRef.current);
       }
-    }
-  }, [roverPos]);
 
-  // Draw Mission Waypoints & Polyline
+      if (followRoverRef.current) {
+        mapInstanceRef.current.panTo(roverPos, {
+          animate: true,
+          duration: 0.5
+        });
+      }
+    } else {
+      mapInstanceRef.current.removeLayer(roverMarkerRef.current);
+    }
+  }, [roverPos, showRover]);
+
+  // Render mission waypoints and preserve individual pin deletion.
   useEffect(() => {
-    if (!waypointLayerGroupRef.current || !routePolylineRef.current) return;
+    if (
+      !waypointLayerGroupRef.current ||
+      !routePolylineRef.current
+    ) {
+      return;
+    }
 
     waypointLayerGroupRef.current.clearLayers();
 
     waypoints.forEach((pt, index) => {
-      // In delete mode every pin is independently clickable/removable, so it
-      // gets a distinct look (red, an ×) instead of its normal numbered look —
-      // this is what lets pin 1 be removed without touching pin 5.
       const pinIcon = waypointsDeletable
         ? L.divIcon({
             className: 'custom-pin deletable-pin',
@@ -373,14 +437,19 @@ export default function HeatmapMap({
 
       const marker = L.marker(pt, {
         icon: pinIcon,
-        title: waypointsDeletable ? `Remove pin ${index + 1}` : `Pin ${index + 1}`,
+        title: waypointsDeletable
+          ? `Remove pin ${index + 1}`
+          : `Pin ${index + 1}`,
         zIndexOffset: waypointsDeletable ? 800 : 0
       });
 
       if (waypointsDeletable) {
         marker.on('click', (e) => {
           L.DomEvent.stopPropagation(e);
-          if (onWaypointDeleteRef.current) onWaypointDeleteRef.current(index);
+
+          if (onWaypointDeleteRef.current) {
+            onWaypointDeleteRef.current(index);
+          }
         });
       }
 
@@ -391,40 +460,79 @@ export default function HeatmapMap({
   }, [waypoints, waypointsDeletable]);
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
-      {showFollowControl && (
-      <button
-        onClick={() => {
-          setFollowRover(true);
-          followRoverRef.current = true;
-          if (mapInstanceRef.current && Array.isArray(roverPos) && roverPos.length === 2) {
-            mapInstanceRef.current.panTo(roverPos, { animate: true, duration: 0.5 });
-          }
-        }}
-        title={followRover ? 'Following rover' : 'Click to re-center on rover'}
+    <div
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%'
+      }}
+    >
+      <div
+        ref={mapContainerRef}
         style={{
-          position: 'absolute',
-          bottom: '12px',
-          right: '12px',
-          zIndex: 1000,
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          padding: '6px 10px',
-          borderRadius: '8px',
-          border: '1px solid var(--card-border, #e2e8f0)',
-          background: followRover ? 'var(--primary-green, #1F5132)' : '#fff',
-          color: followRover ? '#fff' : 'var(--text-dark, #1e293b)',
-          fontSize: '0.75rem',
-          fontWeight: 700,
-          cursor: 'pointer',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+          width: '100%',
+          height: '100%'
         }}
-      >
-        <Crosshair size={14} />
-        {followRover ? 'Following' : 'Follow Rover'}
-      </button>
+      />
+
+      {gpsWarning && (
+        <div
+          className="gps-map-overlay"
+          role="status"
+          aria-live="polite"
+        >
+          <AlertTriangle size={18} aria-hidden="true" />
+          <div>
+            <strong>GPS not locked</strong>
+            <span>{gpsWarning}</span>
+          </div>
+        </div>
+      )}
+
+      {showFollowControl && hasMapPosition(roverPos) && (
+        <button
+          onClick={() => {
+            setFollowRover(true);
+            followRoverRef.current = true;
+
+            if (mapInstanceRef.current && hasMapPosition(roverPos)) {
+              mapInstanceRef.current.panTo(roverPos, {
+                animate: true,
+                duration: 0.5
+              });
+            }
+          }}
+          title={
+            followRover
+              ? 'Following rover'
+              : 'Click to re-center on rover'
+          }
+          style={{
+            position: 'absolute',
+            bottom: '12px',
+            right: '12px',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '6px 10px',
+            borderRadius: '8px',
+            border: '1px solid var(--card-border, #e2e8f0)',
+            background: followRover
+              ? 'var(--primary-green, #1F5132)'
+              : '#fff',
+            color: followRover
+              ? '#fff'
+              : 'var(--text-dark, #1e293b)',
+            fontSize: '0.75rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+          }}
+        >
+          <Crosshair size={14} />
+          {followRover ? 'Following' : 'Follow Rover'}
+        </button>
       )}
     </div>
   );
