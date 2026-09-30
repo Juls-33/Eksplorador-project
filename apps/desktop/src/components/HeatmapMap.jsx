@@ -12,9 +12,13 @@ export default function HeatmapMap({
   labeledPoints = [],
   roverPos = [14.6095, 120.9895],
   waypoints = [],
+  waypointsDeletable = false,
+  onWaypointDelete = null,
   boundary = [],
   onMapClick = null,
   interactionMode = 'NONE', // 'NONE' | 'DRAW_BOUNDARY' | 'SET_WAYPOINTS'
+  showRover = true,
+  showFollowControl = true,
   gradient = {
     0.2: '#dc2626',
     0.4: '#ea580c',
@@ -35,6 +39,11 @@ export default function HeatmapMap({
 
   const interactionModeRef = useRef(interactionMode);
   const onMapClickRef = useRef(onMapClick);
+  const onWaypointDeleteRef = useRef(onWaypointDelete);
+
+  useEffect(() => {
+    onWaypointDeleteRef.current = onWaypointDelete;
+  }, [onWaypointDelete]);
 
   // Whether the map should automatically re-center on the rover's position
   // as it updates. Turns itself off if the user manually drags the map
@@ -161,7 +170,9 @@ export default function HeatmapMap({
     // an uncaught error here previously left a stale Leaflet instance attached
     // to the DOM node, causing "Map container is already initialized" on remount.
     const initialRoverPos = Array.isArray(roverPos) && roverPos.length === 2 ? roverPos : center;
-    roverMarkerRef.current = L.marker(initialRoverPos, { icon: roverIcon }).addTo(mapInstanceRef.current);
+    if (showRover) {
+      roverMarkerRef.current = L.marker(initialRoverPos, { icon: roverIcon }).addTo(mapInstanceRef.current);
+    }
 
     mapInstanceRef.current.on('click', (e) => {
       if (interactionModeRef.current !== 'NONE' && onMapClickRef.current) {
@@ -317,34 +328,72 @@ export default function HeatmapMap({
     waypointLayerGroupRef.current.clearLayers();
 
     waypoints.forEach((pt, index) => {
-      const pinIcon = L.divIcon({
-        className: 'custom-pin',
-        html: `<div style="
-          background: #8A5A35;
-          color: white;
-          width: 22px;
-          height: 22px;
-          border-radius: 50%;
-          border: 2px solid white;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 11px;
-          font-weight: bold;
-          box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-        ">${index + 1}</div>`,
-        iconSize: [22, 22]
+      // In delete mode every pin is independently clickable/removable, so it
+      // gets a distinct look (red, an ×) instead of its normal numbered look —
+      // this is what lets pin 1 be removed without touching pin 5.
+      const pinIcon = waypointsDeletable
+        ? L.divIcon({
+            className: 'custom-pin deletable-pin',
+            html: `<div style="
+              background: #dc2626;
+              color: white;
+              width: 24px;
+              height: 24px;
+              border-radius: 50%;
+              border: 2px solid white;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 15px;
+              font-weight: bold;
+              line-height: 1;
+              box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+              cursor: pointer;
+            ">&times;</div>`,
+            iconSize: [24, 24]
+          })
+        : L.divIcon({
+            className: 'custom-pin',
+            html: `<div style="
+              background: #8A5A35;
+              color: white;
+              width: 22px;
+              height: 22px;
+              border-radius: 50%;
+              border: 2px solid white;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 11px;
+              font-weight: bold;
+              box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            ">${index + 1}</div>`,
+            iconSize: [22, 22]
+          });
+
+      const marker = L.marker(pt, {
+        icon: pinIcon,
+        title: waypointsDeletable ? `Remove pin ${index + 1}` : `Pin ${index + 1}`,
+        zIndexOffset: waypointsDeletable ? 800 : 0
       });
 
-      L.marker(pt, { icon: pinIcon }).addTo(waypointLayerGroupRef.current);
+      if (waypointsDeletable) {
+        marker.on('click', (e) => {
+          L.DomEvent.stopPropagation(e);
+          if (onWaypointDeleteRef.current) onWaypointDeleteRef.current(index);
+        });
+      }
+
+      marker.addTo(waypointLayerGroupRef.current);
     });
 
     routePolylineRef.current.setLatLngs(waypoints);
-  }, [waypoints]);
+  }, [waypoints, waypointsDeletable]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
+      {showFollowControl && (
       <button
         onClick={() => {
           setFollowRover(true);
@@ -376,6 +425,7 @@ export default function HeatmapMap({
         <Crosshair size={14} />
         {followRover ? 'Following' : 'Follow Rover'}
       </button>
+      )}
     </div>
   );
 }
