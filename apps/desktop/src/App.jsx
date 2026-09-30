@@ -86,6 +86,18 @@ const hasValidSavedLocation = (record) => {
   return Number.isFinite(latitude) && Number.isFinite(longitude) && (latitude !== 0 || longitude !== 0);
 };
 
+const hasLiveGpsFix = (data) => {
+  if (!data || !Number.isInteger(Number(data.satsLocked)) || Number(data.satsLocked) <= 0) return false;
+  if ([data.lat, data.lng].some((value) => value === null || value === undefined || value === '')) return false;
+
+  const latitude = Number(data.lat);
+  const longitude = Number(data.lng);
+
+  return Number.isFinite(latitude) && Number.isFinite(longitude) &&
+    Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180 &&
+    (latitude !== 0 || longitude !== 0);
+};
+
 const normalizeHeatValue = (value, min, max) => {
   if (value === null || value === undefined || value === '') return null;
   const numericValue = Number(value);
@@ -360,8 +372,7 @@ export default function App() {
         return;
       }
 
-      const hasFix = data.lat && (data.lat !== 0 || data.lng !== 0);
-      if (hasFix && data.soilValid === 1) {
+      if (hasLiveGpsFix(data) && data.soilValid === 1) {
         setRawLiveReadings((prev) =>
           [...prev, {
             lat: data.lat,
@@ -451,7 +462,7 @@ export default function App() {
     { id: 'Reports', label: 'Reports', icon: BarChart3 }
   ];
 
-  const hasGpsFix = liveData && (liveData.lat !== 0 || liveData.lng !== 0);
+  const hasGpsFix = isConnected && hasLiveGpsFix(liveData);
   const soilOk = liveData && liveData.soilValid === 1;
 
   return (
@@ -574,7 +585,7 @@ export default function App() {
                 <div className="badge">
                   <Navigation size={14} />
                   <span>
-                    {liveData
+                    {isConnected && liveData
                       ? hasGpsFix
                         ? `GPS Fix (${liveData.satsLocked} sats)`
                         : `No Fix (${liveData.satsView} in view)`
@@ -702,9 +713,17 @@ export default function App() {
                   zoom={18}
                   heatPoints={displayedHeatPoints}
                   roverPos={
-                    selectedHistoricalPos ||
-                    (hasGpsFix ? [liveData.lat, liveData.lng] : latestDbPos)
+                    !selectedHistoricalPos && hasGpsFix
+                      ? [liveData.lat, liveData.lng]
+                      : null
                   }
+                  gpsWarning={!hasGpsFix ? (
+                    !isConnected
+                      ? 'Waiting for rover telemetry and GPS position.'
+                      : Number(liveData?.satsLocked) === 0
+                        ? '0 satellites locked. Live location is unavailable.'
+                        : 'Waiting for valid GPS coordinates.'
+                  ) : null}
                   focusPoints={selectedHistoricalPositions}
                   labeledPoints={historicalMapMarkers}
                   gradient={activeLayerConfig.gradient}
