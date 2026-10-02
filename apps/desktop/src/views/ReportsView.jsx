@@ -1,3 +1,4 @@
+import { appDate } from '../utils/time';
 import React, { useState, useEffect, useRef } from 'react';
 import { getAllTelemetry } from '../services/db';
 import {
@@ -95,7 +96,7 @@ function processTelemetryToReports(records){
       missionId: rows[0]?.mission_id || `MSN-00${index + 1}`,
       plot: plotName,
       surveyDate: latestDate,
-      generatedDate: new Date().toISOString().split('T')[0],
+      generatedDate: appDate(),
       inspector: 'System Generated (SQLite Data)',
       soilTexture: 'Loam / Field Sample',
       fertilityGrade: grade,
