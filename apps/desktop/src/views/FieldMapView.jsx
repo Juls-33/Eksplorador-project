@@ -1,3 +1,4 @@
+import { appDate } from '../utils/time';
 import React, { useState, useEffect, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -50,7 +51,7 @@ const STATUS_LABELS = {
 };
 
 // Local calendar date (toISOString would give the UTC date, which is "yesterday" early morning in the PH)
-const todayLocal = () => new Date().toLocaleDateString('en-CA');
+const todayLocal = () => appDate();
 const blankMission = () => ({ name: '', fieldId: '', date: todayLocal(), pinsMode: 'new', pinSourceId: '' });
 
 const fmt = (value, decimals = 1) => {

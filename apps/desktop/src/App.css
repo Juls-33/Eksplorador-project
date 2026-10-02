@@ -466,3 +466,31 @@ body {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+/* Responsive layout for the remaining status indicators */
+.status-badges {
+  display: grid;
+  grid-template-columns:
+    repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.status-badges > .badge {
+  box-sizing: border-box;
+  min-width: 0;
+  height: auto;
+  min-height: 36px;
+  white-space: normal;
+}
+
+.status-badges > .badge svg {
+  flex-shrink: 0;
+}
+
+.status-badges > .badge span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
