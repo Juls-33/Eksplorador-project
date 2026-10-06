@@ -1,0 +1,28 @@
+{
+  "//": "Identify your app + a real contact per OSM's tile usage policy (https://operations.osmfoundation.org/policies/tiles/). A generic/missing User-Agent is one of the things that gets bulk downloaders blocked.",
+  "userAgent": "Eksplorador-Capstone/1.0 (University of Santo Tomas; contact: juliusaustin.santos@gmail.com)",
+  "requestDelayMs": 600,
+  "outputDir": "../public/tiles",
+
+  "//areas": "minZoom/maxZoom per area. Keep the full-region entry at LOW zoom only (province-level context) and reserve high zoom for small boxes around real field sites — see the README section in the reply for why.",
+  "areas": [
+    {
+      "name": "region-overview (Nueva Ecija to Batangas)",
+      "south": 14.05,
+      "west": 120.70,
+      "north": 16.05,
+      "east": 121.60,
+      "minZoom": 6,
+      "maxZoom": 12
+    },
+    {
+      "name": "ust-field (EXAMPLE — replace with your real site coordinates)",
+      "south": 14.605,
+      "west": 120.985,
+      "north": 14.615,
+      "east": 120.995,
+      "minZoom": 13,
+      "maxZoom": 18
+    }
+  ]
+}

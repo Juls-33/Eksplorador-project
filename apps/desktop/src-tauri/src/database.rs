@@ -180,6 +180,67 @@ pub fn tables(conn: &Connection) -> DbResult<Vec<String>> {
         .map_err(error)
 }
 
+pub fn preserve_additional_columns(
+    target: &mut Connection,
+    source: &Connection,
+) -> DbResult<()> {
+    let tx = target.transaction().map_err(error)?;
+    let target_tables: BTreeSet<_> =
+        tables(&tx)?.into_iter().collect();
+
+    for table in tables(source)? {
+        if !target_tables.contains(&table) {
+            return Err(format!(
+                "The older database contains an unsupported table: {}. \
+                 It has been left intact.",
+                table
+            ));
+        }
+
+        let source_columns = select(
+            source,
+            &format!("PRAGMA table_info({})", quote(&table)),
+            &[],
+        )?;
+
+        let target_columns = select(
+            &tx,
+            &format!("PRAGMA table_info({})", quote(&table)),
+            &[],
+        )?;
+
+        for column in source_columns {
+            let Some(name) = column["name"].as_str() else {
+                continue;
+            };
+
+            if !target_columns.iter().any(|existing| {
+                existing["name"]
+                    .as_str()
+                    .map(|existing_name| {
+                        existing_name.eq_ignore_ascii_case(name)
+                    })
+                    .unwrap_or(false)
+            }) {
+                tx.execute_batch(&format!(
+                    "ALTER TABLE {} ADD COLUMN {}",
+                    quote(&table),
+                    quote(name)
+                ))
+                .map_err(error)?;
+
+                tx.execute_batch(&format!(
+                    "DROP TRIGGER IF EXISTS {}",
+                    quote(&format!("_app_update_{}", table))
+                ))
+                .map_err(error)?;
+            }
+        }
+    }
+
+    tx.commit().map_err(error)
+}
+
 pub fn meta(
     conn: &Connection,
     key: &str,
@@ -964,6 +1025,73 @@ mod tests {
             snapshot(conn).unwrap().tables
         )
         .unwrap()
+    }
+
+    #[test]
+    fn legacy_additional_columns_are_preserved_during_consolidation() {
+        let source = db();
+
+        source
+            .execute_batch(
+                "ALTER TABLE telemetry
+                     ADD COLUMN legacy_note;
+                 INSERT INTO telemetry(
+                     timestamp,
+                     legacy_note
+                 )
+                 VALUES('12:40:00', 'kept from legacy');",
+            )
+            .unwrap();
+
+        let mut destination = db();
+
+        preserve_additional_columns(
+            &mut destination,
+            &source,
+        )
+        .unwrap();
+
+        ensure_schema(&mut destination).unwrap();
+
+        let package = snapshot(&source).unwrap();
+
+        restore(
+            &mut destination,
+            &package,
+            None,
+            true,
+        )
+        .unwrap();
+
+        let row = select(
+            &destination,
+            "SELECT legacy_note FROM telemetry",
+            &[],
+        )
+        .unwrap()
+        .remove(0);
+
+        assert_eq!(
+            row["legacy_note"],
+            "kept from legacy"
+        );
+
+        let previous_revision =
+            revision(&destination).unwrap();
+
+        destination
+            .execute(
+                "UPDATE telemetry
+                 SET legacy_note='updated'
+                 WHERE timestamp='12:40:00'",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(
+            revision(&destination).unwrap(),
+            previous_revision + 1
+        );
     }
 
     #[test]
