@@ -60,6 +60,7 @@ pub fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+#[cfg(test)]
 pub fn project_legacy_row(
     row: Map<String, Value>,
     columns: &[Column],
