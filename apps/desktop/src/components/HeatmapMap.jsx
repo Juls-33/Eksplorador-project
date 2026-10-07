@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet.heat';
-import { AlertTriangle, Crosshair } from 'lucide-react';
+import { AlertTriangle, Crosshair, Wifi, WifiOff, CloudOff, MapPin } from 'lucide-react';
+import { appLocalDataDir, join } from '@tauri-apps/api/path';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { generateIDWHeatmapGrid } from '../utils/geo';
+import { fetchAllCoverage } from '../services/tileStorage';
 
 const hasMapPosition = (position) =>
   Array.isArray(position) &&
@@ -58,6 +61,128 @@ export default function HeatmapMap({
     onWaypointDeleteRef.current = onWaypointDelete;
   }, [onWaypointDelete]);
 
+  // Tile source feedback: 'checking' | 'online' | 'offline' | 'unavailable'.
+  // Tiles arrive in bursts of a dozen+ per pan/zoom, so outcomes are tallied
+  // and the visible status is only recomputed a short moment after the last
+  // one lands, rather than flickering on every individual tile.
+  // Every downloaded/bundled offline area, for the "jump to a downloaded
+  // map" dropdown — loaded once per mount, same source tileStorage.js's
+  // Tile Manager uses, so this list is never a second, separately-tracked
+  // copy of what's actually on disk.
+  const [coverageAreas, setCoverageAreas] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAllCoverage().then((areas) => {
+      if (!cancelled) setCoverageAreas(areas);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleJumpToCoverageArea = (e) => {
+    const index = e.target.value;
+    e.target.value = ''; // reset so picking the same area twice still fires a change
+    if (index === '' || !mapInstanceRef.current) return;
+    const area = coverageAreas[Number(index)];
+    if (!area) return;
+    const bounds = L.latLngBounds([area.south, area.west], [area.north, area.east]);
+    mapInstanceRef.current.fitBounds(bounds, { padding: [24, 24], animate: true });
+  };
+
+  const [tileStatus, setTileStatus] = useState('checking');
+  const tileTallyRef = useRef({ online: 0, offline: 0, failed: 0 });
+  const tallyDebounceRef = useRef(null);
+
+  // Real connectivity, kept current by an active background probe rather
+  // than trusted from navigator.onLine — which can report "online" even
+  // with no working internet (observed on WebView2/Windows). createTile
+  // reads this synchronously, so an offline tile request goes straight to
+  // the local fallback instead of waiting out an online-attempt timeout.
+  const isOnlineRef = useRef(navigator.onLine);
+
+  // Third fallback tier: tiles the user downloaded themselves through the
+  // in-app Tile Manager, saved under the app's local-data directory rather
+  // than the bundled /tiles/... assets. Resolved once, async, since finding
+  // that directory is a Tauri IPC call — see tileStorage.js for the writer
+  // side. Stays null outside Tauri (e.g. a plain browser preview) or if it
+  // resolves too late for the very first tile of the session; either way
+  // this tier is just skipped rather than breaking tile loading.
+  const userTilesDirRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const base = await appLocalDataDir();
+        const dir = await join(base, 'tiles');
+        if (!cancelled) userTilesDirRef.current = dir;
+      } catch {
+        // Not running under Tauri, or the API isn't available — fine, this
+        // tier just stays unavailable.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const probeConnectivity = async () => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        // mode: 'no-cors' deliberately avoids a CORS rejection being
+        // mistaken for "offline" — we only care whether the request reached
+        // the network at all, not whether we can read the response.
+        // cache: 'no-store' stops a stale cached hit from faking "online".
+        await fetch('https://tile.openstreetmap.org/0/0/0.png', {
+          method: 'HEAD',
+          mode: 'no-cors',
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (!cancelled) isOnlineRef.current = true;
+      } catch {
+        if (!cancelled) isOnlineRef.current = false;
+      }
+    };
+
+    probeConnectivity(); // run immediately so the very first tile already has a real answer
+    const intervalId = setInterval(probeConnectivity, 7000);
+
+    // When the browser does correctly fire these, act on them instantly
+    // instead of waiting for the next probe tick.
+    const handleOffline = () => { isOnlineRef.current = false; };
+    const handleOnline = () => probeConnectivity();
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, []);
+
+  const reportTileOutcome = (kind) => {
+    tileTallyRef.current[kind] += 1;
+    if (tallyDebounceRef.current) clearTimeout(tallyDebounceRef.current);
+    tallyDebounceRef.current = setTimeout(() => {
+      const { online, offline, failed } = tileTallyRef.current;
+      // Prefer the best outcome seen in the batch: even one tile loading
+      // online means we have a connection; local tiles mean we're covered
+      // offline; only report "unavailable" if nothing came through at all.
+      let next = 'checking';
+      if (online > 0) next = 'online';
+      else if (offline > 0) next = 'offline';
+      else if (failed > 0) next = 'unavailable';
+      setTileStatus((prev) => (prev === next ? prev : next));
+      tileTallyRef.current = { online: 0, offline: 0, failed: 0 };
+    }, 350);
+  };
+
   // Following stops when the operator manually drags the map.
   const [followRover, setFollowRover] = useState(true);
   const followRoverRef = useRef(true);
@@ -83,25 +208,80 @@ export default function HeatmapMap({
     createTile: function (coords, done) {
       const tile = document.createElement('img');
 
+      // `tile.src` is always resolved to an absolute URL by the browser, so
+      // comparing it against a relative path string would never match —
+      // that was the original bug causing an infinite retry loop on any
+      // tile missing from every source. A named `stage` can't lie that way.
+      //
+      // Three tiers, tried in order: the network, the tiles bundled with the
+      // app at build time, and finally whatever the user has downloaded
+      // themselves on this machine through the in-app Tile Manager.
+      let settled = false;
+      let stage = 'online'; // 'online' | 'bundled' | 'downloaded'
+      let timeoutId = null;
+
+      const bundledUrl = `/tiles/${coords.z}/${coords.x}/${coords.y}.png`;
+      const onlineUrl = this.getTileUrl(coords);
+
+      const clearPendingTimeout = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      };
+
+      const giveUp = () => {
+        if (settled) return;
+        settled = true;
+        reportTileOutcome('failed');
+        this._tileOnError(done, tile, new Error('Tile not found online, bundled, or in downloaded tiles'));
+      };
+
+      const tryDownloaded = () => {
+        const dir = userTilesDirRef.current;
+        if (!dir) {
+          // Nothing to wait for — this tier just isn't available (not
+          // running under Tauri, or it hasn't resolved yet for this
+          // session's very first tile).
+          giveUp();
+          return;
+        }
+        stage = 'downloaded';
+        tile.src = convertFileSrc(`${dir}/${coords.z}/${coords.x}/${coords.y}.png`);
+        timeoutId = setTimeout(() => {
+          if (!settled) giveUp();
+        }, 3000);
+      };
+
+      const tryBundled = () => {
+        stage = 'bundled';
+        tile.src = bundledUrl;
+        timeoutId = setTimeout(() => {
+          if (!settled) tryDownloaded();
+        }, 3000);
+      };
+
+      // Separate, lightweight listener purely for the status banner — kept
+      // apart from Leaflet's own required _tileOnLoad binding below so a
+      // mistake here can never break actual tile rendering.
+      L.DomEvent.on(tile, 'load', () => {
+        if (settled) return;
+        settled = true;
+        clearPendingTimeout();
+        reportTileOutcome(stage === 'online' ? 'online' : 'offline');
+      });
+
       L.DomEvent.on(
         tile,
         'load',
         L.Util.bind(this._tileOnLoad, this, done, tile)
       );
 
-      const localUrl = `/tiles/${coords.z}/${coords.x}/${coords.y}.png`;
-      const onlineUrl = this.getTileUrl(coords);
-
       L.DomEvent.on(tile, 'error', () => {
-        if (tile.src !== localUrl) {
-          tile.src = localUrl;
-        } else {
-          this._tileOnError(
-            done,
-            tile,
-            new Error('Tile not found locally or online')
-          );
-        }
+        clearPendingTimeout();
+        if (stage === 'online') tryBundled();
+        else if (stage === 'bundled') tryDownloaded();
+        else giveUp();
       });
 
       if (this.options.crossOrigin || this.options.crossOrigin === '') {
@@ -114,10 +294,18 @@ export default function HeatmapMap({
       tile.alt = '';
       tile.setAttribute('role', 'presentation');
 
-      if (!navigator.onLine) {
-        tile.src = localUrl;
+      if (!isOnlineRef.current) {
+        // The background probe already knows we're offline — skip the
+        // network attempt entirely and go straight to the bundled tile.
+        tryBundled();
       } else {
         tile.src = onlineUrl;
+        // isOnlineRef is only as fresh as the last probe (every ~7s), so
+        // this is just a short backstop for the gap between probes — not
+        // the primary offline detection anymore.
+        timeoutId = setTimeout(() => {
+          if (!settled && stage === 'online') tryBundled();
+        }, 2500);
       }
 
       return tile;
@@ -474,6 +662,112 @@ export default function HeatmapMap({
           height: '100%'
         }}
       />
+
+      {/* Tile source feedback: lets the operator see at a glance whether the
+          basemap is live, running off saved offline tiles, or missing both. */}
+      <div
+        role="status"
+        aria-live="polite"
+        style={{
+          position: 'absolute',
+          // Leaflet's own zoom control sits at top:10px/left:10px and is
+          // ~54px tall (two stacked buttons) — this badge used to start at
+          // top:12px, landing right on top of the "+" button. Clearing that
+          // height is the actual fix; left stays the same corner.
+          top: '12px',
+          left: '50px',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          padding: '5px 10px',
+          borderRadius: '8px',
+          fontSize: '0.72rem',
+          fontWeight: 700,
+          color: '#fff',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+          background:
+            tileStatus === 'online'
+              ? 'rgba(22, 101, 52, 0.9)'
+              : tileStatus === 'offline'
+              ? 'rgba(202, 138, 4, 0.92)'
+              : tileStatus === 'unavailable'
+              ? 'rgba(185, 28, 28, 0.92)'
+              : 'rgba(71, 85, 105, 0.85)'
+        }}
+      >
+        {tileStatus === 'online' && (
+          <>
+            <Wifi size={13} /> Online map
+          </>
+        )}
+        {tileStatus === 'offline' && (
+          <>
+            <WifiOff size={13} /> Offline — saved tiles
+          </>
+        )}
+        {tileStatus === 'unavailable' && (
+          <>
+            <CloudOff size={13} /> Map tiles unavailable
+          </>
+        )}
+        {tileStatus === 'checking' && (
+          <>
+            <Wifi size={13} /> Loading map…
+          </>
+        )}
+      </div>
+
+      {/* Jump to a downloaded map: lists bundled + user-downloaded coverage
+          (same list the Tile Manager shows) so the operator doesn't have to
+          already know where an offline area is before finding it. Placed
+          top-right, clear of the zoom control (top-left) and the status
+          badge below it. */}
+      {coverageAreas.length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '12px',
+            right: '12px',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+            maxWidth: '230px',
+            padding: '5px 8px',
+            borderRadius: '8px',
+            border: '1px solid var(--card-border, #e2e8f0)',
+            background: '#fff',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+          }}
+        >
+          <MapPin size={13} color="var(--primary-green, #1F5132)" style={{ flexShrink: 0 }} />
+          <select
+            onChange={handleJumpToCoverageArea}
+            defaultValue=""
+            title="Jump to a downloaded map area"
+            style={{
+              border: 'none',
+              outline: 'none',
+              background: 'transparent',
+              color: 'var(--text-dark, #1e293b)',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              maxWidth: '190px'
+            }}
+          >
+            <option value="" disabled>
+              Jump to downloaded map…
+            </option>
+            {coverageAreas.map((area, i) => (
+              <option key={`${area.name}-${i}`} value={i}>
+                {area.name} · {area.source === 'bundled' ? 'shipped' : 'downloaded'}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {gpsWarning && (
         <div

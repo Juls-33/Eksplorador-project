@@ -324,7 +324,7 @@ body {
 /* Live Monitoring GPS warning */
 .gps-map-overlay {
   position: absolute;
-  top: 14px;
+  top: 50px;
   right: 14px;
   z-index: 1000;
   display: flex;

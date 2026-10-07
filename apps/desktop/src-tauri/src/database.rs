@@ -60,6 +60,35 @@ pub fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+#[cfg(test)]
+pub fn project_legacy_row(
+    row: Map<String, Value>,
+    columns: &[Column],
+) -> (Map<String, Value>, Vec<String>) {
+    let supported: BTreeSet<&str> =
+        columns.iter().map(|column| column.name.as_str()).collect();
+
+    let ignored = row
+        .keys()
+        .filter(|name| !supported.contains(name.as_str()))
+        .cloned()
+        .collect();
+
+    let projected = columns
+        .iter()
+        .map(|column| {
+            (
+                column.name.clone(),
+                row.get(&column.name)
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            )
+        })
+        .collect();
+
+    (projected, ignored)
+}
+
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -178,6 +207,67 @@ pub fn tables(conn: &Connection) -> DbResult<Vec<String>> {
 
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(error)
+}
+
+pub fn preserve_additional_columns(
+    target: &mut Connection,
+    source: &Connection,
+) -> DbResult<()> {
+    let tx = target.transaction().map_err(error)?;
+    let target_tables: BTreeSet<_> =
+        tables(&tx)?.into_iter().collect();
+
+    for table in tables(source)? {
+        if !target_tables.contains(&table) {
+            return Err(format!(
+                "The older database contains an unsupported table: {}. \
+                 It has been left intact.",
+                table
+            ));
+        }
+
+        let source_columns = select(
+            source,
+            &format!("PRAGMA table_info({})", quote(&table)),
+            &[],
+        )?;
+
+        let target_columns = select(
+            &tx,
+            &format!("PRAGMA table_info({})", quote(&table)),
+            &[],
+        )?;
+
+        for column in source_columns {
+            let Some(name) = column["name"].as_str() else {
+                continue;
+            };
+
+            if !target_columns.iter().any(|existing| {
+                existing["name"]
+                    .as_str()
+                    .map(|existing_name| {
+                        existing_name.eq_ignore_ascii_case(name)
+                    })
+                    .unwrap_or(false)
+            }) {
+                tx.execute_batch(&format!(
+                    "ALTER TABLE {} ADD COLUMN {}",
+                    quote(&table),
+                    quote(name)
+                ))
+                .map_err(error)?;
+
+                tx.execute_batch(&format!(
+                    "DROP TRIGGER IF EXISTS {}",
+                    quote(&format!("_app_update_{}", table))
+                ))
+                .map_err(error)?;
+            }
+        }
+    }
+
+    tx.commit().map_err(error)
 }
 
 pub fn meta(
@@ -885,7 +975,7 @@ pub fn restore(
 mod tests {
     use super::*;
 
-    fn db() -> Connection {
+    fn pre_v6_db() -> Connection {
         let mut conn =
             Connection::open_in_memory().unwrap();
 
@@ -915,6 +1005,86 @@ mod tests {
             .unwrap();
 
         conn
+    }
+
+    fn db() -> Connection {
+        let mut conn = pre_v6_db();
+
+        conn.execute_batch(include_str!(
+            "../migrations/V6__rebuild_telemetry_schema.sql"
+        ))
+        .unwrap();
+
+        ensure_schema(&mut conn).unwrap();
+
+        conn
+    }
+
+    #[test]
+    fn legacy_row_projection_keeps_supported_values_and_reports_extra_columns() {
+        let row = serde_json::from_value(serde_json::json!({
+            "id": 7,
+            "timestamp": "2026-10-01T08:00:00",
+            "legacy_note": "kept in original database"
+        }))
+        .unwrap();
+
+        let columns = vec![
+            Column {
+                name: "id".into(),
+                data_type: "INTEGER".into(),
+                required: false,
+                primary_key: true,
+            },
+            Column {
+                name: "timestamp".into(),
+                data_type: "TEXT".into(),
+                required: false,
+                primary_key: false,
+            },
+            Column {
+                name: "plot".into(),
+                data_type: "TEXT".into(),
+                required: false,
+                primary_key: false,
+            },
+        ];
+
+        let (projected, ignored) = project_legacy_row(row, &columns);
+
+        assert_eq!(projected["id"], 7);
+        assert_eq!(projected["timestamp"], "2026-10-01T08:00:00");
+        assert_eq!(projected["plot"], Value::Null);
+        assert_eq!(ignored, vec!["legacy_note"]);
+    }
+
+    #[test]
+    fn v6_migration_preserves_plot_and_overall_values() {
+        let mut conn = pre_v6_db();
+
+        conn.execute(
+            "INSERT INTO telemetry(plot, overall, ph)
+             VALUES('Legacy plot', 72.5, 6.4)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute_batch(include_str!(
+            "../migrations/V6__rebuild_telemetry_schema.sql"
+        ))
+        .unwrap();
+
+        ensure_schema(&mut conn).unwrap();
+
+        let values: (String, f64) = conn
+            .query_row(
+                "SELECT plot, overall FROM telemetry",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(values, ("Legacy plot".into(), 72.5));
     }
 
     fn seed(conn: &Connection, label: &str) {
@@ -964,6 +1134,73 @@ mod tests {
             snapshot(conn).unwrap().tables
         )
         .unwrap()
+    }
+
+    #[test]
+    fn legacy_additional_columns_are_preserved_during_consolidation() {
+        let source = db();
+
+        source
+            .execute_batch(
+                "ALTER TABLE telemetry
+                     ADD COLUMN legacy_note;
+                 INSERT INTO telemetry(
+                     timestamp,
+                     legacy_note
+                 )
+                 VALUES('12:40:00', 'kept from legacy');",
+            )
+            .unwrap();
+
+        let mut destination = db();
+
+        preserve_additional_columns(
+            &mut destination,
+            &source,
+        )
+        .unwrap();
+
+        ensure_schema(&mut destination).unwrap();
+
+        let package = snapshot(&source).unwrap();
+
+        restore(
+            &mut destination,
+            &package,
+            None,
+            true,
+        )
+        .unwrap();
+
+        let row = select(
+            &destination,
+            "SELECT legacy_note FROM telemetry",
+            &[],
+        )
+        .unwrap()
+        .remove(0);
+
+        assert_eq!(
+            row["legacy_note"],
+            "kept from legacy"
+        );
+
+        let previous_revision =
+            revision(&destination).unwrap();
+
+        destination
+            .execute(
+                "UPDATE telemetry
+                 SET legacy_note='updated'
+                 WHERE timestamp='12:40:00'",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(
+            revision(&destination).unwrap(),
+            previous_revision + 1
+        );
     }
 
     #[test]

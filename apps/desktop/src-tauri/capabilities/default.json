@@ -12,6 +12,12 @@
     "dialog:allow-open",
     "fs:default",
     "fs:allow-read-text-file",
-    "fs:allow-download-read"
+    "fs:allow-download-read",
+    { "identifier": "fs:allow-mkdir", "allow": [{ "path": "$APPLOCALDATA/tiles/**" }] },
+    { "identifier": "fs:allow-write-file", "allow": [{ "path": "$APPLOCALDATA/tiles/**" }] },
+    { "identifier": "fs:allow-exists", "allow": [{ "path": "$APPLOCALDATA/tiles/**" }] },
+    { "identifier": "fs:allow-read-dir", "allow": [{ "path": "$APPLOCALDATA/tiles/**" }] },
+    { "identifier": "fs:allow-write-text-file", "allow": [{ "path": "$APPLOCALDATA/tiles/**" }] },
+    { "identifier": "fs:allow-read-text-file", "allow": [{ "path": "$APPLOCALDATA/tiles/**" }] }
   ]
 }

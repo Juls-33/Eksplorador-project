@@ -24,13 +24,15 @@ import {
   ChevronRight,
   Download,
   Upload,
-  GitMerge
+  GitMerge,
+  HardDrive
 } from 'lucide-react';
 
 import HeatmapMap from './components/HeatmapMap';
 import FieldMapView from './views/FieldMapView';
 import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
+import TileManagerView from './views/TileManagerView';
 import { calculateDistanceMeters } from './utils/geo';
 
 import {
@@ -962,6 +964,11 @@ export default function App() {
       id: 'Reports',
       label: 'Reports',
       icon: BarChart3
+    },
+    {
+      id: 'Offline Maps',
+      label: 'Offline Maps',
+      icon: HardDrive
     }
   ];
 
@@ -1060,12 +1067,12 @@ export default function App() {
       <main className="main-content">
         {activeTab === 'Field Map' ? (
           <FieldMapView />
-        ) : activeTab === 'Soil Records' ? (
-          <SoilRecordsView />
         ) : activeTab === 'Crop Assessment' ? (
           <CropAssessmentView />
         ) : activeTab === 'Reports' ? (
           <ReportsView />
+        ) : activeTab === 'Offline Maps' ? (
+          <TileManagerView />
         ) : (
           <>
             <header className="top-bar">

@@ -210,7 +210,7 @@ fn legacy_database_snapshot(
     app: tauri::AppHandle,
 ) -> database::DbResult<Option<database::Snapshot>> {
     let _guard = DB_LOCK.lock().map_err(|e| e.to_string())?;
-    let conn = get_connection().map_err(|e| e.to_string())?;
+    let mut conn = get_connection().map_err(|e| e.to_string())?;
 
     if database::meta(&conn, "legacy_consolidated")?
         .as_deref()
@@ -248,6 +248,9 @@ fn legacy_database_snapshot(
         .transaction()
         .map_err(|e| e.to_string())?;
 
+    database::preserve_additional_columns(&mut conn, &tx)?;
+    database::ensure_schema(&mut conn)?;
+
     let mut data = database::snapshot(&conn)?;
 
     for table in data.tables.values_mut() {
@@ -281,25 +284,33 @@ fn legacy_database_snapshot(
             &[],
         )?;
 
-        for mut row in rows {
-            if row.keys().any(|key| {
-                !target
+        for row in rows {
+            let mut normalized = serde_json::Map::new();
+
+            for (key, value) in row {
+                let column = target
                     .columns
                     .iter()
-                    .any(|column| &column.name == key)
-            }) {
-                return Err(format!(
-                    "The older {} table has additional columns. \
-                     Consolidation stopped to preserve them.",
-                    name
-                ));
+                    .find(|column| {
+                        column.name.eq_ignore_ascii_case(&key)
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "The older {} table has an unsupported column: {}. \
+                             Consolidation stopped to preserve it.",
+                            name, key
+                        )
+                    })?;
+
+                normalized.insert(column.name.clone(), value);
             }
+
+            let mut row = normalized;
 
             for column in &target.columns {
                 row.entry(column.name.clone())
                     .or_insert(Value::Null);
             }
-
             target.rows.push(row);
         }
     }
@@ -695,6 +706,9 @@ fn get_connection() -> Result<Connection> {
             )),
             M::up(include_str!(
                 "../migrations/V5__create_additional_tables.sql"
+            )),
+            M::up(include_str!(
+                "../migrations/V6__rebuild_telemetry_schema.sql"
             )),
         ]);
 
