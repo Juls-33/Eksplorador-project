@@ -284,6 +284,7 @@ fn legacy_database_snapshot(
             &[],
         )?;
 
+<<<<<<< Updated upstream
         for row in rows {
             let mut normalized = serde_json::Map::new();
 
@@ -311,8 +312,25 @@ fn legacy_database_snapshot(
                 row.entry(column.name.clone())
                     .or_insert(Value::Null);
             }
+=======
+        let mut ignored_columns = std::collections::BTreeSet::new();
+>>>>>>> Stashed changes
 
+        for row in rows {
+            let (row, ignored) = database::project_legacy_row(row, &target.columns);
+            ignored_columns.extend(ignored);
             target.rows.push(row);
+        }
+
+        if !ignored_columns.is_empty() {
+            eprintln!(
+                "[db] legacy {} contains unsupported columns ({}); \
+                 those values were not copied. The original database \
+                 remains unchanged at {}.",
+                name,
+                ignored_columns.into_iter().collect::<Vec<_>>().join(", "),
+                path.display()
+            );
         }
     }
 
@@ -707,6 +725,9 @@ fn get_connection() -> Result<Connection> {
             )),
             M::up(include_str!(
                 "../migrations/V5__create_additional_tables.sql"
+            )),
+            M::up(include_str!(
+                "../migrations/V6__rebuild_telemetry_schema.sql"
             )),
         ]);
 

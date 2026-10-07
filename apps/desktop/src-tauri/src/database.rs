@@ -60,6 +60,34 @@ pub fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+pub fn project_legacy_row(
+    row: Map<String, Value>,
+    columns: &[Column],
+) -> (Map<String, Value>, Vec<String>) {
+    let supported: BTreeSet<&str> =
+        columns.iter().map(|column| column.name.as_str()).collect();
+
+    let ignored = row
+        .keys()
+        .filter(|name| !supported.contains(name.as_str()))
+        .cloned()
+        .collect();
+
+    let projected = columns
+        .iter()
+        .map(|column| {
+            (
+                column.name.clone(),
+                row.get(&column.name)
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            )
+        })
+        .collect();
+
+    (projected, ignored)
+}
+
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -946,7 +974,7 @@ pub fn restore(
 mod tests {
     use super::*;
 
-    fn db() -> Connection {
+    fn pre_v6_db() -> Connection {
         let mut conn =
             Connection::open_in_memory().unwrap();
 
@@ -976,6 +1004,86 @@ mod tests {
             .unwrap();
 
         conn
+    }
+
+    fn db() -> Connection {
+        let mut conn = pre_v6_db();
+
+        conn.execute_batch(include_str!(
+            "../migrations/V6__rebuild_telemetry_schema.sql"
+        ))
+        .unwrap();
+
+        ensure_schema(&mut conn).unwrap();
+
+        conn
+    }
+
+    #[test]
+    fn legacy_row_projection_keeps_supported_values_and_reports_extra_columns() {
+        let row = serde_json::from_value(serde_json::json!({
+            "id": 7,
+            "timestamp": "2026-10-01T08:00:00",
+            "legacy_note": "kept in original database"
+        }))
+        .unwrap();
+
+        let columns = vec![
+            Column {
+                name: "id".into(),
+                data_type: "INTEGER".into(),
+                required: false,
+                primary_key: true,
+            },
+            Column {
+                name: "timestamp".into(),
+                data_type: "TEXT".into(),
+                required: false,
+                primary_key: false,
+            },
+            Column {
+                name: "plot".into(),
+                data_type: "TEXT".into(),
+                required: false,
+                primary_key: false,
+            },
+        ];
+
+        let (projected, ignored) = project_legacy_row(row, &columns);
+
+        assert_eq!(projected["id"], 7);
+        assert_eq!(projected["timestamp"], "2026-10-01T08:00:00");
+        assert_eq!(projected["plot"], Value::Null);
+        assert_eq!(ignored, vec!["legacy_note"]);
+    }
+
+    #[test]
+    fn v6_migration_preserves_plot_and_overall_values() {
+        let mut conn = pre_v6_db();
+
+        conn.execute(
+            "INSERT INTO telemetry(plot, overall, ph)
+             VALUES('Legacy plot', 72.5, 6.4)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute_batch(include_str!(
+            "../migrations/V6__rebuild_telemetry_schema.sql"
+        ))
+        .unwrap();
+
+        ensure_schema(&mut conn).unwrap();
+
+        let values: (String, f64) = conn
+            .query_row(
+                "SELECT plot, overall FROM telemetry",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(values, ("Legacy plot".into(), 72.5));
     }
 
     fn seed(conn: &Connection, label: &str) {
