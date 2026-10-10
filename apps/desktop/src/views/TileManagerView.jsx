@@ -6,7 +6,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Package,
-  HardDrive
+  HardDrive,
+  Undo2
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
 import { fetchAllCoverage, estimateArea, downloadArea, TILE_SAFETY_CAP } from '../services/tileStorage';
@@ -34,6 +35,7 @@ export default function TileManagerView() {
 
   const [form, setForm] = useState(emptyForm);
   const [drawnPoints, setDrawnPoints] = useState([]); // raw clicks; their bounding envelope fills the form fields
+  const [removeMode, setRemoveMode] = useState(false); // when on, clicking a pin removes just that pin
 
   const [estimate, setEstimate] = useState(null);
   const [formError, setFormError] = useState(null);
@@ -59,28 +61,34 @@ export default function TileManagerView() {
 
   const previewBoundary = useMemo(() => rectangleBoundary(form), [form]);
 
-  const handleMapClick = (coords) => {
-    const next = [...drawnPoints, coords];
+  // The one place a new set of drawn points is applied. The form's bounding box
+  // is always derived from whichever points remain, so adding, undoing and
+  // removing a pin can never leave the coordinates out of step with the map.
+  const applyPoints = (next) => {
     setDrawnPoints(next);
-    const lats = next.map((p) => p[0]);
-    const lngs = next.map((p) => p[1]);
-    setForm((prev) => ({
-      ...prev,
-      south: Math.min(...lats).toFixed(6),
-      north: Math.max(...lats).toFixed(6),
-      west: Math.min(...lngs).toFixed(6),
-      east: Math.max(...lngs).toFixed(6)
-    }));
+    if (next.length === 0) {
+      setForm((prev) => ({ ...prev, south: '', west: '', north: '', east: '' }));
+      setRemoveMode(false);
+    } else {
+      const lats = next.map((p) => p[0]);
+      const lngs = next.map((p) => p[1]);
+      setForm((prev) => ({
+        ...prev,
+        south: Math.min(...lats).toFixed(6),
+        north: Math.max(...lats).toFixed(6),
+        west: Math.min(...lngs).toFixed(6),
+        east: Math.max(...lngs).toFixed(6)
+      }));
+    }
     setEstimate(null);
     setNeedsForceConfirm(false);
     setForceConfirmed(false);
   };
 
-  const clearDrawing = () => {
-    setDrawnPoints([]);
-    setForm((prev) => ({ ...prev, south: '', west: '', north: '', east: '' }));
-    setEstimate(null);
-  };
+  const handleMapClick = (coords) => applyPoints([...drawnPoints, coords]);
+  const handleUndoPin = () => applyPoints(drawnPoints.slice(0, -1));
+  const handleRemovePin = (index) => applyPoints(drawnPoints.filter((_, i) => i !== index));
+  const clearDrawing = () => applyPoints([]);
 
   const parsedArea = () => {
     const south = parseFloat(form.south);
@@ -138,6 +146,7 @@ export default function TileManagerView() {
       setResultSummary(result);
       setForm(emptyForm);
       setDrawnPoints([]);
+      setRemoveMode(false);
       setEstimate(null);
       setNeedsForceConfirm(false);
       setForceConfirmed(false);
@@ -227,17 +236,43 @@ export default function TileManagerView() {
           <div style={{ height: '320px', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--card-border)' }}>
             <HeatmapMap
               boundary={previewBoundary}
-              labeledPoints={drawnPoints.map((p, i) => ({ lat: p[0], lng: p[1], label: i + 1 }))}
+              labeledPoints={removeMode ? [] : drawnPoints.map((p, i) => ({ lat: p[0], lng: p[1], label: i + 1 }))}
+              waypoints={removeMode ? drawnPoints : []}
+              waypointsDeletable={removeMode}
+              onWaypointDelete={handleRemovePin}
               onMapClick={handleMapClick}
-              interactionMode="SET_WAYPOINTS"
+              interactionMode={removeMode ? 'NONE' : 'SET_WAYPOINTS'}
               showRover={false}
               showFollowControl={false}
             />
           </div>
           {drawnPoints.length > 0 && (
-            <button className="badge" onClick={clearDrawing} style={{ cursor: 'pointer', alignSelf: 'flex-start' }}>
-              <Trash2 size={13} /> Clear Drawing
-            </button>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+              <button className="badge" onClick={handleUndoPin} disabled={removeMode} style={{ cursor: 'pointer' }}>
+                <Undo2 size={13} /> Undo last pin
+              </button>
+              <button
+                className="badge"
+                onClick={() => setRemoveMode((prev) => !prev)}
+                title="Click any pin on the map to remove just that one"
+                style={{
+                  cursor: 'pointer',
+                  background: removeMode ? '#dc2626' : undefined,
+                  color: removeMode ? '#fff' : undefined,
+                  borderColor: removeMode ? '#dc2626' : undefined
+                }}
+              >
+                <Trash2 size={13} /> {removeMode ? 'Done removing' : 'Remove a pin'}
+              </button>
+              <button className="badge" onClick={clearDrawing} style={{ cursor: 'pointer' }}>
+                Clear all
+              </button>
+              {removeMode && (
+                <span style={{ fontSize: '0.75rem', color: '#991b1b' }}>
+                  Click a red × on the map to remove that pin.
+                </span>
+              )}
+            </div>
           )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>

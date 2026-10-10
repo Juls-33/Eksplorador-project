@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet.heat';
-import { AlertTriangle, Crosshair, Wifi, WifiOff, CloudOff, MapPin } from 'lucide-react';
+import { AlertTriangle, Crosshair, Wifi, WifiOff, CloudOff, MapPin, Search, X } from 'lucide-react';
 import { appLocalDataDir, join } from '@tauri-apps/api/path';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { generateIDWHeatmapGrid } from '../utils/geo';
 import { fetchAllCoverage } from '../services/tileStorage';
+import { searchPlaces, MIN_QUERY_LENGTH } from '../services/placeSearch';
 
 const hasMapPosition = (position) =>
   Array.isArray(position) &&
@@ -18,6 +19,17 @@ const hasMapPosition = (position) =>
   Math.abs(Number(position[0])) <= 90 &&
   Math.abs(Number(position[1])) <= 180 &&
   (Number(position[0]) !== 0 || Number(position[1]) !== 0);
+
+// The map is locked to this box (Nueva Ecija to Batangas) via maxBounds, so
+// place search must not offer results the map is unable to show.
+const REGION_BOUNDS = [
+  [14.05, 120.70],
+  [16.05, 121.60]
+];
+
+const isInRegion = (lat, lng) =>
+  lat >= REGION_BOUNDS[0][0] && lat <= REGION_BOUNDS[1][0] &&
+  lng >= REGION_BOUNDS[0][1] && lng <= REGION_BOUNDS[1][1];
 
 export default function HeatmapMap({
   center = [14.6095, 120.9895],
@@ -85,6 +97,10 @@ export default function HeatmapMap({
     if (index === '' || !mapInstanceRef.current) return;
     const area = coverageAreas[Number(index)];
     if (!area) return;
+    // Stop auto-following the rover, or the next GPS update would pan the
+    // map straight back off the area just jumped to.
+    followRoverRef.current = false;
+    setFollowRover(false);
     const bounds = L.latLngBounds([area.south, area.west], [area.north, area.east]);
     mapInstanceRef.current.fitBounds(bounds, { padding: [24, 24], animate: true });
   };
@@ -314,11 +330,6 @@ export default function HeatmapMap({
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
-
-    const REGION_BOUNDS = [
-      [14.05, 120.70],
-      [16.05, 121.60]
-    ];
 
     mapInstanceRef.current = L.map(mapContainerRef.current, {
       zoomControl: true,
@@ -647,6 +658,123 @@ export default function HeatmapMap({
     routePolylineRef.current.setLatLngs(waypoints);
   }, [waypoints, waypointsDeletable]);
 
+  // Place search ("jump to a landmark"). Submit-only on purpose — see
+  // services/placeSearch.js for the geocoder usage policy this respects.
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchNote, setSearchNote] = useState(null);
+  const searchAbortRef = useRef(null);
+  const searchMarkerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+  }, []);
+
+  const clearSearchMarker = () => {
+    if (searchMarkerRef.current && mapInstanceRef.current) {
+      mapInstanceRef.current.removeLayer(searchMarkerRef.current);
+    }
+    searchMarkerRef.current = null;
+  };
+
+  const runSearch = async (e) => {
+    e.preventDefault();
+    const q = searchQuery.trim();
+    setSearchResults([]);
+
+    if (q.length < MIN_QUERY_LENGTH) {
+      setSearchNote(`Type at least ${MIN_QUERY_LENGTH} characters.`);
+      return;
+    }
+    if (!isOnlineRef.current) {
+      setSearchNote('Place search needs an internet connection. The downloaded-map list still works offline.');
+      return;
+    }
+
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    setSearchBusy(true);
+    setSearchNote(null);
+
+    try {
+      let viewbox = null;
+      if (mapInstanceRef.current) {
+        const b = mapInstanceRef.current.getBounds();
+        viewbox = `${b.getWest()},${b.getNorth()},${b.getEast()},${b.getSouth()}`;
+      }
+      const found = await searchPlaces(q, { viewbox, signal: controller.signal });
+      if (controller.signal.aborted) return;
+
+      const inRegion = found.filter((r) => isInRegion(r.lat, r.lng));
+      if (found.length === 0) {
+        setSearchNote('No places found. Try a barangay, town or landmark name.');
+      } else if (inRegion.length === 0) {
+        setSearchNote('Found places, but outside the supported map region (Nueva Ecija to Batangas).');
+      } else {
+        setSearchResults(inRegion.slice(0, 6));
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      setSearchNote('Search failed. Check your connection and try again.');
+    } finally {
+      if (searchAbortRef.current === controller) {
+        searchAbortRef.current = null;
+        setSearchBusy(false);
+      }
+    }
+  };
+
+  const handlePickResult = (result) => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    // Stop auto-following the rover, or the next GPS update would pan the
+    // map straight back off the place just searched for.
+    followRoverRef.current = false;
+    setFollowRover(false);
+
+    if (result.bounds) {
+      map.fitBounds(result.bounds, { padding: [24, 24], maxZoom: 17, animate: true });
+    } else {
+      map.setView([result.lat, result.lng], 16, { animate: true });
+    }
+
+    clearSearchMarker();
+    searchMarkerRef.current = L.marker([result.lat, result.lng], {
+      icon: L.divIcon({
+        className: 'search-result-marker',
+        html: `<div style="
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          border: 3px solid #D99A2B;
+          background: rgba(217, 154, 43, 0.25);
+          box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(0,0,0,0.35);
+        "></div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11]
+      }),
+      interactive: false,
+      zIndexOffset: 900
+    }).addTo(map);
+
+    setSearchResults([]);
+    setSearchQuery(result.name);
+    setSearchNote(null);
+  };
+
+  const handleClearSearch = () => {
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+    searchAbortRef.current = null;
+    clearSearchMarker();
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchNote(null);
+    setSearchBusy(false);
+  };
+
   return (
     <div
       style={{
@@ -674,8 +802,8 @@ export default function HeatmapMap({
           // ~54px tall (two stacked buttons) — this badge used to start at
           // top:12px, landing right on top of the "+" button. Clearing that
           // height is the actual fix; left stays the same corner.
-          top: '12px',
-          left: '50px',
+          top: '18px',
+          left: '330px',
           zIndex: 1000,
           display: 'flex',
           alignItems: 'center',
@@ -715,6 +843,143 @@ export default function HeatmapMap({
           <>
             <Wifi size={13} /> Loading map…
           </>
+        )}
+      </div>
+
+      <div
+        style={{
+          position: 'absolute',
+          top: '12px',
+          left: '56px',
+          zIndex: 1000,
+          width: '270px',
+          maxWidth: 'calc(100% - 320px)'
+        }}
+      >
+        <form
+          onSubmit={runSearch}
+          role="search"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '5px 8px',
+            borderRadius: '8px',
+            border: '1px solid var(--card-border, #e2e8f0)',
+            background: '#fff',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+          }}
+        >
+          <Search size={14} color="var(--text-muted, #64748b)" style={{ flexShrink: 0 }} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              if (searchNote) setSearchNote(null);
+            }}
+            placeholder="Search a place or landmark"
+            aria-label="Search a place or landmark"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              border: 'none',
+              outline: 'none',
+              background: 'transparent',
+              fontSize: '0.78rem',
+              color: 'var(--text-dark, #1e293b)'
+            }}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={handleClearSearch}
+              aria-label="Clear search"
+              style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex' }}
+            >
+              <X size={14} color="var(--text-muted, #64748b)" />
+            </button>
+          )}
+          <button
+            type="submit"
+            disabled={searchBusy}
+            style={{
+              border: 'none',
+              borderRadius: '6px',
+              background: 'var(--primary-green, #1F5132)',
+              color: '#fff',
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              padding: '4px 9px',
+              cursor: searchBusy ? 'default' : 'pointer',
+              opacity: searchBusy ? 0.7 : 1
+            }}
+          >
+            {searchBusy ? '…' : 'Go'}
+          </button>
+        </form>
+
+        {searchNote && (
+          <div
+            role="status"
+            style={{
+              marginTop: '6px',
+              padding: '6px 10px',
+              borderRadius: '8px',
+              border: '1px solid var(--card-border, #e2e8f0)',
+              background: '#fff',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+              fontSize: '0.72rem',
+              color: 'var(--text-muted, #64748b)'
+            }}
+          >
+            {searchNote}
+          </div>
+        )}
+
+        {searchResults.length > 0 && (
+          <ul
+            style={{
+              listStyle: 'none',
+              margin: '6px 0 0',
+              padding: '4px',
+              borderRadius: '8px',
+              border: '1px solid var(--card-border, #e2e8f0)',
+              background: '#fff',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+              maxHeight: '240px',
+              overflowY: 'auto'
+            }}
+          >
+            {searchResults.map((r) => (
+              <li key={r.id}>
+                <button
+                  type="button"
+                  onClick={() => handlePickResult(r)}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '6px 8px',
+                    border: 'none',
+                    borderRadius: '6px',
+                    background: 'transparent',
+                    cursor: 'pointer',
+                    color: 'var(--text-dark, #1e293b)'
+                  }}
+                >
+                  <div style={{ fontSize: '0.78rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {r.name}{r.kind ? <span style={{ fontWeight: 400, color: 'var(--text-muted, #64748b)' }}> · {r.kind}</span> : null}
+                  </div>
+                  {r.label && (
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted, #64748b)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.label}
+                    </div>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 
