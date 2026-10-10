@@ -116,8 +116,10 @@ export function estimateArea(area) {
 // Downloads one named area into the user tiles directory. Throws if the plan
 // exceeds TILE_SAFETY_CAP and `force` isn't passed — callers (the UI) should
 // catch that specifically to show a confirmation step, not treat it as a
-// generic failure.
-export async function downloadArea(area, { force = false, onProgress = null } = {}) {
+// generic failure. Pass an AbortSignal to cancel between (or during) tiles;
+// tiles already saved are kept, and a cancelled area is NOT recorded in the
+// coverage manifest since it is only partly downloaded.
+export async function downloadArea(area, { force = false, onProgress = null, signal = null } = {}) {
   const plan = planArea(area);
   if (plan.total > TILE_SAFETY_CAP && !force) {
     const err = new Error(`This area is ${plan.total.toLocaleString()} tiles, above the ${TILE_SAFETY_CAP.toLocaleString()}-tile safety cap.`);
@@ -130,8 +132,14 @@ export async function downloadArea(area, { force = false, onProgress = null } = 
   let downloaded = 0, skipped = 0;
   const failures = [];
   let subdomainIndex = 0;
+  let cancelled = false;
 
   for (const tile of iterateTiles(plan)) {
+    if (signal?.aborted) {
+      cancelled = true;
+      break;
+    }
+
     const destDir = await join(userTilesDir, String(tile.z), String(tile.x));
     const destFile = await join(destDir, `${tile.y}.png`);
 
@@ -146,17 +154,23 @@ export async function downloadArea(area, { force = false, onProgress = null } = 
       let lastError = null;
       for (let attempt = 1; attempt <= MAX_RETRIES && !ok; attempt++) {
         try {
-          const res = await fetch(url);
+          const res = await fetch(url, { signal: signal || undefined });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const buf = new Uint8Array(await res.arrayBuffer());
           await mkdir(destDir, { recursive: true });
           await writeFile(destFile, buf);
           ok = true;
         } catch (err) {
+          if (signal?.aborted) {
+            cancelled = true;
+            break;
+          }
           lastError = err;
           if (attempt < MAX_RETRIES) await sleep(500 * attempt);
         }
       }
+
+      if (cancelled) break;
 
       if (ok) {
         downloaded++;
@@ -171,7 +185,84 @@ export async function downloadArea(area, { force = false, onProgress = null } = 
     }
   }
 
-  await appendToUserManifest(area);
+  if (!cancelled) await appendToUserManifest(area);
 
-  return { downloaded, skipped, failures };
+  return { downloaded, skipped, failures, cancelled };
+}
+
+// ---------------------------------------------------------------------------
+// Background download job
+//
+// Download state lives here, at module level, instead of inside
+// TileManagerView. That view is unmounted whenever you switch tabs, which used
+// to throw away its progress display (and let you start a second, overlapping
+// download on return). Now the job belongs to the app session; views only
+// subscribe to it. Closing the app still stops a job — but tiles already saved
+// are reused (skipped) when you download the same area again.
+// ---------------------------------------------------------------------------
+const IDLE_JOB = { status: 'idle', area: null, progress: null, result: null, error: null, cancelRequested: false };
+let job = IDLE_JOB;
+let abortController = null;
+const listeners = new Set();
+
+function setJob(patch) {
+  job = { ...job, ...patch };
+  listeners.forEach((listener) => listener(job));
+}
+
+export function getDownloadJob() {
+  return job;
+}
+
+export function subscribeDownloadJob(listener) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+// Starts a download in the background and returns immediately. Throws
+// synchronously (code JOB_RUNNING / SAFETY_CAP_EXCEEDED) if it can't start.
+export function startDownload(area, { force = false } = {}) {
+  if (job.status === 'running') {
+    const err = new Error('A map download is already running.');
+    err.code = 'JOB_RUNNING';
+    throw err;
+  }
+
+  const plan = planArea(area);
+  if (plan.total > TILE_SAFETY_CAP && !force) {
+    const err = new Error(`This area is ${plan.total.toLocaleString()} tiles, above the ${TILE_SAFETY_CAP.toLocaleString()}-tile safety cap.`);
+    err.code = 'SAFETY_CAP_EXCEEDED';
+    err.planTotal = plan.total;
+    throw err;
+  }
+
+  const controller = new AbortController();
+  abortController = controller;
+  setJob({
+    status: 'running',
+    area,
+    progress: { done: 0, total: plan.total, downloaded: 0, skipped: 0, failed: 0 },
+    result: null,
+    error: null,
+    cancelRequested: false
+  });
+
+  downloadArea(area, { force: true, signal: controller.signal, onProgress: (progress) => setJob({ progress }) })
+    .then((result) => setJob({ status: result.cancelled ? 'cancelled' : 'done', result }))
+    .catch((err) => setJob({ status: 'error', error: err.message || 'Download failed.' }))
+    .finally(() => {
+      if (abortController === controller) abortController = null;
+    });
+}
+
+export function cancelDownload() {
+  if (abortController) {
+    setJob({ cancelRequested: true });
+    abortController.abort();
+  }
+}
+
+// Clears a finished/cancelled/failed job's summary. No-op while running.
+export function dismissDownloadJob() {
+  if (job.status !== 'running') setJob({ ...IDLE_JOB });
 }

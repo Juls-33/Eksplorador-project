@@ -33,6 +33,7 @@ import FieldMapView from './views/FieldMapView';
 import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
 import TileManagerView from './views/TileManagerView';
+import { useDownloadPercent } from './hooks/useDownloadJob';
 import { calculateDistanceMeters } from './utils/geo';
 
 import {
@@ -481,6 +482,8 @@ function TelemetrySyncBar({
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('Dashboard');
+  // -1 when no map download is running, else 0-100 (drives the sidebar badge)
+  const downloadPercent = useDownloadPercent();
   const [selectedLayer, setSelectedLayer] = useState('ph');
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [liveData, setLiveData] = useState(null);
@@ -1035,7 +1038,12 @@ export default function App() {
                     }`
                   }
                   onClick={() => setActiveTab(item.id)}
-                  title={isCollapsed ? item.label : ''}
+                  title={
+                    item.id === 'Offline Maps' && downloadPercent >= 0
+                      ? `Map download ${downloadPercent}%`
+                      : isCollapsed ? item.label : ''
+                  }
+                  style={item.id === 'Offline Maps' ? { position: 'relative' } : undefined}
                 >
                   <Icon size={20} />
 
@@ -1043,6 +1051,37 @@ export default function App() {
                     <span className="nav-label">
                       {item.label}
                     </span>
+                  )}
+
+                  {item.id === 'Offline Maps' && downloadPercent >= 0 && (
+                    isCollapsed ? (
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: '6px',
+                          right: '6px',
+                          width: '9px',
+                          height: '9px',
+                          borderRadius: '50%',
+                          background: '#D99A2B',
+                          boxShadow: '0 0 0 2px #fff'
+                        }}
+                      />
+                    ) : (
+                      <span
+                        style={{
+                          marginLeft: 'auto',
+                          fontSize: '0.7rem',
+                          fontWeight: 800,
+                          padding: '1px 7px',
+                          borderRadius: '999px',
+                          background: '#D99A2B',
+                          color: '#fff'
+                        }}
+                      >
+                        {downloadPercent}%
+                      </span>
+                    )
                   )}
                 </div>
               );
