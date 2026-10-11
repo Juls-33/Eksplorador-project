@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
-import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
+import { isPointInPolygon, calculatePolygonArea, calculateDistanceMeters } from '../utils/geo';
 import {
   saveSoilSample,
   fetchMissionSamples,
@@ -42,6 +42,10 @@ import { hasBoundary } from '../utils/fieldGeo';
 // --- Constants & Layer Configurations ---
 const DEFAULT_CENTER = [14.6095, 120.9895];
 const EMPTY = [];
+
+// A sample recorded within this many meters of the current target pin counts
+// as having reached it, so the guide moves on without a manual "Reached" tap.
+const PIN_REACH_RADIUS_M = 5;
 
 const STATUS_LABELS = {
   planned: 'Planned',
@@ -183,6 +187,8 @@ export default function FieldMapView() {
   const [roverPos, setRoverPos] = useState([14.6094, 120.9896]);
   const [roverHeading, setRoverHeading] = useState(0);
   const [currentWaypointIdx, setCurrentWaypointIdx] = useState(0);
+  // { pin, distanceM } for the most recent pin advanced automatically; shown in the guide card.
+  const [lastAutoReached, setLastAutoReached] = useState(null);
 
   // Wizard: IDLE -> DRAWING_BOUNDARY -> (PLACING_PINS ->) launch.
   // intent 'FIELD' = adding/finishing a field (save, or save and start a mission).
@@ -244,6 +250,19 @@ export default function FieldMapView() {
 
   const activeBoundary = wizardStep !== 'IDLE' ? tempBoundary : (viewField?.boundary || EMPTY);
   const displayedWaypoints = wizardStep !== 'IDLE' ? tempWaypoints : (currentSelected?.waypoints || EMPTY);
+
+  // The sensor listener below is re-created only when the mission/boundary
+  // changes, so it reads the current navigation target through this ref
+  // instead of a stale closure. Auto-advance is skipped while pins are being
+  // edited (wizard open), since the card then shows draft pins, not the mission's.
+  const navTargetRef = useRef({ pins: EMPTY, idx: 0, live: false });
+  useEffect(() => {
+    navTargetRef.current = {
+      pins: displayedWaypoints,
+      idx: currentWaypointIdx,
+      live: wizardStep === 'IDLE'
+    };
+  }, [displayedWaypoints, currentWaypointIdx, wizardStep]);
 
   // Frame the map on the field (or, for legacy fields with no boundary, on its samples).
   // Memoized so the map only re-fits when the selection changes, not on every render.
@@ -393,6 +412,7 @@ export default function FieldMapView() {
     setSelectedMissionId(id);
     setCompareToId(null);
     setCurrentWaypointIdx(0);
+    setLastAutoReached(null);
     sampleCapturedForInsertionRef.current = false;
     setMissionState('IDLE'); // never keep logging into a different mission by accident
     setWizardStep('IDLE');
@@ -496,6 +516,19 @@ export default function FieldMapView() {
       // Mark this insertion as captured only after the database save succeeds.
       // If saving fails, later telemetry from the same insertion may retry.
       sampleCapturedForInsertionRef.current = true;
+
+      // Auto-advance: data recorded within PIN_REACH_RADIUS_M of the current
+      // target pin counts as reaching it. Distance is measured from where the
+      // sample was actually taken (the rover's GPS fix at probe insertion).
+      const { pins, idx, live } = navTargetRef.current;
+      const targetPin = live ? pins[idx] : null;
+      if (targetPin) {
+        const distanceM = calculateDistanceMeters(currentCoord, targetPin);
+        if (distanceM <= PIN_REACH_RADIUS_M) {
+          setCurrentWaypointIdx((prev) => (prev === idx ? idx + 1 : prev));
+          setLastAutoReached({ pin: idx + 1, distanceM });
+        }
+      }
     });
 
     return () => {
@@ -689,6 +722,7 @@ export default function FieldMapView() {
     setLiveSamples([]);
     sampleCapturedForInsertionRef.current = false;
     setCurrentWaypointIdx(0);
+    setLastAutoReached(null);
     resetWizard();
     setMissionState('IN_PROGRESS'); // Auto-start telemetry logging
     setNotification({ type: 'success', message: `Mission "${created.name}" launched!` });
@@ -735,6 +769,7 @@ export default function FieldMapView() {
 
     // Advancing changes only the navigation target. Rover position must come
     // from live GPS telemetry and should never be faked by a waypoint click.
+    setLastAutoReached(null);
     if (currentWaypointIdx < activePins.length - 1) {
       setCurrentWaypointIdx((prev) => prev + 1);
     } else {
@@ -1286,13 +1321,15 @@ export default function FieldMapView() {
             </div>
           </div>
 
-          <div style={{ flex: 1, minHeight: '190px' }}>
+          <div style={{ flexShrink: 0 }}>
             <OperatorNavGuide
               roverPos={roverPos}
               roverHeading={roverHeading}
               waypoints={displayedWaypoints}
               currentWaypointIdx={currentWaypointIdx}
               onAdvanceWaypoint={handleAdvanceWaypoint}
+              reachRadiusM={PIN_REACH_RADIUS_M}
+              lastAutoReached={lastAutoReached}
             />
           </div>
 

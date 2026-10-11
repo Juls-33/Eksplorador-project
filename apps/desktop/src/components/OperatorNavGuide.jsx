@@ -7,12 +7,15 @@ export default function OperatorNavGuide({
   roverHeading = 0, // IMU Yaw / Heading from ESP32 / Arduino
   waypoints = [],
   currentWaypointIdx = 0,
-  onAdvanceWaypoint = null
+  onAdvanceWaypoint = null,
+  reachRadiusM = 5, // a recorded sample this close to the target pin counts as reaching it
+  lastAutoReached = null // { pin, distanceM } for the pin the parent advanced automatically
 }) {
   const activeTarget = waypoints[currentWaypointIdx];
   const distanceToTarget = activeTarget ? calculateDistanceMeters(roverPos, activeTarget) : 0;
   const requiredBearing = activeTarget ? calculateBearing(roverPos, activeTarget) : 0;
   const cardinal = degreesToCardinal(requiredBearing);
+  const inRange = Boolean(activeTarget) && distanceToTarget <= reachRadiusM;
 
   // Turn difference between IMU heading and target bearing (-180 to 180)
   let turnOffset = (requiredBearing - roverHeading + 540) % 360 - 180;
@@ -71,8 +74,13 @@ export default function OperatorNavGuide({
                   </div>
 
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                       TARGET PIN #{currentWaypointIdx + 1}
+                      {inRange && (
+                        <span style={{ fontSize: '0.65rem', fontWeight: 800, background: '#dcfce7', color: '#166534', padding: '1px 6px', borderRadius: '999px' }}>
+                          IN RANGE ≤ {reachRadiusM} m
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-dark)' }}>
                       {distanceToTarget} <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>meters</span>
@@ -110,6 +118,18 @@ export default function OperatorNavGuide({
                 <CheckCircle2 size={16} /> All Waypoint Objectives Traversed!
               </div>
             )}
+
+            {/* Why the target moved, or how it will */}
+            {lastAutoReached ? (
+              <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--primary-green)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <CheckCircle2 size={14} />
+                Pin {lastAutoReached.pin} sampled automatically ({lastAutoReached.distanceM} m from the pin).
+              </div>
+            ) : activeTarget ? (
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                Moves to the next pin automatically once a sample is recorded within {reachRadiusM} m of it.
+              </div>
+            ) : null}
 
             {/* Sequence List with Distances */}
             <div style={{ maxHeight: '110px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
