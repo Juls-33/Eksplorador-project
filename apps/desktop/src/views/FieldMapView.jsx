@@ -20,7 +20,8 @@ import {
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
-import { isPointInPolygon, calculatePolygonArea, calculateDistanceMeters } from '../utils/geo';
+import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
+import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
 import {
   saveSoilSample,
   fetchMissionSamples,
@@ -42,10 +43,6 @@ import { hasBoundary } from '../utils/fieldGeo';
 // --- Constants & Layer Configurations ---
 const DEFAULT_CENTER = [14.6095, 120.9895];
 const EMPTY = [];
-
-// A sample recorded within this many meters of the current target pin counts
-// as having reached it, so the guide moves on without a manual "Reached" tap.
-const PIN_REACH_RADIUS_M = 5;
 
 const STATUS_LABELS = {
   planned: 'Planned',
@@ -186,9 +183,7 @@ export default function FieldMapView() {
   // Live Rover Telemetry
   const [roverPos, setRoverPos] = useState([14.6094, 120.9896]);
   const [roverHeading, setRoverHeading] = useState(0);
-  const [currentWaypointIdx, setCurrentWaypointIdx] = useState(0);
-  // { pin, distanceM } for the most recent pin advanced automatically; shown in the guide card.
-  const [lastAutoReached, setLastAutoReached] = useState(null);
+  const [manualReached, setManualReached] = useState([]); // pin indexes the operator ticked off by hand
 
   // Wizard: IDLE -> DRAWING_BOUNDARY -> (PLACING_PINS ->) launch.
   // intent 'FIELD' = adding/finishing a field (save, or save and start a mission).
@@ -251,18 +246,34 @@ export default function FieldMapView() {
   const activeBoundary = wizardStep !== 'IDLE' ? tempBoundary : (viewField?.boundary || EMPTY);
   const displayedWaypoints = wizardStep !== 'IDLE' ? tempWaypoints : (currentSelected?.waypoints || EMPTY);
 
-  // The sensor listener below is re-created only when the mission/boundary
-  // changes, so it reads the current navigation target through this ref
-  // instead of a stale closure. Auto-advance is skipped while pins are being
-  // edited (wizard open), since the card then shows draft pins, not the mission's.
-  const navTargetRef = useRef({ pins: EMPTY, idx: 0, live: false });
+  // Which pins count as reached. Derived from the mission's recorded samples —
+  // any pin, in any order (see utils/pinProgress.js) — plus any the operator
+  // ticked off by hand with "Reached". Reading the samples, instead of hooking
+  // the sensor listener, keeps navigation progress completely separate from
+  // recording: samples are saved wherever the rover is, near a pin or not.
+  const missionSamples = useMemo(
+    () => liveSamples.filter((s) => currentSelected && String(s.mission_id) === String(currentSelected.id)),
+    [liveSamples, currentSelected?.id]
+  );
+  const { reached: autoReached, last: lastAutoReached } = useMemo(
+    () =>
+      wizardStep === 'IDLE'
+        ? computeReachedPins(missionSamples, displayedWaypoints)
+        : { reached: new Set(), last: null }, // draft pins have no recorded samples
+    [missionSamples, displayedWaypoints, wizardStep]
+  );
+  const reachedPinIdxs = useMemo(
+    () => new Set([...autoReached, ...manualReached]),
+    [autoReached, manualReached]
+  );
+  // The pin to head for: the first one not yet reached.
+  const currentWaypointIdx = firstPendingPin(displayedWaypoints.length, reachedPinIdxs);
+
+  // Hand-ticked pins are indexes into whichever pin list is on screen, so drop
+  // them when switching between a mission's pins and the draft pins.
   useEffect(() => {
-    navTargetRef.current = {
-      pins: displayedWaypoints,
-      idx: currentWaypointIdx,
-      live: wizardStep === 'IDLE'
-    };
-  }, [displayedWaypoints, currentWaypointIdx, wizardStep]);
+    setManualReached([]);
+  }, [wizardStep]);
 
   // Frame the map on the field (or, for legacy fields with no boundary, on its samples).
   // Memoized so the map only re-fits when the selection changes, not on every render.
@@ -411,8 +422,7 @@ export default function FieldMapView() {
   const selectMission = (id) => {
     setSelectedMissionId(id);
     setCompareToId(null);
-    setCurrentWaypointIdx(0);
-    setLastAutoReached(null);
+    setManualReached([]);
     sampleCapturedForInsertionRef.current = false;
     setMissionState('IDLE'); // never keep logging into a different mission by accident
     setWizardStep('IDLE');
@@ -516,19 +526,6 @@ export default function FieldMapView() {
       // Mark this insertion as captured only after the database save succeeds.
       // If saving fails, later telemetry from the same insertion may retry.
       sampleCapturedForInsertionRef.current = true;
-
-      // Auto-advance: data recorded within PIN_REACH_RADIUS_M of the current
-      // target pin counts as reaching it. Distance is measured from where the
-      // sample was actually taken (the rover's GPS fix at probe insertion).
-      const { pins, idx, live } = navTargetRef.current;
-      const targetPin = live ? pins[idx] : null;
-      if (targetPin) {
-        const distanceM = calculateDistanceMeters(currentCoord, targetPin);
-        if (distanceM <= PIN_REACH_RADIUS_M) {
-          setCurrentWaypointIdx((prev) => (prev === idx ? idx + 1 : prev));
-          setLastAutoReached({ pin: idx + 1, distanceM });
-        }
-      }
     });
 
     return () => {
@@ -721,8 +718,7 @@ export default function FieldMapView() {
     setCompareToId(null);
     setLiveSamples([]);
     sampleCapturedForInsertionRef.current = false;
-    setCurrentWaypointIdx(0);
-    setLastAutoReached(null);
+    setManualReached([]);
     resetWizard();
     setMissionState('IN_PROGRESS'); // Auto-start telemetry logging
     setNotification({ type: 'success', message: `Mission "${created.name}" launched!` });
@@ -763,18 +759,11 @@ export default function FieldMapView() {
   };
 
   const handleAdvanceWaypoint = () => {
-    const activePins = wizardStep !== 'IDLE' ? tempWaypoints : currentSelected?.waypoints || [];
-
-    if (activePins.length === 0) return;
-
-    // Advancing changes only the navigation target. Rover position must come
-    // from live GPS telemetry and should never be faked by a waypoint click.
-    setLastAutoReached(null);
-    if (currentWaypointIdx < activePins.length - 1) {
-      setCurrentWaypointIdx((prev) => prev + 1);
-    } else {
-      setCurrentWaypointIdx(activePins.length);
-    }
+    // Marks the current target as reached by hand. This changes only the
+    // navigation progress. Rover position must come from live GPS telemetry
+    // and should never be faked by a waypoint click.
+    if (currentWaypointIdx >= displayedWaypoints.length) return;
+    setManualReached((prev) => (prev.includes(currentWaypointIdx) ? prev : [...prev, currentWaypointIdx]));
   };
 
   // ---------- Field management (rename / delete) ----------
@@ -1321,12 +1310,13 @@ export default function FieldMapView() {
             </div>
           </div>
 
-          <div style={{ flexShrink: 0 }}>
+          <div style={{ flex: 1, minHeight: '190px' }}>
             <OperatorNavGuide
               roverPos={roverPos}
               roverHeading={roverHeading}
               waypoints={displayedWaypoints}
               currentWaypointIdx={currentWaypointIdx}
+              reachedWaypointIdxs={[...reachedPinIdxs]}
               onAdvanceWaypoint={handleAdvanceWaypoint}
               reachRadiusM={PIN_REACH_RADIUS_M}
               lastAutoReached={lastAutoReached}

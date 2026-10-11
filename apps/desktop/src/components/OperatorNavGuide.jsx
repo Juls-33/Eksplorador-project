@@ -8,9 +8,11 @@ export default function OperatorNavGuide({
   waypoints = [],
   currentWaypointIdx = 0,
   onAdvanceWaypoint = null,
-  reachRadiusM = 5, // a recorded sample this close to the target pin counts as reaching it
-  lastAutoReached = null // { pin, distanceM } for the pin the parent advanced automatically
+  reachedWaypointIdxs = null, // pins already reached, in any order; falls back to "everything before the target"
+  reachRadiusM = 5, // a recorded sample this close to a pin counts as reaching it
+  lastAutoReached = null // { pin, distanceM } for the pin most recently marked reached by a sample
 }) {
+  const reachedSet = reachedWaypointIdxs ? new Set(reachedWaypointIdxs) : null;
   const activeTarget = waypoints[currentWaypointIdx];
   const distanceToTarget = activeTarget ? calculateDistanceMeters(roverPos, activeTarget) : 0;
   const requiredBearing = activeTarget ? calculateBearing(roverPos, activeTarget) : 0;
@@ -127,7 +129,7 @@ export default function OperatorNavGuide({
               </div>
             ) : activeTarget ? (
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                Moves to the next pin automatically once a sample is recorded within {reachRadiusM} m of it.
+                Any pin is marked reached when a sample is recorded within {reachRadiusM} m of it, in any order.
               </div>
             ) : null}
 
@@ -135,7 +137,9 @@ export default function OperatorNavGuide({
             <div style={{ maxHeight: '110px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
               {waypoints.map((pt, idx) => {
                 const isCurrent = idx === currentWaypointIdx;
-                const isPassed = idx < currentWaypointIdx;
+                const isPassed = reachedSet ? reachedSet.has(idx) : idx < currentWaypointIdx;
+                // With out-of-order progress, a later pin can be in range before the target is.
+                const rowInRange = !isPassed && calculateDistanceMeters(roverPos, pt) <= reachRadiusM;
                 const segDist = idx === 0 ? calculateDistanceMeters(roverPos, pt) : calculateDistanceMeters(waypoints[idx - 1], pt);
                 const segBearing = idx === 0 ? calculateBearing(roverPos, pt) : calculateBearing(waypoints[idx - 1], pt);
 
@@ -170,6 +174,11 @@ export default function OperatorNavGuide({
                         {idx + 1}
                       </span>
                       <span>Pin {idx + 1}</span>
+                      {rowInRange && (
+                        <span style={{ fontSize: '0.62rem', fontWeight: 800, background: '#dcfce7', color: '#166534', padding: '0 5px', borderRadius: '999px' }}>
+                          IN RANGE
+                        </span>
+                      )}
                     </div>
 
                     <div style={{ display: 'flex', gap: '10px', fontWeight: 600 }}>
