@@ -1,5 +1,5 @@
 import { appDate } from '../utils/time';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import {
   Play,
@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
-import { isPointInPolygon, calculatePolygonArea, calculateDistance } from '../utils/geo';
+import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
 import {
   saveSoilSample,
   fetchMissionSamples,
@@ -60,6 +60,12 @@ const fmt = (value, decimals = 1) => {
   return Number.isFinite(n) ? n.toFixed(decimals) : '--';
 };
 
+const validNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
 const TREND_STYLE = {
   up: { symbol: '▲', color: '#0369a1' },
   down: { symbol: '▼', color: '#c2410c' },
@@ -84,7 +90,10 @@ const layerConfigurations = {
       { color: '#ea580c', label: '40 - 54', desc: 'Low Nutrient' },
       { color: '#dc2626', label: '< 40', desc: 'Critical / Degraded' }
     ],
-    extractValue: (s) => (s.overall || 50) / 100
+    extractValue: (s) => {
+      const value = validNumber(s.overall);
+      return value === null ? null : Math.min(1, Math.max(0, value / 100));
+    }
   },
   moisture: {
     label: 'Soil Moisture',
@@ -101,7 +110,10 @@ const layerConfigurations = {
       { color: '#f97316', label: '25% - 39%', desc: 'Low / Drying' },
       { color: '#ef4444', label: '< 25%', desc: 'Deficient / Very Dry' }
     ],
-    extractValue: (s) => Math.min(1.0, Math.max(0.1, ((s.moisture || 0) - 20) / 50))
+    extractValue: (s) => {
+      const value = validNumber(s.moisture);
+      return value === null ? null : Math.min(1.0, Math.max(0.1, (value - 20) / 50));
+    }
   },
   ph: {
     label: 'Soil pH Level',
@@ -118,7 +130,10 @@ const layerConfigurations = {
       { color: '#eab308', label: '5.8 - 6.2', desc: 'Slightly Acidic' },
       { color: '#dc2626', label: '< 5.5', desc: 'Strongly Acidic' }
     ],
-    extractValue: (s) => Math.min(1.0, Math.max(0.1, ((s.ph || 7) - 4.5) / 4.0))
+    extractValue: (s) => {
+      const value = validNumber(s.ph);
+      return value === null ? null : Math.min(1.0, Math.max(0.1, (value - 4.5) / 4.0));
+    }
   },
   npk: {
     label: 'NPK Compound Ratio',
@@ -135,7 +150,15 @@ const layerConfigurations = {
       { color: '#d97706', label: 'Low', desc: 'Nutrient Depleted' },
       { color: '#dc2626', label: 'Deficient', desc: 'Severe Shortage' }
     ],
-    extractValue: (s) => Math.min(1.0, Math.max(0.1, ((s.n || 0) + (s.p || 0) + (s.k || 0)) / 160))
+    extractValue: (s) => {
+      const n = validNumber(s.n);
+      const p = validNumber(s.p);
+      const k = validNumber(s.k);
+
+      if (n === null || p === null || k === null) return null;
+
+      return Math.min(1.0, Math.max(0.1, (n + p + k) / 160));
+    }
   }
 };
 
@@ -152,11 +175,13 @@ export default function FieldMapView() {
   const [liveSamples, setLiveSamples] = useState([]);
   const [baselineSamples, setBaselineSamples] = useState([]);
   const [compareToId, setCompareToId] = useState(null); // null = previous mission of the same field
-  const [lastSampleCoord, setLastSampleCoord] = useState(null);
+  // Prevent continuous telemetry from saving the same probe insertion repeatedly.
+  // A new sample becomes eligible only after the probe is lifted and inserted again.
+  const sampleCapturedForInsertionRef = useRef(false);
 
   // Live Rover Telemetry
   const [roverPos, setRoverPos] = useState([14.6094, 120.9896]);
-  const [roverHeading] = useState(45);
+  const [roverHeading, setRoverHeading] = useState(0);
   const [currentWaypointIdx, setCurrentWaypointIdx] = useState(0);
 
   // Wizard: IDLE -> DRAWING_BOUNDARY -> (PLACING_PINS ->) launch.
@@ -230,7 +255,17 @@ export default function FieldMapView() {
   }, [wizardStep, activeBoundary, liveSamples]);
 
   const heatPointsForLayer = useMemo(
-    () => liveSamples.map((s) => [s.lat || s.coords?.[0], s.lng || s.coords?.[1], activeConfig.extractValue(s)]),
+    () =>
+      liveSamples
+        .map((s) => {
+          const lat = validNumber(s.lat ?? s.coords?.[0]);
+          const lng = validNumber(s.lng ?? s.coords?.[1]);
+          const value = activeConfig.extractValue(s);
+
+          if (lat === null || lng === null || value === null) return null;
+          return [lat, lng, value];
+        })
+        .filter(Boolean),
     [liveSamples, activeConfig]
   );
 
@@ -358,7 +393,7 @@ export default function FieldMapView() {
     setSelectedMissionId(id);
     setCompareToId(null);
     setCurrentWaypointIdx(0);
-    setLastSampleCoord(null);
+    sampleCapturedForInsertionRef.current = false;
     setMissionState('IDLE'); // never keep logging into a different mission by accident
     setWizardStep('IDLE');
   };
@@ -377,61 +412,96 @@ export default function FieldMapView() {
       const data = event.payload;
       if (data.error) return;
 
-      // Always update latest real-time readings for the telemetry monitor card
+      // Always update latest real-time readings for the telemetry monitor card.
       setLatestSensorData(data);
 
-      // Only save while logging is active on an in-progress mission
+      const lat = validNumber(data.lat);
+      const lng = validNumber(data.lng);
+
+      // Use live heading when the telemetry payload provides one. Different
+      // backends commonly expose this as heading, course, bearing, or gpsHeading.
+      // Keep the last known heading if no heading value is present in this packet.
+      const heading = validNumber(
+        data.heading ?? data.course ?? data.bearing ?? data.gpsHeading
+      );
+
+      if (heading !== null) {
+        // Normalize any negative or >360-degree value into the 0-359.999 range.
+        setRoverHeading(((heading % 360) + 360) % 360);
+      }
+
+      // Rover position is navigation state, not sample state. Keep the map and
+      // navigation guide updated whenever valid GPS coordinates are available,
+      // even if logging is paused or the soil probe is lifted.
+      const hasValidGps =
+        lat !== null &&
+        lng !== null &&
+        lat >= -90 &&
+        lat <= 90 &&
+        lng >= -180 &&
+        lng <= 180 &&
+        !(lat === 0 && lng === 0);
+
+      if (hasValidGps) {
+        setRoverPos([lat, lng]);
+      }
+
+      // Saving soil samples is separate from updating rover position.
       if (missionState !== 'IN_PROGRESS' || !currentSelected || currentSelected.status !== 'in_progress') return;
 
-      const hasFix = data.lat && (data.lat !== 0 || data.lng !== 0);
       const isProbeInserted = data.soilValid === 1;
 
-      if (hasFix && isProbeInserted) {
-        const currentCoord = [data.lat, data.lng];
-
-        if (activeBoundary.length >= 3 && !isPointInPolygon(currentCoord, activeBoundary)) {
-          return;
-        }
-
-        if (lastSampleCoord) {
-          const distance = calculateDistance(lastSampleCoord, currentCoord);
-          if (distance < 5) return;
-        }
-
-        const newSample = {
-          mission_id: String(currentSelected.id),
-          plot: currentSelected.fieldName,
-          coords: currentCoord,
-          lat: data.lat,
-          lng: data.lng,
-          moisture: data.moisture,
-          ph: data.ph,
-          ec: data.ec,
-          n: data.nitrogen,
-          p: data.phosphorus,
-          k: data.potassium,
-          overall: Math.round((data.moisture + data.ph * 10) / 2),
-          timestamp: new Date().toISOString()
-        };
-
-        const saved = await saveSoilSample(newSample);
-        if (!saved) {
-          setNotification({ type: 'error', message: 'A sample could not be saved to the database.' });
-          return;
-        }
-
-        setLiveSamples((prev) => [...prev, newSample]);
-        setFieldSamples((prev) => [...prev, newSample]); // keep the field-wide average current while logging
-        setMissions((prev) => prev.map((m) => (m.id === currentSelected.id ? { ...m, sampleCount: m.sampleCount + 1 } : m)));
-        setLastSampleCoord(currentCoord);
-        setRoverPos(currentCoord);
+      // Treat one physical probe insertion as one sampling action. While the
+      // probe remains in the soil, incoming telemetry may update continuously,
+      // but it must not create duplicate database records. Lifting the probe
+      // arms the next insertion so the same waypoint can be sampled again.
+      if (!isProbeInserted) {
+        sampleCapturedForInsertionRef.current = false;
+        return;
       }
+
+      if (!hasValidGps || sampleCapturedForInsertionRef.current) return;
+
+      const currentCoord = [lat, lng];
+
+      if (activeBoundary.length >= 3 && !isPointInPolygon(currentCoord, activeBoundary)) {
+        return;
+      }
+
+      const newSample = {
+        mission_id: String(currentSelected.id),
+        plot: currentSelected.fieldName,
+        coords: currentCoord,
+        lat,
+        lng,
+        moisture: data.moisture,
+        ph: data.ph,
+        ec: data.ec,
+        n: data.nitrogen,
+        p: data.phosphorus,
+        k: data.potassium,
+        overall: Math.round((data.moisture + data.ph * 10) / 2),
+        timestamp: new Date().toISOString()
+      };
+
+      const saved = await saveSoilSample(newSample);
+      if (!saved) {
+        setNotification({ type: 'error', message: 'A sample could not be saved to the database.' });
+        return;
+      }
+
+      setLiveSamples((prev) => [...prev, newSample]);
+      setFieldSamples((prev) => [...prev, newSample]); // keep the field-wide average current while logging
+      setMissions((prev) => prev.map((m) => (m.id === currentSelected.id ? { ...m, sampleCount: m.sampleCount + 1 } : m)));
+      // Mark this insertion as captured only after the database save succeeds.
+      // If saving fails, later telemetry from the same insertion may retry.
+      sampleCapturedForInsertionRef.current = true;
     });
 
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [missionState, currentSelected, activeBoundary, lastSampleCoord]);
+  }, [missionState, currentSelected, activeBoundary]);
 
   // ---------- Wizard helpers ----------
   const resetWizard = () => {
@@ -617,7 +687,7 @@ export default function FieldMapView() {
     setSelectedMissionId(created.id);
     setCompareToId(null);
     setLiveSamples([]);
-    setLastSampleCoord(null);
+    sampleCapturedForInsertionRef.current = false;
     setCurrentWaypointIdx(0);
     resetWizard();
     setMissionState('IN_PROGRESS'); // Auto-start telemetry logging
@@ -660,11 +730,14 @@ export default function FieldMapView() {
 
   const handleAdvanceWaypoint = () => {
     const activePins = wizardStep !== 'IDLE' ? tempWaypoints : currentSelected?.waypoints || [];
+
+    if (activePins.length === 0) return;
+
+    // Advancing changes only the navigation target. Rover position must come
+    // from live GPS telemetry and should never be faked by a waypoint click.
     if (currentWaypointIdx < activePins.length - 1) {
-      setRoverPos(activePins[currentWaypointIdx]);
       setCurrentWaypointIdx((prev) => prev + 1);
     } else {
-      setRoverPos(activePins[currentWaypointIdx]);
       setCurrentWaypointIdx(activePins.length);
     }
   };
