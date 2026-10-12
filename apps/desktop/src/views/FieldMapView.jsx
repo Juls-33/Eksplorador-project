@@ -184,6 +184,7 @@ export default function FieldMapView() {
   const [roverPos, setRoverPos] = useState([14.6094, 120.9896]);
   const [roverHeading, setRoverHeading] = useState(0);
   const [manualReached, setManualReached] = useState([]); // pin indexes the operator ticked off by hand
+  const [showSamplePins, setShowSamplePins] = useState(false); // numbered pins for every recorded sample
 
   // Wizard: IDLE -> DRAWING_BOUNDARY -> (PLACING_PINS ->) launch.
   // intent 'FIELD' = adding/finishing a field (save, or save and start a mission).
@@ -255,6 +256,28 @@ export default function FieldMapView() {
     () => liveSamples.filter((s) => currentSelected && String(s.mission_id) === String(currentSelected.id)),
     [liveSamples, currentSelected?.id]
   );
+
+  // Every recorded sample gets a number: its position in recording order
+  // (1 = the first sample of the mission). The same number is shown on the map
+  // pin and in the samples table, so a table row can be matched to its spot in
+  // the field. The number never changes as newer samples arrive.
+  const numberedSamples = useMemo(
+    () => missionSamples.map((sample, index) => ({ sample, number: index + 1 })),
+    [missionSamples]
+  );
+
+  // Kept as a stable array (EMPTY when hidden) so the map only rebuilds its
+  // markers when the samples or the toggle actually change.
+  const samplePins = useMemo(() => {
+    if (!showSamplePins || wizardStep !== 'IDLE') return EMPTY;
+    return numberedSamples
+      .map(({ sample, number }) => {
+        const lat = validNumber(sample.lat ?? sample.coords?.[0]);
+        const lng = validNumber(sample.lng ?? sample.coords?.[1]);
+        return lat === null || lng === null ? null : { lat, lng, label: number };
+      })
+      .filter(Boolean);
+  }, [numberedSamples, showSamplePins, wizardStep]);
   const { reached: autoReached, last: lastAutoReached } = useMemo(
     () =>
       wizardStep === 'IDLE'
@@ -1103,6 +1126,7 @@ export default function FieldMapView() {
               boundary={activeBoundary}
               waypoints={displayedWaypoints}
               heatPoints={heatPointsForLayer}
+              labeledPoints={samplePins}
               focusPoints={focusPoints}
               roverPos={roverPos}
               onMapClick={handleMapClick}
@@ -1483,25 +1507,61 @@ export default function FieldMapView() {
           {/* Raw samples of the selected mission */}
           {currentSelected && wizardStep === 'IDLE' && (
             <div className="card" style={{ flexShrink: 0 }}>
-              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                 <span className="card-title">Mission Samples</span>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{liveSamples.length} samples</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{numberedSamples.length} samples</span>
+                  <button
+                    type="button"
+                    className="badge"
+                    onClick={() => setShowSamplePins((prev) => !prev)}
+                    disabled={numberedSamples.length === 0}
+                    aria-pressed={showSamplePins}
+                    title="Show every recorded sample on the map as a numbered pin"
+                    style={{
+                      cursor: numberedSamples.length === 0 ? 'default' : 'pointer',
+                      background: showSamplePins ? 'var(--primary-green)' : undefined,
+                      color: showSamplePins ? '#fff' : undefined
+                    }}
+                  >
+                    <MapPin size={13} /> {showSamplePins ? 'Hide pins' : 'Show pins'}
+                  </button>
+                </div>
               </div>
               <div style={{ maxHeight: '240px', overflow: 'auto', padding: '0 12px 10px' }}>
-                {liveSamples.length === 0 ? (
+                {numberedSamples.length === 0 ? (
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', paddingTop: '10px' }}>No samples recorded for this mission yet.</p>
                 ) : (
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
                     <thead>
                       <tr style={{ textAlign: 'left', color: 'var(--text-muted)', position: 'sticky', top: 0, background: '#fff' }}>
-                        {['Time', 'Moist', 'pH', 'EC', 'N', 'P', 'K'].map((h) => (
+                        {['#', 'Time', 'Moist', 'pH', 'EC', 'N', 'P', 'K'].map((h) => (
                           <th key={h} style={{ padding: '6px 6px 6px 0', fontWeight: 600 }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {[...liveSamples].reverse().slice(0, 100).map((s, i) => (
-                        <tr key={s.id ?? i} style={{ borderTop: '1px solid var(--card-border)' }}>
+                      {[...numberedSamples].reverse().slice(0, 100).map(({ sample: s, number }) => (
+                        <tr key={s.id ?? number} style={{ borderTop: '1px solid var(--card-border)' }}>
+                          <td style={{ padding: '4px 6px 4px 0' }}>
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                minWidth: '20px',
+                                height: '20px',
+                                padding: '0 5px',
+                                borderRadius: '999px',
+                                background: '#1F5132',
+                                color: '#fff',
+                                fontSize: '0.65rem',
+                                fontWeight: 800
+                              }}
+                            >
+                              {number}
+                            </span>
+                          </td>
                           <td style={{ padding: '4px 6px 4px 0' }}>{String(s.timestamp || '').replace('T', ' ').slice(5, 16)}</td>
                           <td style={{ padding: '4px 6px 4px 0' }}>{fmt(s.moisture, 1)}</td>
                           <td style={{ padding: '4px 6px 4px 0' }}>{fmt(s.ph, 2)}</td>
@@ -1514,8 +1574,8 @@ export default function FieldMapView() {
                     </tbody>
                   </table>
                 )}
-                {liveSamples.length > 100 && (
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.72rem', paddingTop: '6px' }}>Showing the latest 100 of {liveSamples.length}.</p>
+                {numberedSamples.length > 100 && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.72rem', paddingTop: '6px' }}>Showing the latest 100 of {numberedSamples.length}. Older samples keep their numbers on the map.</p>
                 )}
               </div>
             </div>
