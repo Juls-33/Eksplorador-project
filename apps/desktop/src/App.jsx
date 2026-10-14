@@ -35,6 +35,7 @@ import ReportsView from './views/ReportsView';
 import TileManagerView from './views/TileManagerView';
 import { useDownloadPercent } from './hooks/useDownloadJob';
 import { calculateDistanceMeters } from './utils/geo';
+import { MOISTURE_LAYER, PH_LAYER } from './utils/layerBands';
 
 import {
   initDatabase,
@@ -227,25 +228,15 @@ const normalizeHeatValue = (value, min, max) => {
 };
 
 const LAYER_CONFIG = {
+  // Moisture and pH share one band definition with Field Map
+  // (utils/layerBands.js), so a reading has the same color on both screens.
   moisture: {
-    extract: row =>
-      normalizeHeatValue(row.moisture, 20, 70),
-    gradient: {
-      0.2: '#ef4444',
-      0.4: '#f97316',
-      0.7: '#22c55e',
-      1.0: '#0284c7'
-    }
+    extract: row => MOISTURE_LAYER.intensity(row.moisture),
+    gradient: MOISTURE_LAYER.gradient
   },
   ph: {
-    extract: row =>
-      normalizeHeatValue(row.ph, 4.5, 8.5),
-    gradient: {
-      0.2: '#dc2626',
-      0.5: '#eab308',
-      0.8: '#16a34a',
-      1.0: '#7c3aed'
-    }
+    extract: row => PH_LAYER.intensity(row.ph),
+    gradient: PH_LAYER.gradient
   },
   ec: {
     extract: row =>

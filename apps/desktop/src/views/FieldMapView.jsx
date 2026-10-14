@@ -22,6 +22,7 @@ import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
 import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
 import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
+import { MOISTURE_LAYER, PH_LAYER } from '../utils/layerBands';
 import {
   saveSoilSample,
   fetchMissionSamples,
@@ -96,45 +97,21 @@ const layerConfigurations = {
       return value === null ? null : Math.min(1, Math.max(0, value / 100));
     }
   },
+  // Moisture and pH: legend, intensity and gradient all come from one band
+  // definition (utils/layerBands.js), shared with the dashboard map.
   moisture: {
     label: 'Soil Moisture',
     unit: '%',
-    gradient: {
-      0.2: '#ef4444',
-      0.4: '#f97316',
-      0.7: '#22c55e',
-      1.0: '#0284c7'
-    },
-    ranges: [
-      { color: '#0284c7', label: '> 60%', desc: 'Saturated / Wet' },
-      { color: '#22c55e', label: '40% - 55%', desc: 'Optimal Moisture' },
-      { color: '#f97316', label: '25% - 39%', desc: 'Low / Drying' },
-      { color: '#ef4444', label: '< 25%', desc: 'Deficient / Very Dry' }
-    ],
-    extractValue: (s) => {
-      const value = validNumber(s.moisture);
-      return value === null ? null : Math.min(1.0, Math.max(0.1, (value - 20) / 50));
-    }
+    gradient: MOISTURE_LAYER.gradient,
+    ranges: MOISTURE_LAYER.legend,
+    extractValue: (s) => MOISTURE_LAYER.intensity(validNumber(s.moisture))
   },
   ph: {
     label: 'Soil pH Level',
     unit: 'pH',
-    gradient: {
-      0.2: '#dc2626',
-      0.5: '#eab308',
-      0.8: '#16a34a',
-      1.0: '#7c3aed'
-    },
-    ranges: [
-      { color: '#7c3aed', label: '> 7.5', desc: 'Alkaline' },
-      { color: '#16a34a', label: '6.3 - 7.0', desc: 'Optimal Neutral' },
-      { color: '#eab308', label: '5.8 - 6.2', desc: 'Slightly Acidic' },
-      { color: '#dc2626', label: '< 5.5', desc: 'Strongly Acidic' }
-    ],
-    extractValue: (s) => {
-      const value = validNumber(s.ph);
-      return value === null ? null : Math.min(1.0, Math.max(0.1, (value - 4.5) / 4.0));
-    }
+    gradient: PH_LAYER.gradient,
+    ranges: PH_LAYER.legend,
+    extractValue: (s) => PH_LAYER.intensity(validNumber(s.ph))
   },
   npk: {
     label: 'NPK Compound Ratio',
