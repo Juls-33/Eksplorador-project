@@ -1311,7 +1311,7 @@ export default function FieldMapView() {
             </div>
           </div>
 
-          <div style={{ flex: 1, minHeight: '190px' }}>
+          <div style={{ flexShrink: 0 }}>
             <OperatorNavGuide
               roverPos={roverPos}
               roverHeading={roverHeading}
