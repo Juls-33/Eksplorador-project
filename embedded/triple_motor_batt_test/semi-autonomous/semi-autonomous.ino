@@ -1,10 +1,9 @@
 // =================================================================
-// ARDUINO MEGA 2560 - FULL ROVER, ACTUATOR & SEMI-AUTONOMOUS FSM
-// CH1: Steer | CH2: Throttle | CH4: Actuator | CH5: Arm | CH6: Mode
+// ARDUINO MEGA 2560 - DIAGNOSTIC & TELEMETRY FIRMWARE
+// Monitor at 115200 baud to verify Receiver, Failsafes, and Drivers
 // =================================================================
 
 // ---------------------- PIN ASSIGNMENTS --------------------------
-// Receiver Hardware Interrupt Pins
 const uint8_t PIN_CH1_STEER    = 18; // INT5 (Right Stick X)
 const uint8_t PIN_CH2_THROTTLE = 19; // INT4 (Right Stick Y)
 const uint8_t PIN_CH4_ACTUATOR = 20; // INT3 (Left Stick X)
@@ -32,59 +31,37 @@ const uint16_t RC_MIN          = 1000;
 const uint16_t RC_MID          = 1500;
 const uint16_t RC_MAX          = 2000;
 const uint16_t RC_DEADZONE     = 45;
-const uint32_t SIGNAL_TIMEOUT  = 200; // ms
+const uint32_t SIGNAL_TIMEOUT  = 250; // ms threshold for link loss
 
-const unsigned int OBSTACLE_DISTANCE_CM = 25; // Safe trigger distance
-const unsigned long PING_INTERVAL_MS    = 40; // Sonar check interval
-
-// Autonomous Speeds (0 to 255)
-const uint8_t AUTO_DRIVE_SPEED    = 160; 
-const uint8_t AUTO_TURN_SPEED     = 150;
-const uint8_t AUTO_ACTUATOR_SPEED = 200;
+const unsigned int OBSTACLE_DISTANCE_CM = 25;
+const unsigned long PING_INTERVAL_MS    = 40;
 
 // ----------------- VOLATILE INTERRUPT VARIABLES ------------------
-volatile uint32_t ch1_start = 0, ch1_pulse = 1500;
-volatile uint32_t ch2_start = 0, ch2_pulse = 1500;
-volatile uint32_t ch4_start = 0, ch4_pulse = 1500;
-volatile uint32_t ch5_start = 0, ch5_pulse = 1000;
-volatile uint32_t ch6_start = 0, ch6_pulse = 1000;
+volatile uint32_t ch1_start = 0, ch1_pulse = 0;
+volatile uint32_t ch2_start = 0, ch2_pulse = 0;
+volatile uint32_t ch4_start = 0, ch4_pulse = 0;
+volatile uint32_t ch5_start = 0, ch5_pulse = 0;
+volatile uint32_t ch6_start = 0, ch6_pulse = 0;
 volatile uint32_t last_rc_time = 0;
 
-// -------------------- SYSTEM STATES ------------------------------
 enum SystemState {
+  STATE_NO_SIGNAL,
   STATE_DISARMED,
   STATE_MANUAL,
   STATE_HOLD,
   STATE_SEMI_AUTO
 };
 
-SystemState currentState = STATE_DISARMED;
-SystemState previousState = STATE_DISARMED;
-
-// Autonomous Step Sequence
-enum AutoStep {
-  AUTO_IDLE,
-  AUTO_MOVE_FORWARD_1,
-  AUTO_ACTUATOR_DOWN_1,
-  AUTO_SOIL_TEST_1,
-  AUTO_ACTUATOR_UP_1,
-  AUTO_TURN_LEFT,
-  AUTO_MOVE_FORWARD_2,
-  AUTO_ACTUATOR_DOWN_2,
-  AUTO_SOIL_TEST_2,
-  AUTO_ACTUATOR_UP_2,
-  AUTO_COMPLETE
-};
-
-AutoStep currentAutoStep = AUTO_IDLE;
-
-// Autonomous Timing & State Variables
-unsigned long autoStepStartTime = 0;
-unsigned long autoElapsedBeforePause = 0;
-bool isObstaclePaused = false;
+SystemState currentState = STATE_NO_SIGNAL;
 
 unsigned int currentObstacleDist = 999;
 unsigned long lastPingTime       = 0;
+unsigned long lastTelemetryTime  = 0;
+
+// Variables tracked for debug printing
+int debugLeftMotorPwm  = 0;
+int debugRightMotorPwm = 0;
+int debugActuatorPwm   = 0;
 
 // Forward Declarations
 void setMotorSpeed(uint8_t rpwmPin, uint8_t lpwmPin, int speed);
@@ -94,11 +71,10 @@ void stopAllOutputs();
 void updateUltrasonicDistance();
 void processManualDrive(uint16_t throttleRaw, uint16_t steerRaw);
 void processManualActuator(uint16_t actRaw);
-void runSemiAutonomousRoutine();
-void resetAutonomousRoutine();
+void printDebugTelemetry(uint16_t ch1, uint16_t ch2, uint16_t ch4, uint16_t ch5, uint16_t ch6, uint32_t lastSig);
 
 // =================================================================
-// INTERRUPT SERVICE ROUTINES
+// INTERRUPT SERVICE ROUTINES (ISRs)
 // =================================================================
 void isrCh1() {
   if (digitalRead(PIN_CH1_STEER) == HIGH) {
@@ -150,7 +126,9 @@ void isrCh6() {
 // =================================================================
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(115200); // Ready for ESP32
+  while (!Serial && millis() < 2000); // Wait up to 2s for Serial terminal
+
+  Serial.println(F("\n--- MEGA 2560 DIAGNOSTIC INITIALIZATION ---"));
 
   pinMode(PIN_L_RPWM, OUTPUT);
   pinMode(PIN_L_LPWM, OUTPUT);
@@ -177,7 +155,8 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_CH5_ARM), isrCh5, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_CH6_MODE), isrCh6, CHANGE);
 
-  Serial.println(F("Mega 2560 Ready. CH5 to Arm. CH6 Position 3 for Semi-Auto."));
+  Serial.println(F("Hardware interrupts attached on pins 18, 19, 20, 21, and 2."));
+  Serial.println(F("Listening for ELRS PWM pulses...\n"));
 }
 
 // =================================================================
@@ -187,6 +166,7 @@ void loop() {
   uint16_t steer, throttle, actuator, armPulse, modePulse;
   uint32_t lastSignal;
 
+  // Snapshot atomic values from ISRs
   noInterrupts();
   steer      = ch1_pulse;
   throttle   = ch2_pulse;
@@ -198,44 +178,28 @@ void loop() {
 
   updateUltrasonicDistance();
 
-  // 1. Loss of Signal Protection
-  if (millis() - lastSignal > SIGNAL_TIMEOUT || throttle < 800 || steer < 800) {
+  // 1. Loss of Signal Verification
+  if (lastSignal == 0 || (millis() - lastSignal > SIGNAL_TIMEOUT)) {
     stopAllOutputs();
-    resetAutonomousRoutine();
-    currentState = STATE_DISARMED;
-    return;
+    currentState = STATE_NO_SIGNAL;
   }
-
-  // 2. Kill Switch (CH5: < 1500us = Disarmed, > 1500us = Armed)
-  if (armPulse < 1500) {
+  // 2. Kill Switch (CH5 Armed check)
+  else if (armPulse < 1500) {
     stopAllOutputs();
-    resetAutonomousRoutine();
     currentState = STATE_DISARMED;
-    return;
+  }
+  // 3. Operational Mode
+  else {
+    if (modePulse < 1300) {
+      currentState = STATE_MANUAL;
+    } else if (modePulse <= 1700) {
+      currentState = STATE_HOLD;
+    } else {
+      currentState = STATE_SEMI_AUTO;
+    }
   }
 
-  // 3. Operational Mode (CH6 3-Position Switch)
-  if (modePulse < 1300) {
-    currentState = STATE_MANUAL;
-  } else if (modePulse <= 1700) {
-    currentState = STATE_HOLD;
-  } else {
-    currentState = STATE_SEMI_AUTO;
-  }
-
-  // Detect state transitions to cleanly enter/exit autonomous mode
-  if (previousState != STATE_SEMI_AUTO && currentState == STATE_SEMI_AUTO) {
-    resetAutonomousRoutine();
-    currentAutoStep = AUTO_MOVE_FORWARD_1;
-    autoStepStartTime = millis();
-    Serial.println(F("[FSM] Semi-Autonomous routine started."));
-  } else if (previousState == STATE_SEMI_AUTO && currentState != STATE_SEMI_AUTO) {
-    resetAutonomousRoutine();
-    Serial.println(F("[FSM] Semi-Autonomous routine aborted by user."));
-  }
-  previousState = currentState;
-
-  // 4. Execution Dispatcher
+  // 4. Execution
   switch (currentState) {
     case STATE_MANUAL:
       processManualDrive(throttle, steer);
@@ -243,202 +207,64 @@ void loop() {
       break;
 
     case STATE_HOLD:
-      stopAllOutputs();
-      break;
-
     case STATE_SEMI_AUTO:
-      runSemiAutonomousRoutine();
-      break;
-
     case STATE_DISARMED:
+    case STATE_NO_SIGNAL:
     default:
       stopAllOutputs();
       break;
   }
 
-  delay(10); // 100 Hz refresh
-}
-
-// =================================================================
-// SEMI-AUTONOMOUS FINITE STATE MACHINE (FSM)
-// =================================================================
-void resetAutonomousRoutine() {
-  currentAutoStep = AUTO_IDLE;
-  autoStepStartTime = 0;
-  autoElapsedBeforePause = 0;
-  isObstaclePaused = false;
-  stopAllOutputs();
-}
-
-void advanceToNextStep(AutoStep nextStep) {
-  stopAllOutputs();
-  currentAutoStep = nextStep;
-  autoStepStartTime = millis();
-  autoElapsedBeforePause = 0;
-  isObstaclePaused = false;
-}
-
-void runSemiAutonomousRoutine() {
-  unsigned long now = millis();
-  unsigned long activeDuration = now - autoStepStartTime;
-
-  switch (currentAutoStep) {
-
-    // --- STEP 1: DRIVE FORWARD ---
-    case AUTO_MOVE_FORWARD_1: {
-      const unsigned long STEP_DURATION = 4000; // 4 seconds forward drive
-
-      // Obstacle detection during forward motion
-      if (currentObstacleDist <= OBSTACLE_DISTANCE_CM) {
-        if (!isObstaclePaused) {
-          stopDriveMotors();
-          autoElapsedBeforePause += (now - autoStepStartTime);
-          isObstaclePaused = true;
-          Serial.println(F("[AUTO] Obstacle detected! Pausing movement."));
-        }
-        return; // Halt until clear
-      } else if (isObstaclePaused) {
-        // Obstacle cleared: resume timing
-        autoStepStartTime = now;
-        isObstaclePaused = false;
-        Serial.println(F("[AUTO] Obstacle cleared. Resuming movement."));
-      }
-
-      if ((activeDuration + autoElapsedBeforePause) < STEP_DURATION) {
-        setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, AUTO_DRIVE_SPEED);
-        setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, AUTO_DRIVE_SPEED);
-      } else {
-        Serial.println(F("[AUTO] Waypoint 1 reached. Lowering probe..."));
-        advanceToNextStep(AUTO_ACTUATOR_DOWN_1);
-      }
-      break;
-    }
-
-    // --- STEP 2: LOWER ACTUATOR INTO GROUND ---
-    case AUTO_ACTUATOR_DOWN_1: {
-      const unsigned long EXTEND_DURATION = 3500; // 3.5 seconds extension
-
-      if (activeDuration < EXTEND_DURATION) {
-        setMotorSpeed(PIN_ACT_RPWM, PIN_ACT_LPWM, AUTO_ACTUATOR_SPEED);
-      } else {
-        Serial.println(F("[AUTO] Probe inserted. Beginning soil sampling..."));
-        // Transmit trigger event to ESP32 via Serial2
-        Serial2.println(F("{\"cmd\":\"START_SOIL_READING\"}"));
-        advanceToNextStep(AUTO_SOIL_TEST_1);
-      }
-      break;
-    }
-
-    // --- STEP 3: DWELL & READ SENSORS ---
-    case AUTO_SOIL_TEST_1: {
-      const unsigned long DWELL_DURATION = 4000; // 4 seconds settling/measurement
-
-      stopAllOutputs(); // Everything holds still
-      if (activeDuration >= DWELL_DURATION) {
-        Serial.println(F("[AUTO] Sampling complete. Retracting probe..."));
-        advanceToNextStep(AUTO_ACTUATOR_UP_1);
-      }
-      break;
-    }
-
-    // --- STEP 4: RETRACT ACTUATOR FULLY ---
-    case AUTO_ACTUATOR_UP_1: {
-      const unsigned long RETRACT_DURATION = 3500; // 3.5 seconds retraction
-
-      if (activeDuration < RETRACT_DURATION) {
-        setMotorSpeed(PIN_ACT_RPWM, PIN_ACT_LPWM, -AUTO_ACTUATOR_SPEED);
-      } else {
-        Serial.println(F("[AUTO] Probe stowed. Turning left 90 deg..."));
-        advanceToNextStep(AUTO_TURN_LEFT);
-      }
-      break;
-    }
-
-    // --- STEP 5: PIVOT TURN LEFT ---
-    case AUTO_TURN_LEFT: {
-      const unsigned long TURN_DURATION = 1500; // Calibrate for a 90-degree pivot
-
-      if (activeDuration < TURN_DURATION) {
-        // Left wheel backwards, Right wheel forwards
-        setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, -AUTO_TURN_SPEED);
-        setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, AUTO_TURN_SPEED);
-      } else {
-        Serial.println(F("[AUTO] Turn complete. Driving forward to Waypoint 2..."));
-        advanceToNextStep(AUTO_MOVE_FORWARD_2);
-      }
-      break;
-    }
-
-    // --- STEP 6: DRIVE FORWARD TO SECOND POINT ---
-    case AUTO_MOVE_FORWARD_2: {
-      const unsigned long STEP_DURATION = 4000;
-
-      if (currentObstacleDist <= OBSTACLE_DISTANCE_CM) {
-        if (!isObstaclePaused) {
-          stopDriveMotors();
-          autoElapsedBeforePause += (now - autoStepStartTime);
-          isObstaclePaused = true;
-        }
-        return;
-      } else if (isObstaclePaused) {
-        autoStepStartTime = now;
-        isObstaclePaused = false;
-      }
-
-      if ((activeDuration + autoElapsedBeforePause) < STEP_DURATION) {
-        setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, AUTO_DRIVE_SPEED);
-        setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, AUTO_DRIVE_SPEED);
-      } else {
-        Serial.println(F("[AUTO] Waypoint 2 reached. Lowering probe..."));
-        advanceToNextStep(AUTO_ACTUATOR_DOWN_2);
-      }
-      break;
-    }
-
-    // --- STEP 7: LOWER ACTUATOR AGAIN ---
-    case AUTO_ACTUATOR_DOWN_2: {
-      const unsigned long EXTEND_DURATION = 3500;
-
-      if (activeDuration < EXTEND_DURATION) {
-        setMotorSpeed(PIN_ACT_RPWM, PIN_ACT_LPWM, AUTO_ACTUATOR_SPEED);
-      } else {
-        Serial2.println(F("{\"cmd\":\"START_SOIL_READING\"}"));
-        advanceToNextStep(AUTO_SOIL_TEST_2);
-      }
-      break;
-    }
-
-    // --- STEP 8: SECOND SAMPLING DWELL ---
-    case AUTO_SOIL_TEST_2: {
-      const unsigned long DWELL_DURATION = 4000;
-
-      stopAllOutputs();
-      if (activeDuration >= DWELL_DURATION) {
-        advanceToNextStep(AUTO_ACTUATOR_UP_2);
-      }
-      break;
-    }
-
-    // --- STEP 9: RETRACT PROBE ---
-    case AUTO_ACTUATOR_UP_2: {
-      const unsigned long RETRACT_DURATION = 3500;
-
-      if (activeDuration < RETRACT_DURATION) {
-        setMotorSpeed(PIN_ACT_RPWM, PIN_ACT_LPWM, -AUTO_ACTUATOR_SPEED);
-      } else {
-        Serial.println(F("[AUTO] Mission accomplished! Entering complete state."));
-        advanceToNextStep(AUTO_COMPLETE);
-      }
-      break;
-    }
-
-    // --- STEP 10: MISSION COMPLETE ---
-    case AUTO_COMPLETE:
-    case AUTO_IDLE:
-    default:
-      stopAllOutputs();
-      break;
+  // 5. Periodic Diagnostic Telemetry Print (Every 250ms)
+  if (millis() - lastTelemetryTime >= 250) {
+    lastTelemetryTime = millis();
+    printDebugTelemetry(steer, throttle, actuator, armPulse, modePulse, lastSignal);
   }
+
+  delay(10);
+}
+
+// =================================================================
+// DIAGNOSTIC PRINT ROUTINE
+// =================================================================
+void printDebugTelemetry(uint16_t ch1, uint16_t ch2, uint16_t ch4, uint16_t ch5, uint16_t ch6, uint32_t lastSig) {
+  unsigned long timeSinceLastPulse = millis() - lastSig;
+
+  Serial.print(F("[RC STATUS] "));
+  if (lastSig == 0 || timeSinceLastPulse > SIGNAL_TIMEOUT) {
+    Serial.print(F("NO SIGNAL (Idle: "));
+    Serial.print(timeSinceLastPulse);
+    Serial.print(F("ms) | "));
+  } else {
+    Serial.print(F("OK ("));
+    Serial.print(timeSinceLastPulse);
+    Serial.print(F("ms ago) | "));
+  }
+
+  // Print Raw RC Channels (in microseconds)
+  Serial.print(F("CH1:")); Serial.print(ch1);
+  Serial.print(F(" | CH2:")); Serial.print(ch2);
+  Serial.print(F(" | CH4:")); Serial.print(ch4);
+  Serial.print(F(" | CH5:")); Serial.print(ch5);
+  Serial.print(F(" | CH6:")); Serial.print(ch6);
+
+  // Print System State
+  Serial.print(F(" || STATE: "));
+  switch (currentState) {
+    case STATE_NO_SIGNAL: Serial.print(F("NO_SIGNAL")); break;
+    case STATE_DISARMED:  Serial.print(F("DISARMED (Toggle CH5)")); break;
+    case STATE_MANUAL:    Serial.print(F("MANUAL")); break;
+    case STATE_HOLD:      Serial.print(F("HOLD")); break;
+    case STATE_SEMI_AUTO: Serial.print(F("SEMI_AUTO")); break;
+  }
+
+  // Print Sonar and Target Output PWMs
+  Serial.print(F(" | Sonar: "));
+  Serial.print(currentObstacleDist);
+  Serial.print(F("cm | L_PWM:"));
+  Serial.print(debugLeftMotorPwm);
+  Serial.print(F(" R_PWM:"));
+  Serial.println(debugRightMotorPwm);
 }
 
 // =================================================================
@@ -462,10 +288,13 @@ void setMotorSpeed(uint8_t rpwmPin, uint8_t lpwmPin, int speed) {
 void stopDriveMotors() {
   setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, 0);
   setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, 0);
+  debugLeftMotorPwm = 0;
+  debugRightMotorPwm = 0;
 }
 
 void stopActuator() {
   setMotorSpeed(PIN_ACT_RPWM, PIN_ACT_LPWM, 0);
+  debugActuatorPwm = 0;
 }
 
 void stopAllOutputs() {
@@ -486,7 +315,7 @@ void updateUltrasonicDistance() {
     delayMicroseconds(10);
     digitalWrite(PIN_TRIG, LOW);
 
-    unsigned long duration = pulseIn(PIN_ECHO, HIGH, 8000); // 8ms timeout (~137 cm)
+    unsigned long duration = pulseIn(PIN_ECHO, HIGH, 8000);
 
     if (duration == 0) {
       currentObstacleDist = 999;
@@ -503,7 +332,7 @@ void processManualDrive(uint16_t throttleRaw, uint16_t steerRaw) {
   if (abs(throttle) < RC_DEADZONE) throttle = 0;
   if (abs(steer) < RC_DEADZONE)    steer = 0;
 
-  // Obstacle avoidance safety in manual mode
+  // Obstacle stop forward only
   if (currentObstacleDist <= OBSTACLE_DISTANCE_CM && throttle > 0) {
     throttle = 0;
   }
@@ -511,11 +340,11 @@ void processManualDrive(uint16_t throttleRaw, uint16_t steerRaw) {
   int fwdSpeed  = map(throttle, -500, 500, -255, 255);
   int turnSpeed = map(steer, -500, 500, -255, 255);
 
-  int leftSpeed  = fwdSpeed + turnSpeed;
-  int rightSpeed = fwdSpeed - turnSpeed;
+  debugLeftMotorPwm  = constrain(fwdSpeed + turnSpeed, -255, 255);
+  debugRightMotorPwm = constrain(fwdSpeed - turnSpeed, -255, 255);
 
-  setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, leftSpeed);
-  setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, rightSpeed);
+  setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, debugLeftMotorPwm);
+  setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, debugRightMotorPwm);
 }
 
 void processManualActuator(uint16_t actRaw) {
@@ -526,6 +355,6 @@ void processManualActuator(uint16_t actRaw) {
     return;
   }
 
-  int actSpeed = map(input, -500, 500, -255, 255);
-  setMotorSpeed(PIN_ACT_RPWM, PIN_ACT_LPWM, actSpeed);
+  debugActuatorPwm = map(input, -500, 500, -255, 255);
+  setMotorSpeed(PIN_ACT_RPWM, PIN_ACT_LPWM, debugActuatorPwm);
 }
