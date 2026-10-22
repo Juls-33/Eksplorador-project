@@ -1,7 +1,7 @@
 #include <SPI.h>
 #include <LoRa.h>
 
-// Serial2 Pins (ESP32 to Uno)
+// Serial2 Pins (ESP32 to Mega)
 #define RX2_PIN 25
 #define TX2_PIN 33
 
@@ -22,7 +22,7 @@ void setup() {
   Serial.begin(115200); 
   Serial2.begin(9600, SERIAL_8N1, RX2_PIN, TX2_PIN);
   
-  // FIX: Force a short timeout so dropped Uno characters don't freeze the ESP32
+  // Force a short timeout so dropped characters don't freeze the ESP32
   Serial2.setTimeout(50); 
   
   Serial.println("Initializing ESP32 and SX1278...");
@@ -34,6 +34,7 @@ void setup() {
     while (1); 
   }
   
+  // Hardware CRC enabled: Corrupt packets are automatically dropped by the SX1278
   LoRa.setSyncWord(0xF3);
   LoRa.enableCrc();
 
@@ -42,7 +43,7 @@ void setup() {
 }
 
 void loop() {
-  // 1. Handle incoming commands from Arduino Uno
+  // 1. Handle incoming mode commands from Arduino Mega
   if (Serial2.available() > 0) {
     String command = Serial2.readStringUntil('\n');
     command.trim(); 
@@ -51,7 +52,6 @@ void loop() {
       isTxMode = false;
       Serial.println("\n[MODE] Switched to RECEIVE (RX)");
       Serial2.println("ACK: LoRa set to RX mode.");
-      
       LoRa.receive(); 
     } 
     else if (command == "SET_MODE:TX") {
@@ -68,7 +68,6 @@ void loop() {
       lastTelemetryTime = currentMillis;
       mockLat += 0.0001; 
       
-      // FIX: Format payload to exactly match the Desktop's 19-field DATA requirement
       String payload = "DATA:" + String(mockPacketID) + ",12,12," + String(mockLat, 6) + "," + String(mockLng, 6) + ",0.0,0.0,0.0,0.0,0.0,1,25.0,50.0,100,7.0,0,0,0,0";
       
       LoRa.beginPacket();
@@ -82,11 +81,11 @@ void loop() {
     }
   } 
   
-  // 3. Execute RX Mode (Listen for Packets)
+  // 3. Execute RX Mode (Listen for Packets & Send ACK)
   else {
     int packetSize = LoRa.parsePacket();
     if (packetSize) {
-      Serial.print("\n[LoRa RX] Received packet: '");
+      Serial.print("\n[LoRa RX] Command Received: '");
       
       String receivedData = "";
       while (LoRa.available()) {
@@ -96,6 +95,19 @@ void loop() {
       Serial.print(receivedData);
       Serial.print("' with RSSI: ");
       Serial.println(LoRa.packetRssi());
+      
+      // Forward received mission commands to the Mega
+      Serial2.println("RCV:" + receivedData); 
+      
+      // Momentarily switch to TX to fire an ACK back to the Desktop UI
+      LoRa.beginPacket();
+      LoRa.print("ACK:" + receivedData);
+      LoRa.endPacket();
+      
+      // Immediately switch back to continuous listening mode
+      LoRa.receive(); 
+      
+      Serial.println("[LoRa ACK] Sent confirmation back to Desktop.");
     }
   }
 }
