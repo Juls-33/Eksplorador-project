@@ -3,13 +3,18 @@ use rusqlite_migration::{Migrations, M};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, State};
+
+static RX_BOARD_COMMAND_TX: OnceLock<Mutex<mpsc::Sender<String>>> =
+    OnceLock::new();
+
 
 mod database;
 
@@ -909,6 +914,27 @@ fn get_recent_telemetry() -> database::DbResult<Value> {
     }))
 }
 
+#[tauri::command]
+fn set_rx_board_mode(mode: String) -> Result<(), String> {
+    let mode = mode.trim().to_uppercase();
+
+    if mode != "RX" && mode != "TX" {
+        return Err("Invalid mode. Use RX or TX.".to_string());
+    }
+
+    let sender = RX_BOARD_COMMAND_TX
+        .get()
+        .ok_or_else(|| "Serial listener is not ready.".to_string())?;
+
+    let sender = sender
+        .lock()
+        .map_err(|_| "Serial command channel is unavailable.".to_string())?;
+
+    sender
+        .send(mode)
+        .map_err(|_| "Serial listener is disconnected.".to_string())
+}
+
 const BAUD_RATE: u32 = 115200;
 
 static LAST_KNOWN_PORT: Mutex<Option<String>> =
@@ -1040,6 +1066,7 @@ fn find_receiver_port() -> Option<String> {
 
 fn start_serial_listener(
     app_handle: tauri::AppHandle,
+    command_rx: mpsc::Receiver<String>,
 ) {
     thread::spawn(move || {
         loop {
@@ -1058,7 +1085,7 @@ fn start_serial_listener(
             };
 
             match serialport::new(&port_name, BAUD_RATE)
-                .timeout(Duration::from_millis(10000))
+                .timeout(Duration::from_millis(100))
                 .open()
             {
                 Ok(mut port) => {
@@ -1073,6 +1100,14 @@ fn start_serial_listener(
                         port_name
                     );
 
+                    let mut command_port = match port.try_clone() {
+                        Ok(port) => port,
+                        Err(error) => {
+                            println!("[serial] Failed to clone serial port: {}", error);
+                            continue;
+                        }
+                    };
+
                     let reader = BufReader::new(port);
 
                     let mut reading_buffer:
@@ -1085,6 +1120,19 @@ fn start_serial_listener(
                         DB_GENERATION.load(Ordering::SeqCst);
 
                     for line in reader.lines() {
+                        if let Ok(mode) = command_rx.try_recv() {
+                            let command = format!("{}\n", mode);
+
+                            match command_port.write_all(command.as_bytes()) {
+                                Ok(()) => {
+                                    let _ = command_port.flush();
+                                    println!("[serial] Sent RX_Board command: {}", mode);
+                                }
+                                Err(error) => {
+                                    println!("[serial] Failed to send mode command: {}", error);
+                                }
+                            }
+                        }
                         match line {
                             Ok(text) => {
                                 let current_generation =
@@ -1272,8 +1320,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            let (command_tx, command_rx) = mpsc::channel::<String>();
+
+            let _ = RX_BOARD_COMMAND_TX.set(Mutex::new(command_tx));
+
             start_serial_listener(
-                app.handle().clone()
+                app.handle().clone(),
+                command_rx,
             );
 
             Ok(())
@@ -1293,7 +1346,8 @@ pub fn run() {
             create_field,
             get_fields,
             create_mission,
-            get_missions
+            get_missions,
+            set_rx_board_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
