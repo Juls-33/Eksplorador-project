@@ -473,6 +473,8 @@ function TelemetrySyncBar({
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('Dashboard');
+  const [rxBoardMode, setRxBoardMode] = useState('RX');
+  const [rxBoardBusy, setRxBoardBusy] = useState(false);
   // -1 when no map download is running, else 0-100 (drives the sidebar badge)
   const downloadPercent = useDownloadPercent();
   const [selectedLayer, setSelectedLayer] = useState('ph');
@@ -1096,7 +1098,12 @@ export default function App() {
 
       <main className="main-content">
         {activeTab === 'Field Map' ? (
-          <FieldMapView />
+          <FieldMapView 
+            rxBoardMode={rxBoardMode}
+            setRxBoardMode={setRxBoardMode}
+            rxBoardBusy={rxBoardBusy}
+            setRxBoardBusy={setRxBoardBusy}
+          />
         ) : activeTab === 'Crop Assessment' ? (
           <CropAssessmentView />
         ) : activeTab === 'Reports' ? (
