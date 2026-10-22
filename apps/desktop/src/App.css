@@ -494,3 +494,78 @@ body {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+
+/* RX_Board mode toggle */
+.rx-board-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 10px;
+  background: var(--card-background, #f3f4f6);
+  width: fit-content;
+}
+
+.rx-board-buttons button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.rx-board-buttons button.active {
+  background: var(--background-color, #ffffff);
+  border-color: var(--border-color, #d1d5db);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.10);
+  font-weight: 600;
+}
+
+.rx-board-buttons button:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.rx-mode-indicator,
+.tx-mode-indicator {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.rx-mode-indicator {
+  background: #22a06b;
+}
+
+.tx-mode-indicator {
+  background: #d97706;
+}
+
+.rx-board-buttons button:focus-visible {
+  outline: 2px solid var(--primary-color, #64748b);
+  outline-offset: 2px;
+}
+
+.rx-board-control{
+  /* border-style:solid; */
+  width: 20%;
+  margin-left: 80%;
+}
+
+#field-map-header{
+    border-style:solid;
+}
