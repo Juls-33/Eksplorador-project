@@ -935,6 +935,35 @@ fn set_rx_board_mode(mode: String) -> Result<(), String> {
         .map_err(|_| "Serial listener is disconnected.".to_string())
 }
 
+#[tauri::command]
+fn send_movement_sequence(sequence: String) -> Result<(), String> {
+    let sequence = sequence.trim();
+
+    if sequence.is_empty() {
+        return Err("Movement sequence cannot be empty.".to_string());
+    }
+
+    // Allow only the expected movement-command characters.
+    if !sequence
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == ',' || c == '.')
+    {
+        return Err("Invalid movement sequence format.".to_string());
+    }
+
+    let sender = RX_BOARD_COMMAND_TX
+        .get()
+        .ok_or_else(|| "Serial listener is not ready.".to_string())?;
+
+    let sender = sender
+        .lock()
+        .map_err(|_| "Serial command channel is unavailable.".to_string())?;
+
+    sender
+        .send(format!("MISSION:{}", sequence))
+        .map_err(|_| "Serial listener is disconnected.".to_string())
+}
+
 const BAUD_RATE: u32 = 115200;
 
 static LAST_KNOWN_PORT: Mutex<Option<String>> =
@@ -1120,16 +1149,28 @@ fn start_serial_listener(
                         DB_GENERATION.load(Ordering::SeqCst);
 
                     for line in reader.lines() {
-                        if let Ok(mode) = command_rx.try_recv() {
-                            let command = format!("{}\n", mode);
+                       while let Ok(command) = command_rx.try_recv() {
+                            let command_line = format!("{}\n", command);
 
-                            match command_port.write_all(command.as_bytes()) {
+                            match command_port.write_all(command_line.as_bytes()) {
                                 Ok(()) => {
-                                    let _ = command_port.flush();
-                                    println!("[serial] Sent RX_Board command: {}", mode);
+                                    if let Err(error) = command_port.flush() {
+                                        println!(
+                                            "[serial] Failed to flush RX_Board command: {}",
+                                            error
+                                        );
+                                    } else {
+                                        println!(
+                                            "[serial] Sent RX_Board command: {}",
+                                            command
+                                        );
+                                    }
                                 }
                                 Err(error) => {
-                                    println!("[serial] Failed to send mode command: {}", error);
+                                    println!(
+                                        "[serial] Failed to send RX_Board command: {}",
+                                        error
+                                    );
                                 }
                             }
                         }
@@ -1348,6 +1389,7 @@ pub fn run() {
             create_mission,
             get_missions,
             set_rx_board_mode,
+            send_movement_sequence
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

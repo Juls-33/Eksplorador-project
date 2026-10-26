@@ -1,18 +1,83 @@
-import React from 'react';
-import { Compass, Navigation, ArrowUpRight, CheckCircle2, ChevronRight } from 'lucide-react';
-import { calculateDistanceMeters, calculateBearing, degreesToCardinal } from '../utils/geo';
+
+import React, { useMemo, useState } from 'react';
+import {
+  Compass,
+  Navigation,
+  CheckCircle2,
+  ChevronRight,
+  Send,
+} from 'lucide-react';
+import {
+  calculateDistanceMeters,
+  calculateBearing,
+  degreesToCardinal,
+} from '../utils/geo';
+
+
 
 export default function OperatorNavGuide({
   roverPos,
-  roverHeading = 0, // IMU Yaw / Heading from ESP32 / Arduino
+  roverHeading = 0,
   waypoints = [],
   currentWaypointIdx = 0,
   onAdvanceWaypoint = null,
-  reachedWaypointIdxs = null, // pins already reached, in any order; falls back to "everything before the target"
-  reachRadiusM = 5, // a recorded sample this close to a pin counts as reaching it
-  lastAutoReached = null // { pin, distanceM } for the pin most recently marked reached by a sample
+  reachedWaypointIdxs = null,
+  reachRadiusM = 5,
+  lastAutoReached = null,
+  onSendMission = null,
 }) {
+  const [sendingMission, setSendingMission] = useState(false);
+  const [missionStatus, setMissionStatus] = useState('');
+
+  
+const generateMovementSequence = (route, position, heading) => {
+  if (!Array.isArray(route) || route.length === 0 || !position) {
+    return [];
+  }
+
+  const commands = [];
+  let currentPosition = position;
+  let currentHeading = Number(heading) || 0;
+
+  for (const waypoint of route) {
+    const distance = calculateDistanceMeters(currentPosition, waypoint);
+    const bearing = calculateBearing(currentPosition, waypoint);
+
+    // Normalize the required turn to -180° through +180°.
+    const turn = ((bearing - currentHeading + 540) % 360) - 180;
+
+    if (Math.abs(turn) > 5) {
+      commands.push({
+        action: turn > 0 ? 'R' : 'L',
+        value: Math.round(Math.abs(turn)),
+      });
+    }
+
+    if (distance > 0.5) {
+      commands.push({
+        action: 'F',
+        value: Number(distance.toFixed(1)),
+      });
+    }
+
+    currentPosition = waypoint;
+    currentHeading = bearing;
+  }
+
+  return commands;
+};
+
   const reachedSet = reachedWaypointIdxs ? new Set(reachedWaypointIdxs) : null;
+  
+const movementSequence = useMemo(
+  () => generateMovementSequence(waypoints, roverPos, roverHeading),
+  [waypoints, roverPos, roverHeading]
+);
+
+const movementSequenceText = movementSequence
+  .map(({ action, value }) => `${action}${value}`)
+  .join(',');
+
   const activeTarget = waypoints[currentWaypointIdx];
   const distanceToTarget = activeTarget ? calculateDistanceMeters(roverPos, activeTarget) : 0;
   const requiredBearing = activeTarget ? calculateBearing(roverPos, activeTarget) : 0;
@@ -188,6 +253,97 @@ export default function OperatorNavGuide({
                   </div>
                 );
               })}
+            </div>
+            {/* Generated Movement Sequence Preview */}
+            <div
+              style={{
+                marginTop: '12px',
+                padding: '10px',
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: '6px',
+              }}
+            >
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '6px' }}>
+                Generated Movement Sequence
+              </div>
+
+              <code
+                style={{
+                  display: 'block',
+                  fontSize: '0.8rem',
+                  overflowWrap: 'anywhere',
+                  color: 'var(--primary-green)',
+                }}
+              >
+                {movementSequenceText || 'No movement commands generated'}
+              </code>
+            </div>
+                        {/* Send Mission Button */}
+            <div style={{ marginTop: '12px' }}>
+              <button
+                onClick={async () => {
+                  if (!onSendMission || !movementSequenceText || sendingMission) return;
+
+                  setSendingMission(true);
+                  setMissionStatus('');
+
+                  try {
+                    await onSendMission(movementSequenceText);
+                    setMissionStatus('Mission sent successfully!');
+                  } catch (error) {
+                    setMissionStatus(
+                      `Failed to send mission: ${error?.message || error}`
+                    );
+                  } finally {
+                    setSendingMission(false);
+                  }
+                }}
+                disabled={!onSendMission || !movementSequenceText || sendingMission}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  width: '100%',
+                  padding: '10px 14px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  background:
+                    !onSendMission || !movementSequenceText || sendingMission
+                      ? '#94a3b8'
+                      : 'var(--primary-green)',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  cursor:
+                    !onSendMission || !movementSequenceText || sendingMission
+                      ? 'not-allowed'
+                      : 'pointer',
+                }}
+              >
+                <Send size={16} />
+                {sendingMission ? 'Sending...' : 'Send Mission'}
+              </button>
+
+              {missionStatus && (
+                <div
+                  style={{
+                    marginTop: '8px',
+                    fontSize: '0.8rem',
+                    color: missionStatus.startsWith('Failed')
+                      ? '#dc2626'
+                      : 'var(--primary-green)',
+                  }}
+                >
+                  {missionStatus}
+                </div>
+              )}
+
+              {!onSendMission && (
+                <div style={{ marginTop: '6px', fontSize: '0.75rem', color: '#64748b' }}>
+                  Mission transmission is not connected yet.
+                </div>
+              )}
             </div>
           </>
         )}
