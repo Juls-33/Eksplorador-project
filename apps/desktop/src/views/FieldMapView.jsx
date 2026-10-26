@@ -840,6 +840,14 @@ export default function FieldMapView({rxBoardMode, setRxBoardMode, rxBoardBusy, 
     }
 };
 
+    const handleSendMission = async (sequence) => {
+      if (!sequence?.trim()) {
+        throw new Error('No movement sequence generated.');
+      }
+
+      await invoke('send_movement_sequence', { sequence });
+    };
+
   return (
     <div className="field-map-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
       {/* Top Action Header */}
@@ -1364,6 +1372,7 @@ export default function FieldMapView({rxBoardMode, setRxBoardMode, rxBoardBusy, 
               onAdvanceWaypoint={handleAdvanceWaypoint}
               reachRadiusM={PIN_REACH_RADIUS_M}
               lastAutoReached={lastAutoReached}
+              onSendMission={handleSendMission}
             />
           </div>
 
