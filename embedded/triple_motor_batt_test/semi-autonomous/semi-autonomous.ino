@@ -1,3 +1,5 @@
+// INTEGRATED EKSPLORADOR MEGA: REAL MODBUS SOIL + IMU TILT SAFETY + RC + ULTRASONIC
+// Ultrasonic enabled; forward drive resumes after 5 clear sonar samples.
 #include <stdlib.h>
 #include <math.h>
 // =================================================================
@@ -52,6 +54,68 @@ const uint8_t PIN_ACT_SENSE = A0;
 const uint8_t PIN_TRIG = 11;
 const uint8_t PIN_ECHO = 12;
 
+// Original soil probe Modbus via Mega Serial3; ESP32 no longer owns RS485 UART.
+const uint8_t RS485_DIR=27; // joined DE and /RE on RS485 module
+const unsigned long SOIL_POLL_MS=2000;
+const unsigned long SOIL_TIMEOUT_MS=300;
+const uint8_t SOIL_REQUEST[]={0x01,0x03,0x00,0x00,0x00,0x08,0x44,0x0C};
+uint8_t soilReply[21];uint8_t soilCount=0;
+unsigned long soilLastPoll=0,soilQueryAt=0;
+bool soilWaiting=false;
+// Set TRUE after HC-SR04 is connected and verified. Unknown sonar readings stop forward motion.
+const bool ULTRASONIC_ENABLED=true;
+const uint8_t AUTO_OBSTACLE_LIMIT=5;
+uint8_t autoObstacleEvents=0;
+bool obstaclePrevious=false;
+bool sonarValid=false;
+unsigned long sonarLastGood=0;
+uint16_t soilCRC(const uint8_t *data, size_t len){
+ uint16_t crc=0xFFFF;
+ for(size_t j=0;j<len;j++){crc^=data[j];for(uint8_t k=0;k<8;k++)crc=(crc&1)?(crc>>1)^0xA001:crc>>1;}
+ return crc;
+}
+void startSoilPoll(){
+ if(soilWaiting || millis()-soilLastPoll<SOIL_POLL_MS)return;
+ soilLastPoll=millis();
+ while(Serial3.available())Serial3.read();soilCount=0;
+ digitalWrite(RS485_DIR,HIGH);delayMicroseconds(150);
+ Serial3.write(SOIL_REQUEST,sizeof(SOIL_REQUEST));Serial3.flush();
+ delayMicroseconds(150);digitalWrite(RS485_DIR,LOW);
+ soilQueryAt=millis();soilWaiting=true;
+}
+void finishSoilReply(bool complete){
+ soilWaiting=false;
+ bool good=complete && soilCount==21 && soilReply[0]==1 && soilReply[1]==3 && soilReply[2]==16 &&
+       soilCRC(soilReply,19)==(uint16_t)(soilReply[19]|(soilReply[20]<<8));
+ if(!good){Serial2.println(F("SOIL:0,0,0,0,0,0,0,0,0"));Serial.println(F("[SOIL] MODBUS unavailable/CRC invalid"));return;}
+ int16_t rt=(int16_t)((soilReply[3]<<8)|soilReply[4]);
+ uint16_t moist=(soilReply[5]<<8)|soilReply[6];
+ uint16_t ec=(soilReply[7]<<8)|soilReply[8];
+ uint16_t sal=(soilReply[9]<<8)|soilReply[10];
+ uint16_t n=(soilReply[11]<<8)|soilReply[12];
+ uint16_t phos=(soilReply[13]<<8)|soilReply[14];
+ uint16_t k=(soilReply[15]<<8)|soilReply[16];
+ uint16_t ph=(soilReply[17]<<8)|soilReply[18];
+ bool contact=(moist>=10 || ec>0); // original 1.0% moisture OR nonzero EC
+ Serial2.print(F("SOIL:"));Serial2.print(contact?1:0);
+ Serial2.print(',');Serial2.print(rt/10.0f,1);
+ Serial2.print(',');Serial2.print(moist/10.0f,1);
+ Serial2.print(',');Serial2.print(ec);
+ Serial2.print(',');Serial2.print(ph/100.0f,2);
+ Serial2.print(',');Serial2.print(sal);
+ Serial2.print(',');Serial2.print(n);
+ Serial2.print(',');Serial2.print(phos);
+ Serial2.print(',');Serial2.println(k);
+}
+void serviceSoil(){
+ if(!soilWaiting){startSoilPoll();return;}
+ uint8_t budget=24;
+ while(Serial3.available() && budget-- && soilCount<sizeof(soilReply))soilReply[soilCount++]=Serial3.read();
+ if(soilCount==21)finishSoilReply(true);
+ else if(millis()-soilQueryAt>SOIL_TIMEOUT_MS)finishSoilReply(false);
+}
+
+
 
 // ---------------------- CONFIGURATION ---------------------------
 
@@ -62,7 +126,10 @@ const uint16_t RC_DEADZONE = 45;
 
 const uint32_t SIGNAL_TIMEOUT = 250;
 
-const unsigned int OBSTACLE_DISTANCE_CM = 25;
+const unsigned int OBSTACLE_DISTANCE_CM = 8; // Bench test only: very short stop distance
+const unsigned int OBSTACLE_RESUME_CM = 15; // Clear distance before forward resumes
+bool forwardBlocked = true;
+uint8_t clearSonarSamples = 0;
 const unsigned long PING_INTERVAL_MS = 40;
 
 const int AUTO_DRIVE_SPEED = 180;
@@ -351,6 +418,9 @@ void setup() {
 
   digitalWrite(PIN_TRIG, LOW);
 
+  pinMode(RS485_DIR,OUTPUT);digitalWrite(RS485_DIR,LOW);Serial3.begin(9600);
+  Serial.println(F("[SOIL] Serial3 pins 14/15; direction pin 27"));
+
   // Current Sense
   pinMode(PIN_ACT_SENSE, INPUT);
 
@@ -446,6 +516,7 @@ void loop() {
   updateUltrasonicDistance();
 
   updateActuatorCurrentSense();
+  serviceSoil();
 
 
   // ---------------- ESP32 + IMU COMMANDS ----------------
@@ -806,15 +877,24 @@ void processAutoDrive() {
 
   // Obstacle Avoidance
   if (
-    dir == 'F' &&
-    currentObstacleDist <= OBSTACLE_DISTANCE_CM
+    ULTRASONIC_ENABLED && dir == 'F' &&
+    (!sonarValid || currentObstacleDist <= OBSTACLE_DISTANCE_CM)
   ) {
 
     stopDriveMotors();
-
-    Serial.println(F(
-      "[WARNING] Obstacle detected!"
-    ));
+    if(!sonarValid){
+      missionActive=false;missionSequence="";stopAllOutputs();
+      Serial.println(F("[AUTO] Sonar timeout: mission stopped; manual intervention required"));
+      return;
+    }
+    if(!obstaclePrevious){autoObstacleEvents++;obstaclePrevious=true;}
+    if(autoObstacleEvents>=AUTO_OBSTACLE_LIMIT){
+      missionActive=false;missionSequence="";stopAllOutputs();
+      Serial.println(F("[AUTO] Five obstacle encounters: mission stopped; switch to MANUAL"));
+      espSerial.println("FAULT:OBSTACLE_5");return;
+    }
+    Serial.print(F("[AUTO] obstacle encounter "));Serial.println(autoObstacleEvents);
+    Serial.println(F("[WARNING] Obstacle detected!"));
 
     Serial.println(F(
       "[AUTO] Injecting Back 2s, Left 1s"
@@ -826,7 +906,7 @@ void processAutoDrive() {
     fetchNextAutoCommand();
 
   } else {
-
+    if(dir != 'F' || (sonarValid && currentObstacleDist > OBSTACLE_DISTANCE_CM))obstaclePrevious=false;
     executeAutoCommand();
   }
 }
@@ -999,15 +1079,21 @@ void setMotorSpeed(
     if (speed < 0 && safetyLatched && !imuFresh()) speed = 0;
   }
 
-  if (speed > 0) {
+  // Actuator motor leads are reversed relative to the original firmware.
+  // Keep the LOGICAL speed sign unchanged so positive still means EXTEND,
+  // negative still means RETRACT for IMU protection and recovery.
+  // Reverse only the electrical output polarity of the actuator driver.
+  const int electricalSpeed = (rpwmPin == PIN_ACT_RPWM) ? -speed : speed;
 
-    analogWrite(rpwmPin, speed);
+  if (electricalSpeed > 0) {
+
+    analogWrite(rpwmPin, electricalSpeed);
     analogWrite(lpwmPin, 0);
 
-  } else if (speed < 0) {
+  } else if (electricalSpeed < 0) {
 
     analogWrite(rpwmPin, 0);
-    analogWrite(lpwmPin, abs(speed));
+    analogWrite(lpwmPin, -electricalSpeed);
 
   } else {
 
@@ -1056,31 +1142,36 @@ void stopAllOutputs() {
 // =================================================================
 
 void updateUltrasonicDistance() {
-
-  if (
-    millis() - lastPingTime <
-    PING_INTERVAL_MS
-  ) {
-    return;
-  }
-
+  if (millis() - lastPingTime < PING_INTERVAL_MS) return;
   lastPingTime = millis();
 
   digitalWrite(PIN_TRIG, LOW);
   delayMicroseconds(2);
-
   digitalWrite(PIN_TRIG, HIGH);
   delayMicroseconds(10);
-
   digitalWrite(PIN_TRIG, LOW);
 
-  unsigned long duration =
-    pulseIn(PIN_ECHO, HIGH, 8000);
+  // Longer timeout than the original 8000us (~137cm).
+  unsigned long duration = pulseIn(PIN_ECHO, HIGH, 25000UL);
+  sonarValid = duration != 0;
+  if (sonarValid) {
+    currentObstacleDist = (unsigned int)(duration * 0.0343f / 2.0f);
+    sonarLastGood = millis();
+  } else {
+    currentObstacleDist = 999; // Display only; NOT a valid clear reading.
+  }
 
-  currentObstacleDist =
-    (duration == 0)
-      ? 999
-      : (unsigned int)(duration * 0.0343 / 2.0);
+  // Change block state only on NEW sonar samples, not on every loop.
+  // Invalid readings fail safe: forward movement remains blocked.
+  if (!sonarValid || currentObstacleDist <= OBSTACLE_DISTANCE_CM) {
+    forwardBlocked = true;
+    clearSonarSamples = 0;
+  } else if (currentObstacleDist >= OBSTACLE_RESUME_CM) {
+    if (clearSonarSamples < 3) ++clearSonarSamples;
+    if (clearSonarSamples >= 3) forwardBlocked = false;
+  } else {
+    clearSonarSamples = 0;
+  }
 }
 
 
@@ -1102,15 +1193,17 @@ void processManualDrive(
   if (abs(steer) < RC_DEADZONE)
     steer = 0;
 
-  if (
-    currentObstacleDist <= OBSTACLE_DISTANCE_CM &&
-    throttle > 0
-  ) {
+  // With the current CH2 inversion, throttle > 0 is physical forward.
+  // Preserve reverse and steering while inhibiting forward throttle.
+  if (ULTRASONIC_ENABLED && throttle > 0 && forwardBlocked) {
     throttle = 0;
   }
 
+  // CH2 direction correction: reverse forward/backward only.
+  // Keep the raw throttle sign above for the ultrasonic forward guard.
+  // Steering mixing, semi-auto commands, actuator, and sensors stay unchanged.
   int fwdSpeed =
-    map(throttle, -500, 500, -255, 255);
+    -map(throttle, -500, 500, -255, 255);
 
   int turnSpeed =
     map(steer, -500, 500, -255, 255);
@@ -1236,7 +1329,17 @@ void printDebugTelemetry(
   Serial.print(F(" | Sonar:"));
   Serial.print(currentObstacleDist);
 
-  Serial.print(F("cm | L_PWM:"));
+  Serial.print(F("cm | SonarValid:"));
+  Serial.print(sonarValid);
+  Serial.print(F(" | FwdBlocked:"));
+  Serial.print(ULTRASONIC_ENABLED && forwardBlocked);
+  Serial.print(F(" | SonarStatus:"));
+  if (!ULTRASONIC_ENABLED) Serial.print(F("DISABLED"));
+  else if (!sonarValid) Serial.print(F("NO_ECHO"));
+  else if (currentObstacleDist <= OBSTACLE_DISTANCE_CM) Serial.print(F("TOO_CLOSE"));
+  else if (forwardBlocked) Serial.print(F("WAIT_CLEAR"));
+  else Serial.print(F("CLEAR"));
+  Serial.print(F(" | L_PWM:"));
   Serial.print(debugLeftMotorPwm);
 
   Serial.print(F(" | R_PWM:"));
@@ -1316,6 +1419,7 @@ void processEspLine(const char *line) {
     if (missionSequence.length() == 0) return;
     if (!missionSequence.endsWith(",")) missionSequence += ",";
     missionActive = true;
+    autoObstacleEvents=0;obstaclePrevious=false;
     missionTimerDuration = 0;
     Serial.print(F("[MISSION UPLOADED] "));
     Serial.println(missionSequence);
