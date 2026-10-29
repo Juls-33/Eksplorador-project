@@ -1,5 +1,5 @@
 // INTEGRATED EKSPLORADOR MEGA: REAL MODBUS SOIL + IMU TILT SAFETY + RC + ULTRASONIC
-// Ultrasonic enabled; forward drive resumes after 5 clear sonar samples.
+// Ultrasonic enabled; manual forward resumes after 3 clear echoes or 5 no-echo samples (BENCH MODE ONLY).
 #include <stdlib.h>
 #include <math.h>
 // =================================================================
@@ -126,11 +126,19 @@ const uint16_t RC_DEADZONE = 45;
 
 const uint32_t SIGNAL_TIMEOUT = 250;
 
-const unsigned int OBSTACLE_DISTANCE_CM = 8; // Bench test only: very short stop distance
+const unsigned int OBSTACLE_DISTANCE_CM = 10; // Stop at 10 cm or closer; bench test
 const unsigned int OBSTACLE_RESUME_CM = 15; // Clear distance before forward resumes
+// BENCH TEST ONLY: HC-SR04 no-echo can mean no target OR sensor failure.
+// Set FALSE for field use; FALSE requires valid echoes to resume.
+const bool SONAR_BENCH_NO_ECHO_CLEAR = false;
+const uint8_t SONAR_CLEAR_SAMPLES = 3;
+const uint8_t SONAR_NO_ECHO_CLEAR_SAMPLES = 5;
+unsigned long sonarEchoUs = 0;
+uint8_t noEchoSamples = 0;
+const char* sonarDecision = "STARTUP";
 bool forwardBlocked = true;
 uint8_t clearSonarSamples = 0;
-const unsigned long PING_INTERVAL_MS = 40;
+const unsigned long PING_INTERVAL_MS = 35; // More frequent measurement; allow echo time to settle
 
 const int AUTO_DRIVE_SPEED = 180;
 
@@ -1142,6 +1150,7 @@ void stopAllOutputs() {
 // =================================================================
 
 void updateUltrasonicDistance() {
+  if (!ULTRASONIC_ENABLED) return;
   if (millis() - lastPingTime < PING_INTERVAL_MS) return;
   lastPingTime = millis();
 
@@ -1151,26 +1160,50 @@ void updateUltrasonicDistance() {
   delayMicroseconds(10);
   digitalWrite(PIN_TRIG, LOW);
 
-  // Longer timeout than the original 8000us (~137cm).
-  unsigned long duration = pulseIn(PIN_ECHO, HIGH, 25000UL);
-  sonarValid = duration != 0;
-  if (sonarValid) {
-    currentObstacleDist = (unsigned int)(duration * 0.0343f / 2.0f);
-    sonarLastGood = millis();
-  } else {
-    currentObstacleDist = 999; // Display only; NOT a valid clear reading.
-  }
+  // Echo pulse length is reported so we can diagnose actual sensor readings.
+  sonarEchoUs = pulseIn(PIN_ECHO, HIGH, 25000UL);
+  sonarValid = sonarEchoUs != 0;
 
-  // Change block state only on NEW sonar samples, not on every loop.
-  // Invalid readings fail safe: forward movement remains blocked.
-  if (!sonarValid || currentObstacleDist <= OBSTACLE_DISTANCE_CM) {
-    forwardBlocked = true;
-    clearSonarSamples = 0;
-  } else if (currentObstacleDist >= OBSTACLE_RESUME_CM) {
-    if (clearSonarSamples < 3) ++clearSonarSamples;
-    if (clearSonarSamples >= 3) forwardBlocked = false;
+  if (sonarValid) {
+    currentObstacleDist = (unsigned int)(sonarEchoUs * 0.0343f / 2.0f);
+    sonarLastGood = millis();
+    noEchoSamples = 0;
+
+    if (currentObstacleDist <= OBSTACLE_DISTANCE_CM) {
+      forwardBlocked = true;
+      clearSonarSamples = 0;
+      sonarDecision = "OBSTACLE";
+    } else if (currentObstacleDist >= OBSTACLE_RESUME_CM) {
+      if (clearSonarSamples < SONAR_CLEAR_SAMPLES) ++clearSonarSamples;
+      if (clearSonarSamples >= SONAR_CLEAR_SAMPLES) {
+        forwardBlocked = false;
+        sonarDecision = "CLEAR";
+      } else {
+        sonarDecision = "CONFIRM_CLEAR";
+      }
+    } else {
+      clearSonarSamples = 0;
+      // Between stop/resume thresholds, retain the previous blocked state.
+      sonarDecision = forwardBlocked ? "HYSTERESIS_BLOCK" : "HYSTERESIS_GO";
+    }
   } else {
+    currentObstacleDist = 999; // Not an actual measured distance!
     clearSonarSamples = 0;
+    if (noEchoSamples < SONAR_NO_ECHO_CLEAR_SAMPLES) ++noEchoSamples;
+
+    if (SONAR_BENCH_NO_ECHO_CLEAR) {
+      // TEST MODE: no echo is treated as clear after repeated timeouts.
+      // WARNING: a disconnected or failed sensor can also produce no echo.
+      if (noEchoSamples >= SONAR_NO_ECHO_CLEAR_SAMPLES) {
+        forwardBlocked = false;
+        sonarDecision = "NO_ECHO_BENCH_GO";
+      } else {
+        sonarDecision = "NO_ECHO_WAIT";
+      }
+    } else {
+      forwardBlocked = true;
+      sonarDecision = "NO_ECHO_FAILSAFE";
+    }
   }
 }
 
@@ -1195,7 +1228,8 @@ void processManualDrive(
 
   // With the current CH2 inversion, throttle > 0 is physical forward.
   // Preserve reverse and steering while inhibiting forward throttle.
-  if (ULTRASONIC_ENABLED && throttle > 0 && forwardBlocked) {
+  if (ULTRASONIC_ENABLED && throttle > 0 &&
+      (forwardBlocked || !sonarValid || currentObstacleDist <= OBSTACLE_DISTANCE_CM)) {
     throttle = 0;
   }
 
@@ -1335,10 +1369,22 @@ void printDebugTelemetry(
   Serial.print(ULTRASONIC_ENABLED && forwardBlocked);
   Serial.print(F(" | SonarStatus:"));
   if (!ULTRASONIC_ENABLED) Serial.print(F("DISABLED"));
-  else if (!sonarValid) Serial.print(F("NO_ECHO"));
+  else if (!sonarValid) Serial.print(F("NO_ECHO_OR_OUT_OF_RANGE"));
   else if (currentObstacleDist <= OBSTACLE_DISTANCE_CM) Serial.print(F("TOO_CLOSE"));
   else if (forwardBlocked) Serial.print(F("WAIT_CLEAR"));
   else Serial.print(F("CLEAR"));
+  Serial.print(F(" | Echo_us:"));
+  Serial.print(sonarEchoUs);
+  Serial.print(F(" | ClearCount:"));
+  Serial.print(clearSonarSamples);
+  Serial.print(F(" | NoEchoCount:"));
+  Serial.print(noEchoSamples);
+  Serial.print(F(" | SonarDecision:"));
+  Serial.print(sonarDecision);
+  Serial.print(F(" | StopCm:"));
+  Serial.print(OBSTACLE_DISTANCE_CM);
+  Serial.print(F(" | ResumeCm:"));
+  Serial.print(OBSTACLE_RESUME_CM);
   Serial.print(F(" | L_PWM:"));
   Serial.print(debugLeftMotorPwm);
 
