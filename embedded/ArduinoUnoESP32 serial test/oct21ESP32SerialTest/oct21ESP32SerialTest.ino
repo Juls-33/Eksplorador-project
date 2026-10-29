@@ -275,6 +275,9 @@ void processMegaLine(const char *s) {
     if (!parseSoil(s))
       Serial.println("[SOIL] rejected malformed data");
 
+  } else if (!strncmp(s, "MISSION_STATUS:", 15)) {
+    Serial.print("[MEGA MISSION] ");
+    Serial.println(s + 15);
   } else if (!strncmp(s, "FAULT:", 6)) {
     Serial.print("[MEGA SAFETY] ");
     Serial.println(s);
@@ -498,7 +501,13 @@ void serviceRx() {
     return;
   }
 
+  if (data.length() > 275) {
+    Serial.println("[RX ERROR] Payload too long, not forwarded");
+    LoRa.receive();
+    return;
+  }
   Serial2.println("RCV:" + data);
+  Serial.printf("[UART FORWARD] %u payload bytes to Mega\n", (unsigned)data.length());
 
   LoRa.idle();
 

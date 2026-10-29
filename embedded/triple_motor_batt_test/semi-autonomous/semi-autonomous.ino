@@ -1,5 +1,5 @@
 // INTEGRATED EKSPLORADOR MEGA: REAL MODBUS SOIL + IMU TILT SAFETY + RC + ULTRASONIC
-// Ultrasonic enabled; manual forward resumes after 3 clear echoes or 5 no-echo samples (BENCH MODE ONLY).
+// Ultrasonic Phase 1 bench logic unchanged; timed obstacle detour added ONLY for Phase 3C indoor tests.
 #include <stdlib.h>
 #include <math.h>
 // =================================================================
@@ -126,11 +126,11 @@ const uint16_t RC_DEADZONE = 45;
 
 const uint32_t SIGNAL_TIMEOUT = 250;
 
-const unsigned int OBSTACLE_DISTANCE_CM = 10; // Stop at 10 cm or closer; bench test
+const unsigned int OBSTACLE_DISTANCE_CM = 8; // Bench test only: very short stop distance
 const unsigned int OBSTACLE_RESUME_CM = 15; // Clear distance before forward resumes
 // BENCH TEST ONLY: HC-SR04 no-echo can mean no target OR sensor failure.
 // Set FALSE for field use; FALSE requires valid echoes to resume.
-const bool SONAR_BENCH_NO_ECHO_CLEAR = false;
+const bool SONAR_BENCH_NO_ECHO_CLEAR = true;
 const uint8_t SONAR_CLEAR_SAMPLES = 3;
 const uint8_t SONAR_NO_ECHO_CLEAR_SAMPLES = 5;
 unsigned long sonarEchoUs = 0;
@@ -138,9 +138,28 @@ uint8_t noEchoSamples = 0;
 const char* sonarDecision = "STARTUP";
 bool forwardBlocked = true;
 uint8_t clearSonarSamples = 0;
-const unsigned long PING_INTERVAL_MS = 35; // More frequent measurement; allow echo time to settle
+const unsigned long PING_INTERVAL_MS = 40;
 
-const int AUTO_DRIVE_SPEED = 180;
+// Bench demonstration only: PWM is not speed or distance feedback.
+const int AUTO_DRIVE_SPEED = 120;
+const float BENCH_FORWARD_MS_PER_M = 15.0f;
+const float BENCH_TURN_MS_PER_DEG = 8.0f;
+const unsigned long BENCH_MIN_STEP_MS = 200;
+const unsigned long BENCH_MAX_STEP_MS = 2500;
+
+// PHASE 3C: BENCH-ONLY OBSTACLE AVOIDANCE; durations are guesses, not distances.
+// Do not use for autonomous field navigation or with ground-contacting tracks.
+const unsigned long DETOUR_BACK_MS = 350;
+const unsigned long DETOUR_LEFT_MS = 400;
+const unsigned long DETOUR_SIDE_FORWARD_MS = 550;
+const unsigned long DETOUR_RIGHT_MS = 400;
+const unsigned long DETOUR_CLEAR_FORWARD_MS = 550;
+// Future GPS-ready TODO: compute a safe obstacle-free bypass, measure heading
+// and position after each turn/translation, then navigate back to the ORIGINAL
+// target waypoint. Use heading feedback, distance feedback, obstacle scanning,
+// bounded retries, and operator approval. These timed steps DO NOT return to
+// the planned line/path and DO NOT know if the rear or sides are unobstructed.
+
 
 
 // ---------------- ACTUATOR SENSING CONFIG -----------------------
@@ -282,8 +301,22 @@ bool faultReverseNeedsNeutral = false;
 bool faultReverseActive = false;
 unsigned long faultReverseStartedMs = 0;
 float faultReverseStartMagnitude = 0.0f;
-char serialLine[90];
-uint8_t serialLen = 0;
+char serialLine[320];
+uint16_t serialLen = 0;
+bool serialDiscardLine = false;
+// Waypoint commands describe meters/degrees, NOT time.
+bool missionTimedMode = false;
+unsigned long benchRemainingMs = 0;
+unsigned long benchLastTickMs = 0;
+uint8_t benchStepNumber = 0;
+uint8_t benchStepTotal = 0;
+bool benchObstaclePaused = false;
+uint8_t detourStage = 0;  // 0=original mission, 1=B, 2=L, 3=F, 4=R, 5=F
+unsigned long detourRemainingMs = 0;
+bool detourObstacleFault = false;
+
+unsigned long benchLastStatusMs = 0;
+String savedMission = "";
 int lastRequestedActuator = 0;
 SystemState faultOrigin = STATE_NO_SIGNAL;
 
@@ -579,14 +612,15 @@ void loop() {
 
       espInTxMode = true;
 
-      missionActive = false;
-
-      stopAllOutputs();
-
-      Serial.println(F("[LORA] ESP32 switched to TX Mode"));
+      // Only change the radio role. Keep stored mission and drive state unchanged.
+      Serial.println(F("[LORA] ESP32 switched to TX Mode; mission retained"));
     }
   }
 
+
+  // The mission clock does not advance outside SEMI_AUTO or during safety recovery.
+  if (currentState != STATE_SEMI_AUTO || safetyLatched || recoveryState == REC_RETRACT)
+    benchLastTickMs = millis();
 
   // ---------------- MOTOR CONTROL + SAFETY ----------------
   if (recoveryState == REC_RETRACT) {
@@ -859,112 +893,223 @@ void printActuatorCurrentSense() {
 // AUTOMATIC DRIVE PROCESSING
 // =================================================================
 
-void processAutoDrive() {
-
-  if (!missionActive) {
-
-    stopAllOutputs();
-
-    return;
-  }
-
-  if (
-    millis() - missionTimerStart >=
-    missionTimerDuration
-  ) {
-
-    fetchNextAutoCommand();
-
-    if (!missionActive) {
-      return;
-    }
-  }
-
-  char dir = currentCommand.charAt(0);
-
-
-  // Obstacle Avoidance
-  if (
-    ULTRASONIC_ENABLED && dir == 'F' &&
-    (!sonarValid || currentObstacleDist <= OBSTACLE_DISTANCE_CM)
-  ) {
-
-    stopDriveMotors();
-    if(!sonarValid){
-      missionActive=false;missionSequence="";stopAllOutputs();
-      Serial.println(F("[AUTO] Sonar timeout: mission stopped; manual intervention required"));
-      return;
-    }
-    if(!obstaclePrevious){autoObstacleEvents++;obstaclePrevious=true;}
-    if(autoObstacleEvents>=AUTO_OBSTACLE_LIMIT){
-      missionActive=false;missionSequence="";stopAllOutputs();
-      Serial.println(F("[AUTO] Five obstacle encounters: mission stopped; switch to MANUAL"));
-      espSerial.println("FAULT:OBSTACLE_5");return;
-    }
-    Serial.print(F("[AUTO] obstacle encounter "));Serial.println(autoObstacleEvents);
-    Serial.println(F("[WARNING] Obstacle detected!"));
-
-    Serial.println(F(
-      "[AUTO] Injecting Back 2s, Left 1s"
-    ));
-
-    missionSequence =
-      "B2,L1," + currentCommand + "," + missionSequence;
-
-    fetchNextAutoCommand();
-
-  } else {
-    if(dir != 'F' || (sonarValid && currentObstacleDist > OBSTACLE_DISTANCE_CM))obstaclePrevious=false;
-    executeAutoCommand();
+// Timed demonstration detour, deliberately separated from stored waypoints.
+// No GPS/encoders are consulted; all distances and angles are UNVERIFIED.
+char detourOperation(uint8_t stage) {
+  switch (stage) {
+    case 1: return 'B';
+    case 2: return 'L';
+    case 3: return 'F';
+    case 4: return 'R';
+    case 5: return 'F';
+    default: return 'S';
   }
 }
 
+unsigned long detourDuration(uint8_t stage) {
+  switch (stage) {
+    case 1: return DETOUR_BACK_MS;
+    case 2: return DETOUR_LEFT_MS;
+    case 3: return DETOUR_SIDE_FORWARD_MS;
+    case 4: return DETOUR_RIGHT_MS;
+    case 5: return DETOUR_CLEAR_FORWARD_MS;
+    default: return 0;
+  }
+}
 
-// =================================================================
-// FETCH NEXT AUTOMATIC COMMAND
-// =================================================================
+void commandBenchDetourMotors(char dir) {
+  // Same physical signs as existing executeAutoCommand() in Phase 3B.
+  int l = 0, r = 0;
+  switch (dir) {
+    case 'B': l = AUTO_DRIVE_SPEED; r = -AUTO_DRIVE_SPEED; break;
+    case 'L': l = AUTO_DRIVE_SPEED; r = AUTO_DRIVE_SPEED; break;
+    case 'F': l = -AUTO_DRIVE_SPEED; r = AUTO_DRIVE_SPEED; break;
+    case 'R': l = -AUTO_DRIVE_SPEED; r = -AUTO_DRIVE_SPEED; break;
+    default: break;
+  }
+  setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, l);
+  setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, r);
+  stopActuator();
+}
 
-void fetchNextAutoCommand() {
+void startDetourStage(uint8_t stage) {
+  detourStage = stage;
+  detourRemainingMs = detourDuration(stage);
+  benchLastTickMs = millis();
+  stopDriveMotors();
+  Serial.print(F("[AVOID STEP] "));
+  Serial.print(stage);
+  Serial.print(F("/5 dir="));
+  Serial.print(detourOperation(stage));
+  Serial.print(F(" duration_ms="));
+  Serial.print(detourRemainingMs);
+  Serial.print(F(" attempt="));
+  Serial.print(autoObstacleEvents);
+  Serial.print('/');
+  Serial.println(AUTO_OBSTACLE_LIMIT);
+}
 
-  if (missionSequence.length() == 0) {
-
+void startBenchDetour() {
+  stopDriveMotors();
+  stopActuator();
+  if (autoObstacleEvents >= AUTO_OBSTACLE_LIMIT) {
+    detourObstacleFault = true;
+    detourStage = 0;
     missionActive = false;
+    // Keep savedMission, missionSequence and currentCommand for inspection.
+    Serial.println(F("[AVOID FAULT] Five detour attempts exhausted; MANUAL override required"));
+    espSerial.println(F("FAULT:OBSTACLE_5"));
+    return;
+  }
+  ++autoObstacleEvents;
+  Serial.print(F("[AVOID START] obstacle_cm="));
+  Serial.print(currentObstacleDist);
+  Serial.print(F(" interrupted="));
+  Serial.print(currentCommand);
+  Serial.print(F(" remaining_ms="));
+  Serial.println(benchRemainingMs);
+  startDetourStage(1);
+}
 
+void processAutoDrive() {
+  if (!missionActive || detourObstacleFault) {
     stopAllOutputs();
+    return;
+  }
+  if (currentCommand.length() == 0 && detourStage == 0) {
+    fetchNextAutoCommand();
+    if (!missionActive) return;
+  }
 
-    Serial.println(F("[MISSION COMPLETE]"));
+  const unsigned long now = millis();
+  const char motion = detourStage ? detourOperation(detourStage) : currentCommand.charAt(0);
+  const bool forward = motion == 'F';
+  const bool closeObstacle = ULTRASONIC_ENABLED && sonarValid &&
+                             currentObstacleDist <= OBSTACLE_DISTANCE_CM;
+  const bool sonarHold = ULTRASONIC_ENABLED && forward && forwardBlocked;
 
+  // Only a REAL valid close echo triggers a detour. Merely missing echoes
+  // must not initiate a blind reverse maneuver. Phase 1 sonar behavior is
+  // preserved as-is, including its BENCH no-echo override.
+  if (forward && closeObstacle) {
+    startBenchDetour();
+    return;
+  }
+
+  if (sonarHold) {
+    stopDriveMotors();
+    stopActuator();
+    benchLastTickMs = now;  // pause original OR detour step clock
+    if (!benchObstaclePaused) {
+      benchObstaclePaused = true;
+      Serial.println(F("[AVOID WAIT] Forward blocked without close valid echo"));
+    }
+    return;
+  }
+  if (benchObstaclePaused) {
+    benchObstaclePaused = false;
+    Serial.println(F("[AVOID WAIT END] Forward permitted"));
+  }
+
+  const unsigned long elapsed = now - benchLastTickMs;
+  benchLastTickMs = now;
+
+  if (detourStage) {
+    if (elapsed >= detourRemainingMs) {
+      stopDriveMotors();
+      detourRemainingMs = 0;
+      if (detourStage == 5) {
+        detourStage = 0;
+        benchLastTickMs = millis();
+        Serial.print(F("[AVOID COMPLETE] Original command resumes: "));
+        Serial.println(currentCommand);
+        // NOTE: This resumes the original TIMED TEST command, NOT the GPS route.
+      } else {
+        startDetourStage(detourStage + 1);
+      }
+      return;
+    }
+    detourRemainingMs -= elapsed;
+    commandBenchDetourMotors(motion);
+    return;
+  }
+
+  // The original waypoint's remaining time is frozen during the detour.
+  if (elapsed >= benchRemainingMs) {
+    benchRemainingMs = 0;
+    stopDriveMotors();
+    stopActuator();
+    Serial.print(F("[BENCH STEP DONE] "));
+    Serial.print(benchStepNumber);
+    Serial.print('/');
+    Serial.print(benchStepTotal);
+    Serial.print(F(" cmd="));
+    Serial.println(currentCommand);
+    currentCommand = "";
+    fetchNextAutoCommand();
+    return;
+  }
+  benchRemainingMs -= elapsed;
+  executeAutoCommand();
+}
+
+// =================================================================
+// FETCH NEXT AUTOMATIC COMMAND (WAYPOINT BENCH SIMULATION)
+// =================================================================
+void fetchNextAutoCommand() {
+  while (missionSequence.length() && missionSequence.charAt(0) == ',')
+    missionSequence.remove(0, 1);
+
+  if (!missionSequence.length()) {
+    missionActive = false;
+    currentCommand = "";
+    stopAllOutputs();
+    Serial.println(F("[BENCH MISSION COMPLETE] All commands processed; no measured travel"));
+    espSerial.println(F("MISSION_STATUS:BENCH_COMPLETE"));
     return;
   }
 
   int commaIndex = missionSequence.indexOf(',');
-
-  if (commaIndex != -1) {
-
-    currentCommand =
-      missionSequence.substring(0, commaIndex);
-
-    missionSequence =
-      missionSequence.substring(commaIndex + 1);
-
+  if (commaIndex >= 0) {
+    currentCommand = missionSequence.substring(0, commaIndex);
+    missionSequence.remove(0, commaIndex + 1);
   } else {
-
     currentCommand = missionSequence;
-
     missionSequence = "";
   }
 
-  int durationSec =
-    currentCommand.substring(1).toInt();
+  char op = currentCommand.charAt(0);
+  float value = currentCommand.substring(1).toFloat();
+  float durationMs = 0;
+  if (missionTimedMode) {
+    durationMs = value * 1000.0f;
+  } else if (op == 'F' || op == 'B') {
+    durationMs = value * BENCH_FORWARD_MS_PER_M;
+  } else if (op == 'L' || op == 'R') {
+    durationMs = value * BENCH_TURN_MS_PER_DEG;
+  }
 
-  missionTimerDuration = durationSec * 1000UL;
+  if (durationMs < BENCH_MIN_STEP_MS) durationMs = BENCH_MIN_STEP_MS;
+  if (durationMs > BENCH_MAX_STEP_MS) durationMs = BENCH_MAX_STEP_MS;
+  benchRemainingMs = (unsigned long)durationMs;
+  benchLastTickMs = millis();
+  ++benchStepNumber;
+  benchObstaclePaused = false;
 
-  missionTimerStart = millis();
-
-  Serial.print(F("[AUTO] Executing: "));
-  Serial.println(currentCommand);
-
-  executeAutoCommand();
+  Serial.print(F("[BENCH STEP] "));
+  Serial.print(benchStepNumber);
+  Serial.print('/');
+  Serial.print(benchStepTotal);
+  Serial.print(F(" cmd="));
+  Serial.print(currentCommand);
+  Serial.print(F(" virtual_unit="));
+  Serial.print(missionTimedMode ? F("SECONDS") : ((op == 'F' || op == 'B') ? F("METERS") : F("DEGREES")));
+  Serial.print(F(" duration_ms="));
+  Serial.print(benchRemainingMs);
+  Serial.print(F(" PWM="));
+  Serial.print(AUTO_DRIVE_SPEED);
+  Serial.print(F(" radio="));
+  Serial.println(espInTxMode ? F("TX") : F("RX"));
 }
 
 
@@ -1228,8 +1373,7 @@ void processManualDrive(
 
   // With the current CH2 inversion, throttle > 0 is physical forward.
   // Preserve reverse and steering while inhibiting forward throttle.
-  if (ULTRASONIC_ENABLED && throttle > 0 &&
-      (forwardBlocked || !sonarValid || currentObstacleDist <= OBSTACLE_DISTANCE_CM)) {
+  if (ULTRASONIC_ENABLED && throttle > 0 && forwardBlocked) {
     throttle = 0;
   }
 
@@ -1392,27 +1536,80 @@ void printDebugTelemetry(
   Serial.print(debugRightMotorPwm);
 
   Serial.print(F(" | ACT_PWM:"));
-  Serial.println(debugActuatorPwm);
+  Serial.print(debugActuatorPwm);
+  Serial.print(F(" | MissionActive:"));
+  Serial.print(missionActive);
+  Serial.print(F(" | MissionStep:"));
+  Serial.print(benchStepNumber);
+  Serial.print('/');
+  Serial.print(benchStepTotal);
+  Serial.print(F(" | RemainingMs:"));
+  Serial.print(benchRemainingMs);
+  Serial.print(F(" | AvoidStage:"));
+  Serial.print(detourStage);
+  Serial.print(F(" | AvoidAttempts:"));
+  Serial.print(autoObstacleEvents);
+  Serial.print(F(" | AvoidFault:"));
+  Serial.print(detourObstacleFault);
+  Serial.print(F(" | Radio:"));
+  Serial.println(espInTxMode ? F("TX") : F("RX"));
 }
 
 // =================================================================
 // ESP32 FRAMED SERIAL HANDLER (nonblocking, bounded length)
 // =================================================================
 void readEspLines() {
-  uint8_t budget = 96;  // never starve RC control
+  uint16_t budget = 192;
   while (espSerial.available() && budget--) {
     char c = (char)espSerial.read();
     if (c == '\r') continue;
     if (c == '\n') {
-      serialLine[serialLen] = '\0';
-      if (serialLen) processEspLine(serialLine);
+      if (!serialDiscardLine && serialLen) {
+        serialLine[serialLen] = '\0';
+        processEspLine(serialLine);
+      } else if (serialDiscardLine) {
+        Serial.println(F("[UART ERROR] Serial2 input too long; discarded"));
+      }
       serialLen = 0;
-    } else if (serialLen < sizeof(serialLine) - 1) {
-      serialLine[serialLen++] = c;
-    } else {
-      serialLen = 0;  // discard overlong line
+      serialDiscardLine = false;
+    } else if (!serialDiscardLine) {
+      if (serialLen < sizeof(serialLine) - 1) {
+        serialLine[serialLen++] = c;
+      } else {
+        serialDiscardLine = true;
+        serialLen = 0;
+      }
     }
   }
+}
+
+// Reject malformed mission strings without losing any previously stored mission.
+// Existing desktop waypoints (F=m, L/R=degrees) are deliberately NOT timed drive commands.
+bool validateMission(const String &seq, bool timed) {
+  if (seq.length() == 0 || seq.length() > 280) return false;
+  int start = 0;
+  unsigned steps = 0;
+  while (start < (int)seq.length()) {
+    int comma = seq.indexOf(',', start);
+    if (comma < 0) comma = seq.length();
+    if (comma == start || comma - start > 18) return false;
+    char op = seq.charAt(start);
+    if (op != 'F' && op != 'B' && op != 'L' && op != 'R') return false;
+    // Waypoint messages should contain only driving commands.
+    if (!timed && (op == 'U' || op == 'D' || op == 'B')) return false;
+    for (int i = start + 1; i < comma; ++i) {
+      char c = seq.charAt(i);
+      if (!((c >= '0' && c <= '9') || c == '.')) return false;
+    }
+    String number = seq.substring(start + 1, comma);
+    if (!number.length()) return false;
+    float amount = number.toFloat();
+    if (amount <= 0 || !isfinite(amount)) return false;
+    if (timed && (number.indexOf('.') >= 0 || amount > 15.0f)) return false;
+    if (++steps > 50) return false;
+    start = comma + 1;
+  }
+  return true;
 }
 
 // AVR Mega: sscanf("%f") is not supported by the default AVR libc build.
@@ -1460,16 +1657,44 @@ void processEspLine(const char *line) {
       Serial.println(F("[MISSION] Rejected while tilt fault latched"));
       return;
     }
-    missionSequence = String(line + 4);
-    missionSequence.trim();
-    if (missionSequence.length() == 0) return;
+    String incoming = String(line + 4);
+    incoming.trim();
+    bool incomingTimed = incoming.startsWith("TIME:");
+    if (incomingTimed) incoming.remove(0, 5);
+    if (!validateMission(incoming, incomingTimed)) {
+      Serial.println(F("[MISSION REJECTED] Invalid, oversized, or unsafe command"));
+      espSerial.println(F("MISSION_STATUS:REJECTED"));
+      return;
+    }
+    // Retain the complete mission independent of LoRa mode or manual/hold state.
+    savedMission = incoming;
+    missionSequence = incoming;
     if (!missionSequence.endsWith(",")) missionSequence += ",";
-    missionActive = true;
-    autoObstacleEvents=0;obstaclePrevious=false;
+    currentCommand = "";
+    missionTimedMode = incomingTimed;
+    missionActive = true; // SEMI_AUTO executes a BENCH SIMULATION of all validated waypoint commands
+    benchRemainingMs = 0;
+    benchLastTickMs = millis();
+    benchStepNumber = 0;
+    benchStepTotal = 1;
+    for (unsigned int i = 0; i < incoming.length(); ++i)
+      if (incoming.charAt(i) == ',') ++benchStepTotal;
+    benchObstaclePaused = false;
+    detourStage = 0;
+    detourRemainingMs = 0;
+    detourObstacleFault = false;
+    autoObstacleEvents=0; obstaclePrevious=false;
     missionTimerDuration = 0;
-    Serial.print(F("[MISSION UPLOADED] "));
-    Serial.println(missionSequence);
-    if (currentState == STATE_SEMI_AUTO) fetchNextAutoCommand();
+    Serial.print(F("[MISSION STORED] "));
+    Serial.println(savedMission);
+    if (!missionTimedMode) {
+      // Original waypoint units remain meters/degrees; motor times are deliberately simulated.
+      Serial.println(F("[BENCH MISSION READY] Waypoints are virtual, not calibrated motion"));
+      espSerial.println(F("MISSION_STATUS:BENCH_READY"));
+    } else {
+      Serial.println(F("[BENCH MISSION READY] Timed sequence, bounded per-step"));
+      espSerial.println(F("MISSION_STATUS:BENCH_READY"));
+    }
   }
 }
 
@@ -1558,6 +1783,8 @@ void latchTiltFault(const char *reason) {
   faultReverseActive = false;
   faultReverseNeedsNeutral = true; // left stick must be released after the fault
   missionActive = false;
+  detourStage = 0;
+  detourRemainingMs = 0;
   missionSequence = "";
   currentCommand = "";
   stopDriveMotors();
