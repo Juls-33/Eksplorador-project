@@ -25,6 +25,7 @@ export default function OperatorNavGuide({
   reachRadiusM = 5,
   lastAutoReached = null,
   onSendMission = null,
+  missionDeploymentPending = false,
 }) {
   const [sendingMission, setSendingMission] = useState(false);
   const [missionStatus, setMissionStatus] = useState('');
@@ -283,23 +284,23 @@ const movementSequenceText = movementSequence
             <div style={{ marginTop: '12px' }}>
               <button
                 onClick={async () => {
-                  if (!onSendMission || !movementSequenceText || sendingMission) return;
+                  if (!onSendMission || !movementSequenceText || sendingMission || missionDeploymentPending) return;
 
                   setSendingMission(true);
                   setMissionStatus('');
 
                   try {
                     await onSendMission(movementSequenceText);
-                    setMissionStatus('Mission sent successfully!');
+                    setMissionStatus('Deployment guide opened. Follow the safety and acknowledgment steps.');
                   } catch (error) {
                     setMissionStatus(
-                      `Failed to send mission: ${error?.message || error}`
+                      `Failed to open deployment assistant: ${error?.message || error}`
                     );
                   } finally {
                     setSendingMission(false);
                   }
                 }}
-                disabled={!onSendMission || !movementSequenceText || sendingMission}
+                disabled={!onSendMission || !movementSequenceText || sendingMission || missionDeploymentPending}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -310,19 +311,19 @@ const movementSequenceText = movementSequence
                   border: 'none',
                   borderRadius: '6px',
                   background:
-                    !onSendMission || !movementSequenceText || sendingMission
+                    !onSendMission || !movementSequenceText || sendingMission || missionDeploymentPending
                       ? '#94a3b8'
                       : 'var(--primary-green)',
                   color: '#ffffff',
                   fontWeight: 700,
                   cursor:
-                    !onSendMission || !movementSequenceText || sendingMission
+                    !onSendMission || !movementSequenceText || sendingMission || missionDeploymentPending
                       ? 'not-allowed'
                       : 'pointer',
                 }}
               >
                 <Send size={16} />
-                {sendingMission ? 'Sending...' : 'Send Mission'}
+                {sendingMission ? 'Opening assistant...' : 'Send Mission'}
               </button>
 
               {missionStatus && (

@@ -33,6 +33,8 @@ import FieldMapView from './views/FieldMapView';
 import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
 import TileManagerView from './views/TileManagerView';
+import LoRaConnectionStatus from './components/LoRaConnectionStatus';
+import { useLoRaConnection } from './hooks/useLoRaConnection';
 import { useDownloadPercent } from './hooks/useDownloadJob';
 import { calculateDistanceMeters } from './utils/geo';
 import { MOISTURE_LAYER, PH_LAYER } from './utils/layerBands';
@@ -472,6 +474,7 @@ function TelemetrySyncBar({
 }
 
 export default function App() {
+  const receiverStatus = useLoRaConnection();
   const [activeTab, setActiveTab] = useState('Dashboard');
   const [rxBoardMode, setRxBoardMode] = useState('RX');
   const [rxBoardBusy, setRxBoardBusy] = useState(false);
@@ -1163,6 +1166,8 @@ export default function App() {
 
               <div className="status-badges">
 
+                <LoRaConnectionStatus connection={receiverStatus} compact/>
+
                 <div
                   className={
                     `badge ${
@@ -1178,8 +1183,8 @@ export default function App() {
 
                   <span>
                     {isConnected
-                      ? 'Rover Connected'
-                      : 'Waiting for Rover'}
+                      ? 'Rover telemetry live'
+                      : 'Waiting for rover telemetry'}
                   </span>
                 </div>
 

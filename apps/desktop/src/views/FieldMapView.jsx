@@ -21,6 +21,9 @@ import {
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
+import MissionDeploymentWizard from '../components/MissionDeploymentWizard';
+import LoRaConnectionStatus from '../components/LoRaConnectionStatus';
+import { useLoRaConnection } from '../hooks/useLoRaConnection';
 import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
 import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
 import { MOISTURE_LAYER, PH_LAYER } from '../utils/layerBands';
@@ -141,7 +144,10 @@ const layerConfigurations = {
   }
 };
 
-export default function FieldMapView({rxBoardMode, setRxBoardMode, rxBoardBusy, setRxBoardBusy}) {
+export default function FieldMapView() {
+  const receiverStatus = useLoRaConnection();
+  const [deploymentSequence, setDeploymentSequence] = useState(null);
+  const deploymentOpening = useRef(false);
   const [fields, setFields] = useState([]);
   const [missions, setMissions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -826,65 +832,36 @@ export default function FieldMapView({rxBoardMode, setRxBoardMode, rxBoardBusy, 
   const labelStyle = { fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' };
   const pointCount = wizardStep === 'DRAWING_BOUNDARY' ? tempBoundary.length : tempWaypoints.length;
 
-  const handleRxBoardMode = async (mode) => {
-  setRxBoardBusy(true);
-
-    try {
-      await invoke('set_rx_board_mode', { mode });
-      setRxBoardMode(mode);
-    } catch (error) {
-      console.error('Failed to change RX_Board mode:', error);
-      alert(`Could not change RX_Board mode: ${error}`);
-    } finally {
-      setRxBoardBusy(false);
-    }
-};
-
     const handleSendMission = async (sequence) => {
       if (!sequence?.trim()) {
         throw new Error('No movement sequence generated.');
       }
 
-      await invoke('send_movement_sequence', { sequence });
+      if (deploymentOpening.current || deploymentSequence !== null) return;
+      deploymentOpening.current = true;
+      setDeploymentSequence(sequence);
     };
 
   return (
     <div className="field-map-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
-      {/* Top Action Header */}
-      <div className="rx-board-control">
-        <div>
-          <h3>RX_Board Control</h3>
-          <p>Operating Mode: {rxBoardMode}</p>
-        </div>
+      {deploymentSequence !== null && (
+        <MissionDeploymentWizard
+          sequence={deploymentSequence}
+          onClose={() => { deploymentOpening.current = false; setDeploymentSequence(null); }}
+        />
+      )}
 
-        
-          <div className="rx-board-buttons">
-            <button
-              className={rxBoardMode === 'RX' ? 'active' : ''}
-              disabled={rxBoardBusy || rxBoardMode === 'RX'}
-              onClick={() => handleRxBoardMode('RX')}
-            >
-              <span className="rx-mode-indicator" />
-              RX Mode
-            </button>
-
-            <button
-              className={rxBoardMode === 'TX' ? 'active' : ''}
-              disabled={rxBoardBusy || rxBoardMode === 'TX'}
-              onClick={() => handleRxBoardMode('TX')}
-            >
-              <span className="tx-mode-indicator" />
-              TX Mode
-            </button>
-          </div>
-
-      </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', id: 'field-map-header' }}>
         <div>
           <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Field Map & Heatmap Analysis</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
             Multi-variable GIS heatmap layers, bounded spatial interpolation, and real-time telemetry updates.
           </p>
+        </div>
+        {/* Top Action Header */}
+        <div className="rx-board-control" style={{width:'auto',maxWidth:'100%',marginLeft:'auto',textAlign:'right'}}>
+          <LoRaConnectionStatus connection={receiverStatus} compact/>
+
         </div>
 
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -1373,6 +1350,7 @@ export default function FieldMapView({rxBoardMode, setRxBoardMode, rxBoardBusy, 
               reachRadiusM={PIN_REACH_RADIUS_M}
               lastAutoReached={lastAutoReached}
               onSendMission={handleSendMission}
+              missionDeploymentPending={deploymentSequence !== null}
             />
           </div>
 

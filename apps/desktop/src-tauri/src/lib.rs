@@ -6,15 +6,28 @@ use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager, State};
 
-static RX_BOARD_COMMAND_TX: OnceLock<Mutex<mpsc::Sender<String>>> =
-    OnceLock::new();
+mod mission_deployment;
+mod mission_protocol;
+static RADIO: OnceLock<Mutex<mission_deployment::Radio>> = OnceLock::new();
 
+fn radio() -> &'static Mutex<mission_deployment::Radio> {
+    RADIO.get_or_init(|| Mutex::new(mission_deployment::Radio::default()))
+}
+
+fn update_radio<T>(app: &tauri::AppHandle, change: impl FnOnce(&mut mission_deployment::Radio) -> T) -> T {
+    let mut state = radio().lock().unwrap();
+    let revision = state.revision;
+    let result = change(&mut state);
+    if state.revision != revision {
+        let _ = app.emit("rx-board-connection", &*state);
+    }
+    result
+}
 
 mod database;
 
@@ -915,6 +928,31 @@ fn get_recent_telemetry() -> database::DbResult<Value> {
 }
 
 #[tauri::command]
+fn get_rx_board_connection() -> serde_json::Value {
+    serde_json::to_value(&*radio().lock().unwrap()).unwrap()
+}
+
+#[tauri::command]
+fn prepare_mission_deployment(app: tauri::AppHandle, sequence: String) -> Result<mission_deployment::Deployment, String> {
+    update_radio(&app, |radio| radio.begin(sequence))
+}
+
+#[tauri::command]
+fn confirm_mission_deployment(app: tauri::AppHandle, id: u64) -> Result<(), String> {
+    update_radio(&app, |radio| radio.confirm(id))
+}
+
+#[tauri::command]
+fn cancel_mission_deployment(app: tauri::AppHandle, id: u64) {
+    update_radio(&app, |radio| radio.cancel(id));
+}
+
+#[tauri::command]
+fn retry_mission_deployment(app: tauri::AppHandle, id: u64) -> Result<(), String> {
+    update_radio(&app, |radio| radio.retry(id))
+}
+
+#[tauri::command]
 fn set_rx_board_mode(mode: String) -> Result<(), String> {
     let mode = mode.trim().to_uppercase();
 
@@ -922,17 +960,7 @@ fn set_rx_board_mode(mode: String) -> Result<(), String> {
         return Err("Invalid mode. Use RX or TX.".to_string());
     }
 
-    let sender = RX_BOARD_COMMAND_TX
-        .get()
-        .ok_or_else(|| "Serial listener is not ready.".to_string())?;
-
-    let sender = sender
-        .lock()
-        .map_err(|_| "Serial command channel is unavailable.".to_string())?;
-
-    sender
-        .send(mode)
-        .map_err(|_| "Serial listener is disconnected.".to_string())
+    radio().lock().map_err(|e| e.to_string())?.queue(mode)
 }
 
 #[tauri::command]
@@ -943,25 +971,8 @@ fn send_movement_sequence(sequence: String) -> Result<(), String> {
         return Err("Movement sequence cannot be empty.".to_string());
     }
 
-    // Allow only the expected movement-command characters.
-    if !sequence
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == ',' || c == '.')
-    {
-        return Err("Invalid movement sequence format.".to_string());
-    }
-
-    let sender = RX_BOARD_COMMAND_TX
-        .get()
-        .ok_or_else(|| "Serial listener is not ready.".to_string())?;
-
-    let sender = sender
-        .lock()
-        .map_err(|_| "Serial command channel is unavailable.".to_string())?;
-
-    sender
-        .send(format!("MISSION:{}", sequence))
-        .map_err(|_| "Serial listener is disconnected.".to_string())
+    mission_deployment::validate_sequence(sequence)?;
+    radio().lock().map_err(|e| e.to_string())?.queue(format!("MISSION:{}", sequence))
 }
 
 const BAUD_RATE: u32 = 115200;
@@ -990,6 +1001,8 @@ fn probe_port(port_name: &str) -> bool {
 
     thread::sleep(Duration::from_millis(1000));
 
+    let _ = port.write_all(b"STATUS\n");
+    let _ = port.flush();
     let mut reader = BufReader::new(port);
 
     let deadline =
@@ -1003,6 +1016,7 @@ fn probe_port(port_name: &str) -> bool {
 
             Ok(_) => {
                 let trimmed = line.trim();
+                if trimmed.starts_with("[STATUS] Current mode:") || trimmed.contains("EKSPLORADOR RX_BOARD") { return true; }
 
                 if let Ok(json) =
                     serde_json::from_str::<Value>(trimmed)
@@ -1093,10 +1107,7 @@ fn find_receiver_port() -> Option<String> {
     found
 }
 
-fn start_serial_listener(
-    app_handle: tauri::AppHandle,
-    command_rx: mpsc::Receiver<String>,
-) {
+fn start_serial_listener(app_handle: tauri::AppHandle) {
     thread::spawn(move || {
         loop {
             let port_name = match find_receiver_port() {
@@ -1137,7 +1148,9 @@ fn start_serial_listener(
                         }
                     };
 
-                    let reader = BufReader::new(port);
+                    update_radio(&app_handle, |radio| radio.connection(Some(port_name.clone())));
+                    let mut reader = BufReader::new(port);
+                    let mut serial_line = String::new();
 
                     let mut reading_buffer:
                         Vec<BufferedReading> =
@@ -1148,32 +1161,26 @@ fn start_serial_listener(
                     let mut buffer_generation =
                         DB_GENERATION.load(Ordering::SeqCst);
 
-                    for line in reader.lines() {
-                       while let Ok(command) = command_rx.try_recv() {
-                            let command_line = format!("{}\n", command);
-
-                            match command_port.write_all(command_line.as_bytes()) {
-                                Ok(()) => {
-                                    if let Err(error) = command_port.flush() {
-                                        println!(
-                                            "[serial] Failed to flush RX_Board command: {}",
-                                            error
-                                        );
-                                    } else {
-                                        println!(
-                                            "[serial] Sent RX_Board command: {}",
-                                            command
-                                        );
-                                    }
-                                }
-                                Err(error) => {
-                                    println!(
-                                        "[serial] Failed to send RX_Board command: {}",
-                                        error
-                                    );
-                                }
-                            }
+                    loop {
+                        let result = update_radio(&app_handle, |radio| {
+                            radio.drive(Instant::now(), |command| {
+                                command_port.write_all(format!("{}\n", command).as_bytes())
+                                    .and_then(|_| command_port.flush())
+                                    .map_err(|e| e.to_string())
+                            })
+                        });
+                        if let Err(error) = result {
+                            println!("[serial] Command failed: {}", error);
+                            break;
                         }
+                        // Retain partial lines across serial timeouts. Process
+                        // commands before reading their firmware confirmations.
+                        let line = match reader.read_line(&mut serial_line) {
+                            Ok(0) => break,
+                            Ok(_) => Ok(std::mem::take(&mut serial_line)),
+                            Err(error) if error.kind() == ErrorKind::TimedOut => continue,
+                            Err(error) => Err(error),
+                        };
                         match line {
                             Ok(text) => {
                                 let current_generation =
@@ -1202,11 +1209,18 @@ fn start_serial_listener(
                                     "[serial] raw: {}",
                                     trimmed
                                 );
+                                update_radio(&app_handle, |radio| radio.line(trimmed, Instant::now()));
+                                if trimmed.starts_with("[MODE]") || trimmed.starts_with("[STATUS]") || trimmed.starts_with("[RAW RX]:") || trimmed.starts_with("[LoRa TX]") || trimmed.starts_with("[ERROR]") || trimmed.starts_with("[MISSION") {
+                                    let _ = app_handle.emit("rx-board-log", trimmed.to_string());
+                                }
 
                                 match serde_json::from_str::<Value>(
                                     trimmed
                                 ) {
                                     Ok(json) => {
+                                        if mission_deployment::is_rover_telemetry(&json) {
+                                            update_radio(&app_handle, |radio| radio.telemetry());
+                                        }
                                         let soil_valid = json
                                             .get("soilValid")
                                             .and_then(|value| {
@@ -1345,6 +1359,7 @@ fn start_serial_listener(
                 }
             }
 
+            update_radio(&app_handle, |radio| radio.connection(None));
             thread::sleep(Duration::from_secs(3));
         }
     });
@@ -1361,14 +1376,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            let (command_tx, command_rx) = mpsc::channel::<String>();
-
-            let _ = RX_BOARD_COMMAND_TX.set(Mutex::new(command_tx));
-
-            start_serial_listener(
-                app.handle().clone(),
-                command_rx,
-            );
+            start_serial_listener(app.handle().clone());
 
             Ok(())
         })
@@ -1389,6 +1397,11 @@ pub fn run() {
             create_mission,
             get_missions,
             set_rx_board_mode,
+            get_rx_board_connection,
+            prepare_mission_deployment,
+            confirm_mission_deployment,
+            cancel_mission_deployment,
+            retry_mission_deployment,
             send_movement_sequence
         ])
         .run(tauri::generate_context!())

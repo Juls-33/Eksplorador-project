@@ -6,6 +6,8 @@
 #include <TinyGPS++.h>
 #include <math.h>
 #include <stdlib.h>
+#include <Preferences.h>
+#include "../../shared/MissionProtocol.h"
 
 // ESP32 -> Mega Serial2:
 // TX33 -> Mega RX2/17
@@ -66,6 +68,120 @@ struct Soil {
 char inLine[160];
 uint8_t inLen = 0;
 bool discardLine = false;
+
+Preferences missionPreferences;
+MissionProtocol::Record missionRecord{};
+bool missionJournalReady = false;
+String pendingMegaMission;
+size_t pendingMegaOffset = 0;
+String deferredImuLine;
+String deferredModeAck;
+
+void sendImuLine(const String& line) {
+  if (pendingMegaMission.length()) deferredImuLine = line;
+  else Serial2.println(line);
+}
+
+void sendModeAck(const char* line) {
+  if (pendingMegaMission.length()) deferredModeAck = line;
+  else Serial2.println(line);
+}
+
+void sendMissionResponse(const char* prefix, const MissionProtocol::Frame& frame, const char* reason = nullptr) {
+  char key[26];
+  MissionProtocol::key(frame, key, sizeof(key));
+  String reply = String(prefix) + key;
+  if (reason) reply += String(":") + reason;
+  LoRa.idle();
+  if (LoRa.beginPacket()) {
+    LoRa.print(reply);
+    LoRa.endPacket();
+  }
+  LoRa.receive();
+}
+
+bool persistMissionRecord(const MissionProtocol::Record& record) {
+  if (missionPreferences.putBytes("latest", &record, sizeof(record)) != sizeof(record)) {
+    missionJournalReady = false; // Fail closed if durable duplicate protection is unavailable.
+    return false;
+  }
+  missionRecord = record;
+  return true;
+}
+
+void initMissionJournal() {
+  if (!missionPreferences.begin("mission-v2", false)) return;
+  const size_t size = missionPreferences.getBytesLength("latest");
+  if (size == 0) { missionJournalReady = true; return; }
+  if (size != sizeof(missionRecord)) return;
+  if (missionPreferences.getBytes("latest", &missionRecord, sizeof(missionRecord)) != sizeof(missionRecord)) return;
+  missionJournalReady = MissionProtocol::valid(missionRecord);
+}
+
+// UART handoff is serviced in small chunks so GPS, IMU, RC mode commands and
+// safety messages continue to be serviced during an upload. No execution command
+// is sent: the Mega still receives exactly RCV:<original sequence>.
+void serviceMissionForward() {
+  if (pendingMegaMission.length() == 0) return;
+  const size_t room = Serial2.availableForWrite();
+  size_t count = pendingMegaMission.length() - pendingMegaOffset;
+  if (count > room) count = room;
+  if (count > 32) count = 32;
+  if (count) pendingMegaOffset += Serial2.write((const uint8_t*)pendingMegaMission.c_str() + pendingMegaOffset, count);
+  if (pendingMegaOffset != pendingMegaMission.length()) return;
+  MissionProtocol::Record queued = missionRecord;
+  queued.stage = MissionProtocol::UART_QUEUED;
+  pendingMegaMission = "";
+  pendingMegaOffset = 0;
+  // Keep each UART line intact. Forward the latest real IMU sample immediately
+  // after RCV, before flash/LoRa work; never insert IMU or mode ACKs inside RCV.
+  if (deferredImuLine.length()) { Serial2.println(deferredImuLine); deferredImuLine = ""; }
+  if (deferredModeAck.length()) { Serial2.println(deferredModeAck); deferredModeAck = ""; }
+  MissionProtocol::Frame frame;
+  frame.id = queued.id;
+  frame.checksum = queued.checksum;
+  frame.sequence = queued.sequence;
+  if (persistMissionRecord(queued)) {
+    Serial.println("[MISSION V2] UART queued once; Mega storage is not verified");
+    sendMissionResponse("ACK2:", frame);
+  } else {
+    sendMissionResponse("NACK2:", frame, "PERSISTENCE_FAILED");
+  }
+}
+
+void receiveMissionV2(const String& packet) {
+  MissionProtocol::Frame frame;
+  if (!MissionProtocol::parse(packet.c_str(), frame)) {
+    Serial.println("[MISSION V2] Invalid frame/checksum; not forwarded");
+    LoRa.receive();
+    return;
+  }
+  if (!missionJournalReady) {
+    sendMissionResponse("NACK2:", frame, "JOURNAL_UNAVAILABLE");
+    return;
+  }
+  const auto decision = MissionProtocol::classify(frame, missionRecord);
+  if (decision == MissionProtocol::Delivery::DUPLICATE) {
+    sendMissionResponse("ACK2:", frame); // ACK loss is harmless; no second UART handoff.
+  } else if (decision == MissionProtocol::Delivery::STALE) {
+    sendMissionResponse("NACK2:", frame, "STALE_MISSION_ID");
+  } else if (decision == MissionProtocol::Delivery::CONFLICT) {
+    sendMissionResponse("NACK2:", frame, "ID_PAYLOAD_CONFLICT");
+  } else if (decision == MissionProtocol::Delivery::UNCERTAIN) {
+    // A retry while our UART job is pending is simply left to the next ACK wait.
+    // A reboot in the reserve/handoff window requires explicit operator recovery.
+    if (pendingMegaMission.length() == 0) sendMissionResponse("NACK2:", frame, "HANDOFF_OUTCOME_UNKNOWN");
+    else LoRa.receive();
+  } else if (pendingMegaMission.length() != 0) {
+    sendMissionResponse("NACK2:", frame, "PREVIOUS_HANDOFF_PENDING");
+  } else if (persistMissionRecord(MissionProtocol::reserve(frame))) {
+    pendingMegaMission = "RCV:" + String(frame.sequence) + "\n";
+    pendingMegaOffset = 0;
+    LoRa.receive();
+  } else {
+    sendMissionResponse("NACK2:", frame, "PERSISTENCE_FAILED");
+  }
+}
 
 // ================= IMU =================
 
@@ -166,15 +282,11 @@ void serviceIMU() {
       rollFilt += IMU_ALPHA * (r - rollFilt);
     }
 
-    Serial2.print("IMU:");
-    Serial2.print(pitchFilt, 2);
-    Serial2.print(',');
-    Serial2.print(rollFilt, 2);
-    Serial2.println(",1");
+    sendImuLine(String("IMU:") + String(pitchFilt, 2) + "," + String(rollFilt, 2) + ",1");
 
   } else {
     haveAngles = false;
-    Serial2.println("IMU:0,0,0");
+    sendImuLine("IMU:0,0,0");
 
     if (imuReady && ++fail >= 20) {
       imuReady = false;
@@ -258,7 +370,7 @@ void processMegaLine(const char *s) {
   if (!strcmp(s, "SET_MODE:RX")) {
     txMode = false;
     Serial.println("[MODE] RX");
-    Serial2.println("ACK: LoRa set to RX mode.");
+    sendModeAck("ACK: LoRa set to RX mode.");
 
     if (loraReady)
       LoRa.receive();
@@ -266,7 +378,7 @@ void processMegaLine(const char *s) {
   } else if (!strcmp(s, "SET_MODE:TX")) {
     txMode = true;
     Serial.println("[MODE] TX");
-    Serial2.println("ACK: LoRa set to TX mode.");
+    sendModeAck("ACK: LoRa set to TX mode.");
 
     if (loraReady)
       LoRa.idle();
@@ -496,13 +608,23 @@ void serviceRx() {
   Serial.print("[RX] ");
   Serial.println(data);
 
-  if (data.startsWith("ACK:")) {
+  if (data.startsWith("M2:")) {
+    receiveMissionV2(data);
+    return;
+  }
+
+  if (data.startsWith("ACK:") || data.startsWith("ACK2:") || data.startsWith("NACK2:")) {
     LoRa.receive();
     return;
   }
 
   if (data.length() > 275) {
     Serial.println("[RX ERROR] Payload too long, not forwarded");
+    LoRa.receive();
+    return;
+  }
+  if (pendingMegaMission.length()) {
+    Serial.println("[RX ERROR] Legacy packet ignored during protected V2 UART handoff");
     LoRa.receive();
     return;
   }
@@ -523,6 +645,7 @@ void serviceRx() {
 
 void setup() {
   Serial.begin(115200);
+  initMissionJournal();
 
   Serial2.begin(
     9600,
@@ -554,6 +677,10 @@ void setup() {
   if (loraReady) {
     LoRa.setSyncWord(0xF3);
     LoRa.enableCrc();
+    LoRa.setSpreadingFactor(MissionProtocol::SF);
+    LoRa.setSignalBandwidth(MissionProtocol::BANDWIDTH);
+    LoRa.setCodingRate4(MissionProtocol::CODING_DENOMINATOR);
+    LoRa.setPreambleLength(MissionProtocol::PREAMBLE);
   }
 
   Serial.printf(
@@ -570,6 +697,7 @@ void loop() {
   readGPS();
   serviceIMU();
   readMega();
+  serviceMissionForward();
 
   if (loraReady) {
     if (txMode) {

@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <LoRa.h>
+#include "../../shared/MissionProtocol.h"
 
 // =====================================================
 // RX_BOARD CONFIGURATION
@@ -19,6 +20,34 @@ uint32_t lastProcessedID = 0;
 uint32_t txTestCounter = 0;
 
 unsigned long lastTxTestTime = 0;
+
+bool missionTxBusy = false;
+volatile bool missionTxDone = false;
+String missionAttemptKey;
+uint32_t missionStartedAt = 0;
+uint32_t missionTxBudget = 0;
+uint32_t missionAckBudget = 1500;
+
+void onMissionTxDone() { missionTxDone = true; }
+
+void printMissionProtocol() { Serial.println(F("[MISSION PROTOCOL] V2")); }
+
+void serviceMissionTransmission() {
+  if (!missionTxBusy) return;
+  if (missionTxDone) {
+    LoRa.onTxDone(nullptr);
+    missionTxDone = false;
+    missionTxBusy = false;
+    LoRa.receive();
+    Serial.printf("[MISSION TX_DONE] %s:%lu\n", missionAttemptKey.c_str(), (unsigned long)missionAckBudget);
+  } else if (millis() - missionStartedAt > missionTxBudget) {
+    LoRa.onTxDone(nullptr);
+    LoRa.idle();
+    missionTxBusy = false;
+    LoRa.receive();
+    Serial.println(F("[ERROR] Mission transmission failed: TX completion timeout."));
+  }
+}
 
 // =====================================================
 // SEND ACK TO SENSOR UNIT
@@ -65,6 +94,12 @@ bool splitFields(const String &body, String out[], int expected) {
 // =====================================================
 
 void switchToRX() {
+  if (missionTxBusy) {
+    LoRa.onTxDone(nullptr);
+    LoRa.idle(); // Cancel a local in-flight packet; an already received packet cannot be recalled.
+    missionTxBusy = false;
+    missionTxDone = false;
+  }
   if (!txMode) {
     Serial.println(F("[MODE] Already in RX mode."));
     return;
@@ -84,6 +119,7 @@ void switchToRX() {
 }
 
 void switchToTX() {
+  printMissionProtocol();
   if (txMode) {
     Serial.println(F("[MODE] Already in TX mode."));
     return;
@@ -96,12 +132,13 @@ void switchToTX() {
   Serial.println(F("================================"));
   Serial.println(F("[MODE] TX MODE"));
   Serial.println(F("Sensor packet processing paused."));
-  Serial.println(F("Test transmission starts shortly."));
+  Serial.println(F("Mission upload mode; no automatic test transmissions."));
   Serial.println(F("Type RX to return to receive mode."));
   Serial.println(F("================================"));
 }
 
 void printStatus() {
+  printMissionProtocol();
   Serial.println();
   Serial.print(F("[STATUS] Current mode: "));
   Serial.println(txMode ? F("TX") : F("RX"));
@@ -159,6 +196,10 @@ void handleSerialCommands() {
 
 
 void transmitMission(const String &sequence) {
+  if (missionTxBusy) {
+    Serial.println(F("[ERROR] Mission transmission failed: radio still busy."));
+    return;
+  }
   // Mission commands can only be sent while TX mode is active.
   if (!txMode) {
     Serial.println(
@@ -169,6 +210,50 @@ void transmitMission(const String &sequence) {
 
   if (sequence.length() == 0) {
     Serial.println(F("[ERROR] Empty mission sequence."));
+    return;
+  }
+
+  if (sequence.startsWith("M2:")) {
+    const int separator = sequence.lastIndexOf('|');
+    if (separator < 0) {
+      Serial.println(F("[ERROR] Mission transmission failed: missing attempt number."));
+      return;
+    }
+    String packet = sequence.substring(0, separator);
+    String attempt = sequence.substring(separator + 1);
+    for (unsigned i = 0; i < attempt.length(); ++i) {
+      if (!isDigit(attempt[i])) {
+        Serial.println(F("[ERROR] Mission transmission failed: invalid attempt number."));
+        return;
+      }
+    }
+    MissionProtocol::Frame frame;
+    if (attempt.length() == 0 || attempt.toInt() < 1 || !MissionProtocol::parse(packet.c_str(), frame)) {
+      Serial.println(F("[ERROR] Mission transmission failed: invalid V2 frame or checksum."));
+      return;
+    }
+    char key[26];
+    MissionProtocol::key(frame, key, sizeof(key));
+    missionAttemptKey = String(key) + ":" + attempt;
+    missionAckBudget = MissionProtocol::ackTimeoutMs(strlen(frame.sequence));
+    missionTxBudget = MissionProtocol::airtimeMs(packet.length()) + 1000;
+    LoRa.idle();
+    if (!LoRa.beginPacket() || LoRa.write((const uint8_t*)packet.c_str(), packet.length()) != packet.length()) {
+      Serial.println(F("[ERROR] Could not start mission packet."));
+      LoRa.receive();
+      return;
+    }
+    missionTxDone = false;
+    missionTxBusy = true;
+    missionStartedAt = millis();
+    Serial.println("[MISSION SUBMITTED] " + missionAttemptKey);
+    LoRa.onTxDone(onMissionTxDone);
+    if (LoRa.endPacket(true) != 1) {
+      LoRa.onTxDone(nullptr);
+      missionTxBusy = false;
+      Serial.println(F("[ERROR] Mission transmission failed."));
+      LoRa.receive();
+    }
     return;
   }
 
@@ -351,6 +436,11 @@ void setup() {
 
   LoRa.setSyncWord(0xF3);
   LoRa.enableCrc();
+  // Explicitly retain the existing SX127x default profile on both endpoints.
+  LoRa.setSpreadingFactor(MissionProtocol::SF);
+  LoRa.setSignalBandwidth(MissionProtocol::BANDWIDTH);
+  LoRa.setCodingRate4(MissionProtocol::CODING_DENOMINATOR);
+  LoRa.setPreambleLength(MissionProtocol::PREAMBLE);
 
   LoRa.receive();
 
@@ -371,8 +461,11 @@ void setup() {
 // =====================================================
 
 void loop() {
+  serviceMissionTransmission();
   // Always allow manual mode switching.
   handleSerialCommands();
+
+  if (missionTxBusy) return; // parsePacket() would interrupt async transmission.
 
   
   // Check for incoming LoRa packets in BOTH modes.
