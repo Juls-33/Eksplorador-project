@@ -1,3 +1,4 @@
+import AnimatedDisclosure from '../components/ui/AnimatedDisclosure';
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Compass, Navigation, Radio, ShieldCheck } from 'lucide-react';
 import overview from '../assets/user-manual/live-monitoring/overview.png';
@@ -30,10 +31,10 @@ function GettingStarted({ Steps, Notice, instructionalGuide }) {
       <>Look for <strong>Rover telemetry live</strong> and check whether the packet number in <strong>Live Sampling Queue</strong> advances as new packets arrive. Then check GPS and probe status.</>,
     ]} />
     <Notice title="A USB connection is only the first step"><p><strong>Desktop LoRa connected</strong> does not prove that the rover is sending packets or that every sensor value is valid. Use the connection, GPS and probe indicators together.</p></Notice>
-    <details className="manual-details"><summary>See the actual dashboard layout</summary>
+    <AnimatedDisclosure className="manual-details" title={"See the actual dashboard layout"}>
       {instructionalGuide(overview, 'Actual Live Monitoring Board showing receiver and GPS indicators, four soil cards, map, sampling queue, recent samples and Crop Suitability', 'Actual running app with no receiver or live sensor packets at capture time. Dashes and empty panels are the real waiting state. This screenshot is a reference, not current telemetry.')}
-    </details>
-    <details className="manual-details"><summary>Desktop still shows TX after mission upload?</summary><p>The Mission Deployment Assistant normally restores desktop RX. Follow its recovery instructions if restoration failed. This Live Monitoring screen has no manual TX/RX switch button. Do not expect telemetry while the desktop remains in TX.</p></details>
+    </AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"Desktop still shows TX after mission upload?"}><p>The Mission Deployment Assistant normally restores desktop RX. Follow its recovery instructions if restoration failed. This Live Monitoring screen has no manual TX/RX switch button. Do not expect telemetry while the desktop remains in TX.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -91,8 +92,8 @@ function SoilMonitoring({ Notice, instructionalGuide }) {
       <tr><th scope="row">Numbers remain while telemetry is waiting</th><td>They may be old. Check packet freshness before using them; some cards retain the last accepted values.</td></tr>
       <tr><th scope="row">A displayed 0</th><td>It may be a real zero, an unsupported reading or a missing value saved as zero. This screen alone cannot tell which. Confirm fresh, valid sensor data before treating it as a measurement.</td></tr>
     </tbody></table></div></section>
-    <details className="manual-details"><summary>See the EC and NPK cards</summary>{instructionalGuide(ecNpk, 'Actual Conductivity EC and NPK Ratio cards with uS/cm and mg/kg labels and no valid readings', 'Actual waiting state: units remain visible even though no valid values have arrived.')}</details>
-    <details className="manual-details"><summary>Units and fields to check on the actual sensor</summary><p>This guide follows the Live Monitoring page’s <strong>uS/cm</strong> EC label. Confirm the sensor’s output units and calibration before comparing readings with another page or instrument. Soil temperature and salinity are not displayed on this dashboard.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"See the EC and NPK cards"}>{instructionalGuide(ecNpk, 'Actual Conductivity EC and NPK Ratio cards with uS/cm and mg/kg labels and no valid readings', 'Actual waiting state: units remain visible even though no valid values have arrived.')}</AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"Units and fields to check on the actual sensor"}><p>This guide follows the Live Monitoring page’s <strong>uS/cm</strong> EC label. Confirm the sensor’s output units and calibration before comparing readings with another page or instrument. Soil temperature and salinity are not displayed on this dashboard.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -119,8 +120,8 @@ function ReadingLiveData({ Steps, Notice, instructionalGuide }) {
       <li>Saved records are checked every <strong>10 seconds</strong>. Saving is also buffered, so table rows can appear later than the live cards.</li>
       <li>The backend searches for the desktop receiver again after loss. Automatic USB recovery does not guarantee the rover’s wireless link or change its SD switch.</li>
     </ul></section>
-    <details className="manual-details"><summary>Map layers and live locations</summary><p><strong>Field Heatmap Spatial View</strong> offers Soil Moisture, Soil pH, Electrical Conductivity, Nitrogen, Phosphorus and Potassium. Live points are added only when the app has a usable GPS fix and the packet marks the soil reading as valid. The colored display uses available measurements; it is not a new reading from every spot on the map.</p><p>Dragging the map, place search and downloaded-area selection change the view. The <strong>Online map</strong> label describes map tiles, not a working LoRa link.</p></details>
-    <details className="manual-details"><summary>Recent Geo-tagged Samples and historical selection</summary>
+    <AnimatedDisclosure className="manual-details" title={"Map layers and live locations"}><p><strong>Field Heatmap Spatial View</strong> offers Soil Moisture, Soil pH, Electrical Conductivity, Nitrogen, Phosphorus and Potassium. Live points are added only when the app has a usable GPS fix and the packet marks the soil reading as valid. The colored display uses available measurements; it is not a new reading from every spot on the map.</p><p>Dragging the map, place search and downloaded-area selection change the view. The <strong>Online map</strong> label describes map tiles, not a working LoRa link.</p></AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"Recent Geo-tagged Samples and historical selection"}>
       {instructionalGuide(recentSamples, 'Actual empty Recent Geo-tagged Samples table showing Time, Lat and Lng, pH, moisture, EC and NPK columns', 'Actual empty table. The Time column belongs to saved records; it is not a live packet-age counter.')}
       <Steps items={[
         'Review Time and Lat / Lng with the saved soil values. The recent table is session-based; an empty table does not prove the full database is empty.',
@@ -130,8 +131,8 @@ function ReadingLiveData({ Steps, Notice, instructionalGuide }) {
         <>Use <strong>Clear selection</strong> to leave the historical group and return to the live heatmap. Saved records are not deleted.</>,
       ]} />
       <p className="manual-muted">Selecting history changes the map and assessment source, not the live soil cards. A historical map position is not the rover’s current position. Crop Suitability is an app summary, not a verified crop or fertilizer recommendation.</p>
-    </details>
-    <details className="manual-details"><summary>Export Data, Import Data and Merge Data</summary><p><strong>Export Data</strong> saves a backup of the full database. <strong>Import Data</strong> replaces the database from a backup; it is not a refresh button. <strong>Merge Data</strong> combines backup data with the current database. Back up existing records before replacing them. These controls do not restore a radio link.</p></details>
+    </AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"Export Data, Import Data and Merge Data"}><p><strong>Export Data</strong> saves a backup of the full database. <strong>Import Data</strong> replaces the database from a backup; it is not a refresh button. <strong>Merge Data</strong> combines backup data with the current database. Back up existing records before replacing them. These controls do not restore a radio link.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -148,7 +149,7 @@ const problems = [
 function Troubleshooting({ Notice }) {
   return <>
     <Notice title="Check the rover safely" caution><p>Use HOLD or DISARM and confirm that movement has stopped before checking hardware. Disconnect rover power before handling wiring. Never bypass a safety protection to restore readings.</p></Notice>
-    <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <details className="manual-details" key={problem}><summary>{problem}</summary><p>{solution}</p></details>)}</div>
+    <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <AnimatedDisclosure className="manual-details" key={problem} title={problem}><p>{solution}</p></AnimatedDisclosure>)}</div>
     <p className="manual-muted">Actual sensor units, calibration, valid zero readings, USB recovery and outdoor GPS behavior still need checks on the physical system.</p>
   </>;
 }

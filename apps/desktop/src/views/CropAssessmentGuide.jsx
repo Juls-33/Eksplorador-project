@@ -1,3 +1,4 @@
+import AnimatedDisclosure from '../components/ui/AnimatedDisclosure';
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ShieldCheck } from 'lucide-react';
 import overview from '../assets/user-manual/crop-assessment/overview.png';
@@ -35,8 +36,8 @@ function GettingStarted({ Steps, Notice, instructionalGuide }) {
       'Check the selected crop and plot names above the map before interpreting any results.',
     ]} />
     <Notice title="Collect soil data first"><p>If <strong>No plots recorded yet</strong> appears, collect and save soil samples through the normal rover workflow in Field Map. Creating a field, placing pins or adding a crop profile does not create soil measurements.</p></Notice>
-    <details className="manual-details"><summary>See the full Crop Assessment screen</summary>{instructionalGuide(overview, 'Actual Crop Assessment screen with saved profiles, the selected crop, threshold cards and an empty heatmap state', 'Real app capture. The displayed numbers are existing profile limits, not measured soil values. No plot, scored result or crop recommendation was fabricated.')}</details>
-    <details className="manual-details"><summary>Plot or sampling session?</summary><p>This page groups stored samples by their <strong>plot name</strong>. It has no mission, date or sampling-session selector. Records from different visits with the same plot name may be assessed together. For a specific mission, review Mission Samples in Field Map.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"See the full Crop Assessment screen"}>{instructionalGuide(overview, 'Actual Crop Assessment screen with saved profiles, the selected crop, threshold cards and an empty heatmap state', 'Real app capture. The displayed numbers are existing profile limits, not measured soil values. No plot, scored result or crop recommendation was fabricated.')}</AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"Plot or sampling session?"}><p>This page groups stored samples by their <strong>plot name</strong>. It has no mission, date or sampling-session selector. Records from different visits with the same plot name may be assessed together. For a specific mission, review Mission Samples in Field Map.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -69,7 +70,7 @@ function Suitability({ Steps, Notice }) {
     <div className="manual-table-wrap" role="region" aria-label="Existing sample suitability categories" tabIndex={0}><table className="manual-table"><caption>How samples are counted</caption><thead><tr><th scope="col">Category</th><th scope="col">Verified rule</th></tr></thead><tbody>{categories.map(item => <tr key={item.name}><th scope="row">{item.name}</th><td>{item.rule}</td></tr>)}</tbody></table></div>
     <div className="manual-inset"><h3>How the percentage is calculated</h3><p>Suitable samples ÷ all scored samples × 100, rounded to a whole percent.</p><p>It is a share of <strong>sample records</strong>, not the percentage of field area, expected yield or probability that a crop will succeed.</p></div>
     <Notice title="Missing checks can make a result look more complete than it is" caution><p>Missing values and unavailable ranges are skipped; they are not counted as failures. A record with just one checked value in range can be counted as suitable even if other measurements are missing. Read the original sample data before relying on the summary.</p></Notice>
-    <details className="manual-details"><summary>What does Most often out of range mean?</summary><p>This text lists parameters that fell outside the profile limits, ordered by how often they did so among scored samples. It does not say whether a value was too high or too low, and it does not prescribe a treatment or fertilizer amount.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"What does Most often out of range mean?"}><p>This text lists parameters that fell outside the profile limits, ordered by how often they did so among scored samples. It does not say whether a value was too high or too low, and it does not prescribe a treatment or fertilizer amount.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -84,7 +85,7 @@ function CompareProfiles({ Steps, Notice, instructionalGuide }) {
       <>After changing the category filter, click the intended profile and recheck its name on the right. Filtering the list alone does not select a different crop. Use <strong>All Crop Types</strong> to find a profile hidden by a category.</>,
     ]} />
     <Notice title="No automatic best-crop suggestion is provided"><p>If you cannot find a recommendation list, you are not missing a recommendation button. Use the current profile comparisons as guidance. The app does not provide crop grades, yield predictions or a guarantee of crop performance.</p></Notice>
-    <details className="manual-details"><summary>No results for the crop I selected</summary><p>Check for a selected recorded plot, usable sample locations, available measurements and saved profile limits. If no samples can be scored, the map area shows a no-data message rather than a suitability percentage. Do not change sensor values or ranges just to make the result look better.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"No results for the crop I selected"}><p>Check for a selected recorded plot, usable sample locations, available measurements and saved profile limits. If no samples can be scored, the map area shows a no-data message rather than a suitability percentage. Do not change sensor values or ranges just to make the result look better.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -99,8 +100,8 @@ function Heatmaps({ Steps, Notice, instructionalGuide }) {
     {instructionalGuide(emptyHeatmap, 'Actual Field Suitability Heatmap empty state asking the operator to select a recorded plot', 'Actual no-plot capture. A scored map was not generated for this guide. The reference legend below explains the source-code rules, not a fabricated field result.')}
     <div className="manual-table-wrap" role="region" aria-label="Reference legend for Crop Assessment heatmaps" tabIndex={0}><table className="manual-table"><caption>Reference legend — explains the interface, not a field result</caption><thead><tr><th scope="col">Color</th><th scope="col">App legend</th><th scope="col">Interpretation</th></tr></thead><tbody>{categories.map(item => <tr key={item.name}><th scope="row"><span aria-hidden="true" style={{ display: 'inline-block', width: 12, height: 12, borderRadius: 3, background: item.color, marginRight: 7 }} />{item.colorName}</th><td>{item.legend}</td><td>{item.rule}</td></tr>)}</tbody></table></div>
     <Notice title="Colors between samples are estimates" caution><p>The map blends sample suitability values between recorded locations. It does not take a direct sensor measurement at every colored spot. “All parameters in range” means all parameters that could be checked; it does not prove that every sample contains all six readings.</p></Notice>
-    <details className="manual-details"><summary>Map extent and limited sampling</summary><p>The displayed outline is built around the scored sample locations, with a padded box used when needed. It is not the saved Field Map boundary. Few, clustered or widely separated samples can leave parts of a real field poorly represented. One eligible sample can produce a summary; that does not establish whole-field coverage.</p><p>This suitability map does not show a live rover marker, Follow Rover control or individual sample-pin toggle.</p></details>
-    <details className="manual-details"><summary>View individual soil parameters</summary><p>This page has no pH, moisture or NPK layer selector: its map combines the crop’s available parameter checks. Open <strong>Field Map</strong> separately from the sidebar for that page’s soil layers and mission samples. Crop Assessment has no direct Field Map heatmap link button. The legends and calculations on the two pages are different.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"Map extent and limited sampling"}><p>The displayed outline is built around the scored sample locations, with a padded box used when needed. It is not the saved Field Map boundary. Few, clustered or widely separated samples can leave parts of a real field poorly represented. One eligible sample can produce a summary; that does not establish whole-field coverage.</p><p>This suitability map does not show a live rover marker, Follow Rover control or individual sample-pin toggle.</p></AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"View individual soil parameters"}><p>This page has no pH, moisture or NPK layer selector: its map combines the crop’s available parameter checks. Open <strong>Field Map</strong> separately from the sidebar for that page’s soil layers and mission samples. Crop Assessment has no direct Field Map heatmap link button. The legends and calculations on the two pages are different.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -119,8 +120,8 @@ function Records({ Steps, Notice, instructionalGuide }) {
       <tr><th scope="row">A stored zero</th><td>Zero is checked as a number, not automatically treated as missing. Some missing readings may already have been saved as zero. Blank text may also be read as zero. Confirm the original sensor data before treating it as a genuine measurement.</td></tr>
     </tbody></table></div></section>
     <Notice title="The assessment does not recheck a live sensor"><p>It uses saved records. It does not independently confirm a fresh GPS fix, current probe contact or sensor calibration. A large plot count or high suitable-sample percentage is not proof of complete, valid measurements.</p></Notice>
-    <details className="manual-details"><summary>Refresh and update behavior</summary><p>There is no Refresh button or automatic polling on this page. Selecting a different plot loads its saved samples. Selecting another crop recalculates against the samples already loaded; it does not fetch newly saved samples for the same plot. Reopen the page to reload the lists and current samples.</p></details>
-    <details className="manual-details"><summary>Crop profile controls</summary>
+    <AnimatedDisclosure className="manual-details" title={"Refresh and update behavior"}><p>There is no Refresh button or automatic polling on this page. Selecting a different plot loads its saved samples. Selecting another crop recalculates against the samples already loaded; it does not fetch newly saved samples for the same plot. Reopen the page to reload the lists and current samples.</p></AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"Crop profile controls"}>
       <div style={{ width: '100%', maxWidth: 540 }}>{instructionalGuide(controls, 'Actual All Crop Types filter and Add Crop Profile button', 'Actual controls. Profile editing changes comparison rules; it does not create or edit recorded sensor measurements.')}</div>
       <Steps items={[
         <>Use <strong>Add Crop Profile</strong> to open a new profile, or the pencil titled <strong>Edit Crop Thresholds</strong> for the selected profile.</>,
@@ -129,7 +130,7 @@ function Records({ Steps, Notice, instructionalGuide }) {
       ]} />
       <p>The form checks that a name is present and that each range has valid numbers in the correct order. That check does not establish agricultural suitability. The trash button titled <strong>Delete Crop Profile</strong> removes that profile without a separate confirmation dialog; use it carefully. It is not a filter or a way to clear the map.</p>
       <p>Legume is available in the profile form but not as a separate top category filter. Use All Crop Types to find those profiles.</p>
-    </details>
+    </AnimatedDisclosure>
   </>;
 }
 
@@ -148,7 +149,7 @@ const problems = [
 function Troubleshooting({ Notice }) {
   return <>
     <Notice title="Review the records before acting"><p>Use these comparisons as project guidance. They are not laboratory certification, crop grades, fertilizer instructions or yield predictions. Do not alter measured values to obtain a preferred result.</p></Notice>
-    <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <details className="manual-details" key={problem}><summary>{problem}</summary><p>{solution}</p></details>)}</div>
+    <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <AnimatedDisclosure className="manual-details" key={problem} title={problem}><p>{solution}</p></AnimatedDisclosure>)}</div>
     <p className="manual-muted">Actual sensor units, calibration, sample quality and the agricultural validity of stored crop limits still need verification outside this documentation task.</p>
   </>;
 }

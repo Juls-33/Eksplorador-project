@@ -7,6 +7,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { generateIDWHeatmapGrid } from '../utils/geo';
 import { fetchAllCoverage } from '../services/tileStorage';
 import { searchPlaces, MIN_QUERY_LENGTH } from '../services/placeSearch';
+import AnimatedMenu from './ui/AnimatedMenu';
 
 const hasMapPosition = (position) =>
   Array.isArray(position) &&
@@ -676,6 +677,7 @@ export default function HeatmapMap({
   // services/placeSearch.js for the geocoder usage policy this respects.
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const searchPanelRef = useRef(null);
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchNote, setSearchNote] = useState(null);
   const searchAbortRef = useRef(null);
@@ -861,6 +863,7 @@ export default function HeatmapMap({
       </div>
 
       <div
+        ref={searchPanelRef}
         style={{
           position: 'absolute',
           top: '12px',
@@ -952,18 +955,16 @@ export default function HeatmapMap({
           </div>
         )}
 
-        {searchResults.length > 0 && (
-          <ul className="ui-menu"
+        <AnimatedMenu open={searchResults.length > 0} anchorRef={searchPanelRef} onDismiss={() => setSearchResults([])}>
+          <ul aria-label="Place search results"
             style={{
               listStyle: 'none',
-              margin: '6px 0 0',
+              margin: 0,
               padding: '4px',
               borderRadius: '8px',
               border: '1px solid var(--card-border, #e2e8f0)',
               background: '#fff',
               boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-              maxHeight: '240px',
-              overflowY: 'auto'
             }}
           >
             {searchResults.map((r) => (
@@ -995,7 +996,7 @@ export default function HeatmapMap({
               </li>
             ))}
           </ul>
-        )}
+        </AnimatedMenu>
       </div>
 
       {/* Jump to a downloaded map: lists bundled + user-downloaded coverage

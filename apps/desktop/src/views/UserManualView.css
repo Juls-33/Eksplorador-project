@@ -74,10 +74,10 @@
 .manual-table th[scope="row"] { width: 126px; min-width: 105px; }
 .manual-muted, .manual-source { color: #526070; font-size: 0.8rem; }
 .manual-source a { color: var(--primary-green); text-underline-offset: 3px; }
-.manual-details { border: 1px solid var(--card-border); border-radius: 10px; padding: 0 16px; min-width: 0; }
-.manual-details > summary { padding: 13px 0; font-weight: 650; color: var(--primary-green); }
-.manual-details > :not(summary) { margin-bottom: 14px; }
-.manual-details[open] > summary { margin-bottom: 4px; }
+.manual-details { border: 1px solid var(--card-border); border-radius: 10px; min-width: 0; }
+.manual-details > .disclosure-trigger { padding: 13px 16px; font-weight: 650; color: var(--primary-green); }
+.manual-details .disclosure-content { padding: 4px 16px 14px; }
+.manual-details .disclosure-content > :not(:last-child) { margin-bottom: 14px; }
 .manual-button-list > div { display: grid; grid-template-columns: 145px minmax(0, 1fr); gap: 12px; padding: 8px 0; border-bottom: 1px solid #edf1ee; font-size: 0.83rem; }
 .manual-button-list dt { font-weight: 700; }
 .manual-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--primary-green); font-size: 0.79rem; }

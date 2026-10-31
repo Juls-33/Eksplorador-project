@@ -1,3 +1,4 @@
+import AnimatedDisclosure from '../components/ui/AnimatedDisclosure';
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ClipboardCheck } from 'lucide-react';
 import overview from '../assets/user-manual/reports/overview.png';
@@ -27,8 +28,8 @@ function GettingStarted({ Steps, Notice, instructionalGuide }) {
       'Scroll inside the document to review all four sections and the footer before printing or sharing it.',
     ]} />
     <Notice title="Collect and save data first"><p>If <strong>No telemetry data found</strong> appears, check that soil readings have been saved. A planned mission or an empty field does not create report measurements.</p></Notice>
-    <details className="manual-details"><summary>See the full Reports page</summary>{instructionalGuide(overview, 'Actual Agronomic Field Reports page with plot filter, print button, report list and document preview', 'Actual interface with existing stored records. Some labels are generated fallbacks and some readings need review; this is not an example of verified soil conditions.')}</details>
-    <details className="manual-details"><summary>Choosing a report after filtering</summary><p>The menu narrows the report list; it does not choose individual samples or a date range. Click the intended card after filtering and verify the document header, even if a card highlight is unclear. The number beside All Plots is the number of generated reports, not a sample count.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"See the full Reports page"}>{instructionalGuide(overview, 'Actual Agronomic Field Reports page with plot filter, print button, report list and document preview', 'Actual interface with existing stored records. Some labels are generated fallbacks and some readings need review; this is not an example of verified soil conditions.')}</AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"Choosing a report after filtering"}><p>The menu narrows the report list; it does not choose individual samples or a date range. Click the intended card after filtering and verify the document header, even if a card highlight is unclear. The number beside All Plots is the number of generated reports, not a sample count.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -43,9 +44,9 @@ function RecordedData({ Steps, Notice, instructionalGuide }) {
       <>For individual readings, sampling times and saved GPS locations, review the original records in <strong>Field Map → Mission Directory → Mission Samples</strong> or the saved-record table in <strong>Live Monitoring</strong>.</>,
     ]} />
     <Notice title="Missing values can appear as zero" caution><p>The summary skips missing, blank and nonnumeric entries for each measurement. If no usable entries remain for that parameter, its minimum, maximum and average are displayed as zero. Stored zeros are included too, even when they came from missing data. Do not treat every displayed zero as a genuine measurement.</p></Notice>
-    <details className="manual-details"><summary>How records are grouped</summary><p>Reports groups saved rows by mission ID, not by sampling date or crop profile. Records without a mission ID are combined into one group, even if they came from different visits. The field name comes from the first record in that group, so the plot filter alone cannot prove that every included row belongs to that field.</p></details>
-    <details className="manual-details"><summary>Dates and generated identifiers</summary><p>The database is read with the latest timestamps first. Survey Date takes the text before the first space in the group’s first timestamp. It is not a start/end reporting period; time-only or missing timestamps can produce incomplete or fallback date text.</p><p>If assignments are missing, the page supplies a Plot name and MSN mission label. Report IDs are generated from list order, not a permanent saved report archive. Check the original mission information before using those labels as references.</p></details>
-    <details className="manual-details"><summary>New samples have just been saved</summary><p>Reports reads the database when you open the page. After new data is saved, leave Reports and return to rebuild the summaries. There is no Refresh button or automatic update while the page stays open.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"How records are grouped"}><p>Reports groups saved rows by mission ID, not by sampling date or crop profile. Records without a mission ID are combined into one group, even if they came from different visits. The field name comes from the first record in that group, so the plot filter alone cannot prove that every included row belongs to that field.</p></AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"Dates and generated identifiers"}><p>The database is read with the latest timestamps first. Survey Date takes the text before the first space in the group’s first timestamp. It is not a start/end reporting period; time-only or missing timestamps can produce incomplete or fallback date text.</p><p>If assignments are missing, the page supplies a Plot name and MSN mission label. Report IDs are generated from list order, not a permanent saved report archive. Check the original mission information before using those labels as references.</p></AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"New samples have just been saved"}><p>Reports reads the database when you open the page. After new data is saved, leave Reports and return to rebuild the summaries. There is no Refresh button or automatic update while the page stays open.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -63,11 +64,11 @@ function ReportContents({ Notice, instructionalGuide }) {
     {instructionalGuide(summary, 'Actual report average cards and parameter table showing minimum, maximum, mean and status columns', 'Real stored-data summary. The screenshot includes unusual values; a green status label does not validate them. These numbers are not recommended ranges or performance figures.')}
     <div className="manual-table-wrap" role="region" aria-label="Sections in the Reports document" tabIndex={0}><table className="manual-table"><caption>What each part contains</caption><thead><tr><th scope="col">Part</th><th scope="col">How to read it</th></tr></thead><tbody>{sections.map(([title, text]) => <tr key={title}><th scope="row">{title}</th><td>{text}</td></tr>)}</tbody></table></div>
     <Notice title="A status label is not a sensor-validity check" caution><p>For example, EC is always labeled <strong>Normal</strong> in this report, regardless of its value. Reports displays EC as <strong>dS/m</strong>, while Live Monitoring displays <strong>uS/cm</strong>; the report applies no unit conversion. Confirm the sensor and stored units before sharing the result.</p></Notice>
-    <details className="manual-details"><summary>How the existing fertility label is calculated</summary><p>The report starts at 70 points. It adds 15 for mean pH from 6.0 to 7.0, 10 for mean moisture from 30% to 60%, and 5 when mean N and P are at least 20 mg/kg and K at least 30 mg/kg. These are the app’s rules, not new agricultural target values supplied by this guide.</p><p>The list shows the score out of 100. The current rules produce Grade A at 85 or above and Grade B below that. A green list badge starts at 80, so its color does not always mean Grade A. This calculation does not check that every record has complete, valid measurements.</p></details>
-    <details className="manual-details"><summary>Crop suggestions and action text</summary>
+    <AnimatedDisclosure className="manual-details" title={"How the existing fertility label is calculated"}><p>The report starts at 70 points. It adds 15 for mean pH from 6.0 to 7.0, 10 for mean moisture from 30% to 60%, and 5 when mean N and P are at least 20 mg/kg and K at least 30 mg/kg. These are the app’s rules, not new agricultural target values supplied by this guide.</p><p>The list shows the score out of 100. The current rules produce Grade A at 85 or above and Grade B below that. A green list badge starts at 80, so its color does not always mean Grade A. This calculation does not check that every record has complete, valid measurements.</p></AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"Crop suggestions and action text"}>
       {instructionalGuide(advice, 'Actual report crop suggestions and action-plan sections generated from existing stored averages', 'Existing report output. Viable percentages are fixed app labels, and action text comes from rules. Neither is a verified forecast or treatment plan.')}
       <p>Reports uses its own built-in rules. It does not use the crop profile selected in Crop Assessment, so the two pages can show different summaries. Review the data and units with the project team or an agricultural technician before acting on the advice.</p>
-    </details>
+    </AnimatedDisclosure>
   </>;
 }
 
@@ -82,7 +83,7 @@ function Printing({ Steps, Notice, instructionalGuide }) {
       'After saving a PDF, open the file from the location you chose. Check that the intended report and all sections are present before sharing it.',
     ]} />
     <Notice title="Confirm the output yourself"><p>Reports does not show an export-success message or a saved-file path. Closing the print dialog is not proof that a PDF was saved. Canceling the dialog does not create a file.</p></Notice>
-    <details className="manual-details"><summary>Print options and page layout</summary><p>The app requests portrait printing and hides the surrounding interface so that the selected report document is printed. The installed webview, print dialog and printer decide the available destinations and settings. Review the actual preview for clipped text, missing sections or blank pages; correct output has not been confirmed for every printer.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"Print options and page layout"}><p>The app requests portrait printing and hides the surrounding interface so that the selected report document is printed. The installed webview, print dialog and printer decide the available destinations and settings. Review the actual preview for clipped text, missing sections or blank pages; correct output has not been confirmed for every printer.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -114,7 +115,7 @@ const problems = [
 
 function Troubleshooting({ Notice }) {
   return <>
-    <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <details className="manual-details" key={problem}><summary>{problem}</summary><p>{solution}</p></details>)}</div>
+    <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <AnimatedDisclosure className="manual-details" key={problem} title={problem}><p>{solution}</p></AnimatedDisclosure>)}</div>
     <Notice title="Use the original records to resolve questions"><p>Keep the source data unchanged while checking a report. Ask the project team to verify unexplained units, invalid readings, mixed assignments or print problems.</p></Notice>
     <p className="manual-muted">Sensor calibration, report advice and physical field conditions still need validation. Actual PDF saving and printer output also depend on the installed system print support.</p>
   </>;

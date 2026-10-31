@@ -1,3 +1,4 @@
+import AnimatedDisclosure from '../components/ui/AnimatedDisclosure';
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, ShieldCheck } from 'lucide-react';
 import overview from '../assets/user-manual/field-map/overview.png';
@@ -40,7 +41,7 @@ function Fields({ Steps, Notice, instructionalGuide }) {
       <>Continue with <strong>Next: Place Pins</strong>, or <strong>Next: Draw Field Boundary</strong> if the field has no boundary. Reusing unchanged pins can go straight to <strong>Launch Mission</strong>.</>,
     ]} /></section>
     <Notice title="Launch and send are separate"><p><strong>Launch Mission</strong> saves the mission and starts its logging state. It does not upload the route or start rover movement. The scheduled date does not automatically deploy a mission.</p></Notice>
-    <details className="manual-details"><summary>Manage field names</summary><p>Open Start New Mission → <strong>Manage Fields</strong>. Use the pencil to rename a field, then the check mark to save. A field with missions cannot be deleted. Cancel the form if you are only reviewing it.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"Manage field names"}><p>Open Start New Mission → <strong>Manage Fields</strong>. Use the pencil to rename a field, then the check mark to save. A field with missions cannot be deleted. Cancel the form if you are only reviewing it.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -54,8 +55,8 @@ function MapNavigation({ Steps, Notice, instructionalGuide }) {
       <>Dragging, choosing a search result or jumping to an area turns off automatic following. Use <strong>Follow Rover</strong> to center on the rover marker again.</>,
     ]} />
     <Notice title="Check the source of the position" caution><p>A marker or IMU Yaw value alone does not prove that GPS or heading is live. Field Map can show an initial or last known position. Confirm fresh rover telemetry before relying on the route.</p></Notice>
-    <details className="manual-details"><summary>Internet and offline maps</summary><p>Place search needs internet. Saved tiles can display offline, but only for covered areas and zoom levels. Use <strong>Offline Maps</strong> to prepare coverage. The current map is limited to the supported region from Nueva Ecija to Batangas; it is not a worldwide search view.</p></details>
-    <details className="manual-details"><summary>See the full Field Map screen</summary>{instructionalGuide(overview, 'Actual Field Map showing the mission directory, saved boundary, numbered waypoints, legend and right-hand information cards', 'Real app capture with a saved mission and no connected receiver. Readings are blank. The marker, heading and calculated distances are not confirmation of a live rover position. Scroll the right column to see more cards.')}</details>
+    <AnimatedDisclosure className="manual-details" title={"Internet and offline maps"}><p>Place search needs internet. Saved tiles can display offline, but only for covered areas and zoom levels. Use <strong>Offline Maps</strong> to prepare coverage. The current map is limited to the supported region from Nueva Ecija to Batangas; it is not a worldwide search view.</p></AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"See the full Field Map screen"}>{instructionalGuide(overview, 'Actual Field Map showing the mission directory, saved boundary, numbered waypoints, legend and right-hand information cards', 'Real app capture with a saved mission and no connected receiver. Readings are blank. The marker, heading and calculated distances are not confirmation of a live rover position. Scroll the right column to see more cards.')}</AnimatedDisclosure>
   </>;
 }
 
@@ -71,7 +72,7 @@ function Waypoints({ Steps, Notice }) {
     ]} />
     <div className="manual-control-pair"><div className="manual-inset"><h3>Brown numbered pins</h3><p>Planned waypoints. The dashed route connects them in order.</p></div><div className="manual-inset"><h3>Red × pins</h3><p>Removal mode is on. Click a pin to delete it from the draft.</p></div></div>
     <Notice title="Review before launch" caution><p><strong>Edit Field Boundary</strong> returns to boundary drawing. Confirming the changed boundary clears the draft pins. Saved missions are not edited by clicking their pins; create a new mission and choose to reuse or modify earlier pins.</p></Notice>
-    <details className="manual-details"><summary>Cancel or change a draft</summary><p><strong>Cancel</strong> exits the current drawing or pin-placement step. A boundary saved in an earlier step remains saved. After removing pins, check the new numbering and route before launching.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"Cancel or change a draft"}><p><strong>Cancel</strong> exits the current drawing or pin-placement step. A boundary saved in an earlier step remains saved. After removing pins, check the new numbering and route before launching.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -85,7 +86,7 @@ function MovementSequence({ Steps, Notice, instructionalGuide }) {
       <>Check the full sequence before <strong>Send Mission</strong>. The first leg uses the app’s current rover position and heading; later legs follow the saved pin order. Position or heading updates can change the preview.</>,
     ]} />
     <Notice title="Planned movement is not confirmed arrival" caution><p>Outdoor navigation and heading calibration are still needed. Map distances, turn instructions and <strong>IN RANGE</strong> indicators do not guarantee actual arrival or safe movement.</p></Notice>
-    <details className="manual-details"><summary>What does Reached do?</summary><p><strong>Reached</strong> advances the guide’s target by hand. It does not drive the rover, upload a changed route or save a soil sample. The app can also mark a pin reached when a recorded sample is within its configured 5 m matching radius. That is a progress rule, not a GPS accuracy claim.</p><p>The generated upload still uses the full pin list, including pins already marked reached. Recheck the whole payload before sending again.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"What does Reached do?"}><p><strong>Reached</strong> advances the guide’s target by hand. It does not drive the rover, upload a changed route or save a soil sample. The app can also mark a pin reached when a recorded sample is within its configured 5 m matching radius. That is a progress rule, not a GPS accuracy claim.</p><p>The generated upload still uses the full pin list, including pins already marked reached. Recheck the whole payload before sending again.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -101,7 +102,7 @@ function Sending({ Steps, Notice, instructionalGuide }) {
       <>Keep <strong>HOLD, DISARM and rover RX</strong> during transmission and automatic retries. Wait for the matching rover-radio ACK and desktop RX restoration.</>,
     ]} />
     <Notice title="The checklist is your confirmation" caution><p>The app does not electronically verify controller switch positions. Check the physical rover and surroundings. Opening the assistant alone does not mean the mission has been delivered.</p></Notice>
-    <details className="manual-details"><summary>Cancel or close the assistant</summary><p>Cancel stops unsent work and asks the desktop to restore RX. Wait for recovery to finish or report a failure. A radio packet already sent cannot be recalled. Keep HOLD and DISARM selected.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"Cancel or close the assistant"}><p>Cancel stops unsent work and asks the desktop to restore RX. Wait for recovery to finish or report a failure. A radio packet already sent cannot be recalled. Keep HOLD and DISARM selected.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -124,7 +125,7 @@ function Communication({ Steps, Notice }) {
     ]} />
     <div className="manual-table-wrap" role="region" aria-label="Meaning of mission communication evidence" tabIndex={0}><table className="manual-table"><caption>What the assistant’s labels mean</caption><thead><tr><th scope="col">Label</th><th scope="col">What it confirms</th></tr></thead><tbody>{evidence.map(([label, meaning]) => <tr key={label}><th scope="row">{label}</th><td>{meaning}</td></tr>)}</tbody></table></div>
     <Notice title="Rover-radio ACK is not Mega storage confirmation" caution><p>A matching ACK confirms radio receipt of this payload. It does not independently confirm Mega storage, mission execution or waypoint arrival. The labels above are explanations, not current hardware statuses.</p></Notice>
-    <details className="manual-details"><summary>When an upload fails</summary><p>Keep <strong>HOLD and DISARM</strong>. An upload without a confirmed ACK may still have reached the rover. If <strong>Retry Mission — reconfirm safety</strong> is offered, check the physical setup and repeat the checklist. The retry retains the same mission ID. Retry can remain unavailable until the desktop is connected and back in RX, or when a rejection needs operator recovery.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"When an upload fails"}><p>Keep <strong>HOLD and DISARM</strong>. An upload without a confirmed ACK may still have reached the rover. If <strong>Retry Mission — reconfirm safety</strong> is offered, check the physical setup and repeat the checklist. The retry retains the same mission ID. Retry can remain unavailable until the desktop is connected and back in RX, or when a rejection needs operator recovery.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -158,7 +159,7 @@ function Heatmaps({ Steps, Notice, instructionalGuide }) {
       'Lift the probe before the next insertion. A sample does not have to be near a waypoint to be recorded inside the field.',
     ]} /></section>
     <Notice title="Read the saved values too"><p>No colored area can mean no suitable samples or no value for that layer. Overall Soil Health and NPK Ratio are summaries calculated by the app. Heatmap colors are estimates, not proof of soil-test accuracy or a crop recommendation.</p></Notice>
-    <details className="manual-details"><summary>Finish, resume and compare</summary><p><strong>Mark Finished</strong> updates the saved mission status and ends its logging state. <strong>Resume Mission</strong> reopens a finished mission for logging; it does not resume rover motion or resend the route. <strong>Change Since Earlier Mission</strong> compares available earlier records on the same field. Samples remain saved when you switch missions; select the intended mission before starting logging again.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"Finish, resume and compare"}><p><strong>Mark Finished</strong> updates the saved mission status and ends its logging state. <strong>Resume Mission</strong> reopens a finished mission for logging; it does not resume rover motion or resend the route. <strong>Change Since Earlier Mission</strong> compares available earlier records on the same field. Samples remain saved when you switch missions; select the intended mission before starting logging again.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -178,7 +179,7 @@ const problems = [
 function Troubleshooting({ Notice }) {
   return <>
     <Notice title="Stop and check safely" caution><p>Use HOLD or DISARM and verify that the rover has stopped before checking a problem. Do not bypass protections or assume a successful upload means safe navigation.</p></Notice>
-    <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <details className="manual-details" key={problem}><summary>{problem}</summary><p>{solution}</p></details>)}</div>
+    <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <AnimatedDisclosure className="manual-details" key={problem} title={problem}><p>{solution}</p></AnimatedDisclosure>)}</div>
     <p className="manual-muted">This guide follows the current desktop code. Physical radio delivery, Mega storage and outdoor waypoint performance must be checked on the actual system. No precise GPS arrival is promised.</p>
   </>;
 }

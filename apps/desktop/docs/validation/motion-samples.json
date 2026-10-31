@@ -1,0 +1,1376 @@
+{
+  "environment": "Production build, headless Chromium, isolated native bridge",
+  "normalPreference": "no-preference",
+  "source": "check-motion.mjs real requestAnimationFrame samples",
+  "cases": {
+    "Field Map-to-Live Monitoring": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 16.6,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 33.6,
+        "opacity": 0.269591,
+        "translateY": 5.84327,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 67.4,
+        "opacity": 0.658312,
+        "translateY": 2.7335,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 133.3,
+        "opacity": 0.942231,
+        "translateY": 0.462156,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 200.4,
+        "opacity": 0.994522,
+        "translateY": 0.0438268,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 449.2,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "Live Monitoring-to-Crop Assessment": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 16.8,
+        "opacity": 0.271048,
+        "translateY": 5.83162,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 33.4,
+        "opacity": 0.491019,
+        "translateY": 4.07185,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 66.3,
+        "opacity": 0.774249,
+        "translateY": 1.80601,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 133.5,
+        "opacity": 0.965252,
+        "translateY": 0.277986,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 199.5,
+        "opacity": 0.997626,
+        "translateY": 0.0189904,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 449.3,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "Crop Assessment-to-Reports": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 16.4,
+        "opacity": 0.271523,
+        "translateY": 5.82782,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 32.9,
+        "opacity": 0.49139,
+        "translateY": 4.06888,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 66.5,
+        "opacity": 0.774434,
+        "translateY": 1.80453,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 133.7,
+        "opacity": 0.965178,
+        "translateY": 0.27858,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 199.6,
+        "opacity": 0.99763,
+        "translateY": 0.0189565,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 450,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "Reports-to-Offline Maps": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 12.7,
+        "opacity": 0.270513,
+        "translateY": 5.8359,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 26,
+        "opacity": 0.491761,
+        "translateY": 4.06591,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 71,
+        "opacity": 0.774619,
+        "translateY": 1.80305,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 126,
+        "opacity": 0.965213,
+        "translateY": 0.2783,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 192.9,
+        "opacity": 0.997621,
+        "translateY": 0.0190285,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 444.2,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "rapid-restart": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 16.1,
+        "opacity": 0.270335,
+        "translateY": 5.83732,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 38.9,
+        "opacity": 0.491622,
+        "translateY": 4.06702,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 67.3,
+        "opacity": 0.775128,
+        "translateY": 1.79898,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 132.3,
+        "opacity": 0.965199,
+        "translateY": 0.278405,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 199,
+        "opacity": 0.99762,
+        "translateY": 0.0190413,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 450.5,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "contextual-help": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 1.6,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 16.7,
+        "opacity": 0.270127,
+        "translateY": 5.83899,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 49.2,
+        "opacity": 0.657776,
+        "translateY": 2.73779,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 117.2,
+        "opacity": 0.942291,
+        "translateY": 0.461669,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 183,
+        "opacity": 0.994531,
+        "translateY": 0.0437554,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 431.9,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "contextual-back": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 16.6,
+        "opacity": 0.270394,
+        "translateY": 5.83685,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 36.3,
+        "opacity": 0.491668,
+        "translateY": 4.06665,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 65.6,
+        "opacity": 0.774573,
+        "translateY": 1.80342,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 132.7,
+        "opacity": 0.965204,
+        "translateY": 0.27837,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 200.1,
+        "opacity": 0.997634,
+        "translateY": 0.0189311,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 449.5,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "direct-manual": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 8,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 17.2,
+        "opacity": 0.271167,
+        "translateY": 5.83067,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 33.4,
+        "opacity": 0.491112,
+        "translateY": 4.07111,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 67.2,
+        "opacity": 0.774874,
+        "translateY": 1.80101,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 135.1,
+        "opacity": 0.965151,
+        "translateY": 0.278789,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 199.9,
+        "opacity": 0.997627,
+        "translateY": 0.0189819,
+        "panelHeight": 860,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 449.6,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "manual-topic": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 6,
+        "panelHeight": 828.984375,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 16.9,
+        "opacity": 0.31458,
+        "translateY": 4.11252,
+        "panelHeight": 1441.1875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 32.7,
+        "opacity": 0.558323,
+        "translateY": 2.65006,
+        "panelHeight": 1441.1875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 66.1,
+        "opacity": 0.835554,
+        "translateY": 0.986674,
+        "panelHeight": 1441.1875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 133.3,
+        "opacity": 0.984586,
+        "translateY": 0.0924823,
+        "panelHeight": 1441.1875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 199.6,
+        "opacity": 0.999882,
+        "translateY": 0.000709184,
+        "panelHeight": 1441.1875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 450.7,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 1441.1875,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "controller-open": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 16.2,
+        "opacity": 0.271226,
+        "translateY": 0,
+        "panelHeight": 132.546875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 33.7,
+        "opacity": 0.491158,
+        "translateY": 0,
+        "panelHeight": 240.015625,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 67.1,
+        "opacity": 0.774897,
+        "translateY": 0,
+        "panelHeight": 378.6875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 133.6,
+        "opacity": 0.965156,
+        "translateY": 0,
+        "panelHeight": 471.671875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 199.5,
+        "opacity": 0.997628,
+        "translateY": 0,
+        "panelHeight": 487.53125,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 449.3,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 488.703125,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "controller-close": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 488.703125,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 16.7,
+        "opacity": 0.729487,
+        "translateY": 0,
+        "panelHeight": 356.5,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 32.8,
+        "opacity": 0.508239,
+        "translateY": 0,
+        "panelHeight": 248.375,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 66.6,
+        "opacity": 0.225381,
+        "translateY": 0,
+        "panelHeight": 110.140625,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 133.6,
+        "opacity": 0.0348968,
+        "translateY": 0,
+        "panelHeight": 17.046875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 200.4,
+        "opacity": 0.00237857,
+        "translateY": 0,
+        "panelHeight": 1.15625,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 448.9,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": false,
+        "visibility": "hidden",
+        "removed": false,
+        "inert": true
+      }
+    ],
+    "troubleshooting-open": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 18.2,
+        "opacity": 0.269562,
+        "translateY": 0,
+        "panelHeight": 11.0625,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 33.5,
+        "opacity": 0.491019,
+        "translateY": 0,
+        "panelHeight": 20.140625,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 66.7,
+        "opacity": 0.774827,
+        "translateY": 0,
+        "panelHeight": 31.796875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 133.5,
+        "opacity": 0.965252,
+        "translateY": 0,
+        "panelHeight": 39.609375,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 199.7,
+        "opacity": 0.997626,
+        "translateY": 0,
+        "panelHeight": 40.9375,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 449.9,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 41.046875,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "troubleshooting-close": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 41.046875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 15.9,
+        "opacity": 0.729665,
+        "translateY": 0,
+        "panelHeight": 29.9375,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 32.1,
+        "opacity": 0.509538,
+        "translateY": 0,
+        "panelHeight": 20.90625,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 65.9,
+        "opacity": 0.22545,
+        "translateY": 0,
+        "panelHeight": 9.25,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 132.9,
+        "opacity": 0.0348006,
+        "translateY": 0,
+        "panelHeight": 1.421875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 200.3,
+        "opacity": 0.00236692,
+        "translateY": 0,
+        "panelHeight": 0.09375,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 448,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": false,
+        "visibility": "hidden",
+        "removed": false,
+        "inert": true
+      }
+    ],
+    "menu-open": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": -4,
+        "panelHeight": 51.94000244140625,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 17.4,
+        "opacity": 0.374196,
+        "translateY": -2.50322,
+        "panelHeight": 52.336639404296875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 33.7,
+        "opacity": 0.642478,
+        "translateY": -1.43009,
+        "panelHeight": 52.62103271484375,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 66.2,
+        "opacity": 0.897096,
+        "translateY": -0.411616,
+        "panelHeight": 52.89093017578125,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 134.1,
+        "opacity": 0.996477,
+        "translateY": -0.0140926,
+        "panelHeight": 52.99627685546875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 200,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 53,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 450.2,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 53,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "menu-close": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 53,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 16.5,
+        "opacity": 0.623473,
+        "translateY": -1.50611,
+        "panelHeight": 52.60089111328125,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 32.3,
+        "opacity": 0.35727,
+        "translateY": -2.57092,
+        "panelHeight": 52.318695068359375,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 4,
+        "elapsedMs": 66.4,
+        "opacity": 0.102415,
+        "translateY": -3.59034,
+        "panelHeight": 52.048553466796875,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 8,
+        "elapsedMs": 132.5,
+        "opacity": 0.00351802,
+        "translateY": -3.98593,
+        "panelHeight": 51.9437255859375,
+        "active": true,
+        "visibility": "visible",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 12,
+        "elapsedMs": 200.1,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": false,
+        "visibility": "hidden",
+        "removed": true,
+        "inert": false
+      },
+      {
+        "frame": 27,
+        "elapsedMs": 449.1,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": false,
+        "visibility": "hidden",
+        "removed": true,
+        "inert": false
+      }
+    ],
+    "telemetry-stays-still": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 17,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 33.4,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 3,
+        "elapsedMs": 50.2,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 860,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "reduced-page": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 560,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 10.6,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 560,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 28.3,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 560,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 3,
+        "elapsedMs": 44.5,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 560,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "reduced-disclosure": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 554.25,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 13.7,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 554.25,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 31.4,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 554.25,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      },
+      {
+        "frame": 3,
+        "elapsedMs": 47.7,
+        "opacity": 1,
+        "translateY": 0,
+        "panelHeight": 554.25,
+        "active": false,
+        "visibility": "visible",
+        "removed": false,
+        "inert": false
+      }
+    ],
+    "reduced-disclosure-close": [
+      {
+        "frame": 0,
+        "elapsedMs": 0,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": false,
+        "visibility": "hidden",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 1,
+        "elapsedMs": 13.4,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": false,
+        "visibility": "hidden",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 2,
+        "elapsedMs": 30.3,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": false,
+        "visibility": "hidden",
+        "removed": false,
+        "inert": true
+      },
+      {
+        "frame": 3,
+        "elapsedMs": 46.8,
+        "opacity": 0,
+        "translateY": 0,
+        "panelHeight": 0,
+        "active": false,
+        "visibility": "hidden",
+        "removed": false,
+        "inert": true
+      }
+    ]
+  }
+}

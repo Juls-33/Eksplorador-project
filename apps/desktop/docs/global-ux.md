@@ -1,5 +1,9 @@
 # Shared motion and contextual Help
 
+The motion descriptions below record the initial UX implementation. The current
+page, disclosure and custom-menu animations, root-cause analysis and measured
+browser evidence are documented in [motion-verification.md](motion-verification.md).
+
 This update adds frontend presentation and Help navigation without new runtime
 dependencies. Existing green theme values, guide wording and image assets are
 preserved. Operational algorithms, database queries, storage, mission deployment,

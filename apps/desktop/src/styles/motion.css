@@ -1,7 +1,8 @@
 :root {
   --motion-fast: 120ms;
   --motion-normal: 180ms;
-  --motion-slow: 240ms;
+  --motion-slow: 260ms;
+  --motion-topic: 220ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --control-feedback: background-color var(--motion-fast) var(--ease-standard),
@@ -20,21 +21,37 @@
   min-height: 0;
 }
 .page-transition[hidden] { display: none; }
-.page-transition.is-entering,
-.manual-topic-content,
 .ui-dialog,
-.ui-menu,
 .ui-notice,
-.manual-lightbox[open] .manual-lightbox-content,
-.manual-details[open] > :not(summary) {
+.manual-lightbox[open] .manual-lightbox-content {
   animation: ui-enter var(--motion-normal) var(--ease-out);
 }
 .manual-lightbox::backdrop { animation: ui-enter var(--motion-fast) var(--ease-out); }
 @keyframes ui-enter { from { opacity: 0.65; } to { opacity: 1; } }
+.manual-topic-content { animation: ui-topic-enter var(--motion-topic) var(--ease-out) backwards; }
+@keyframes ui-topic-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+.disclosure-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; border: 0; background: transparent; color: inherit;
+  text-align: left; font: inherit; cursor: pointer;
+}
+.disclosure-chevron { flex-shrink: 0; transition: transform var(--motion-slow) var(--ease-out); }
+.animated-disclosure[data-expanded="true"] .disclosure-chevron { transform: rotate(180deg); }
+.disclosure-panel {
+  display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; pointer-events: none;
+  transition: grid-template-rows var(--motion-slow) var(--ease-out), opacity var(--motion-slow) var(--ease-out), visibility 0s linear var(--motion-slow);
+}
+.animated-disclosure[data-expanded="true"] > .disclosure-panel {
+  grid-template-rows: 1fr; opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s;
+}
+.disclosure-clip { min-height: 0; overflow: hidden; }
+.disclosure-content { display: flow-root; }
+.animated-menu { position: fixed; z-index: 10020; overflow: auto; border-radius: 8px; }
 
 :where(.ui-control, .ui-selectable-card, .sidebar-toggle-btn, .nav-item,
   .manual-guide-nav button, .manual-topic-nav button, .manual-page-nav button,
-  .manual-lightbox-toolbar button, .manual-photo button, .manual-details > summary) {
+  .manual-lightbox-toolbar button, .manual-photo button, .disclosure-trigger) {
   transition: var(--control-feedback);
 }
 .dashboard-layout :is(button, select, input, textarea, summary, a, [tabindex]):focus-visible {
@@ -88,7 +105,7 @@ button.ui-selectable-card { width: 100%; font: inherit; text-align: left; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root { --motion-fast: 0ms; --motion-normal: 0ms; --motion-slow: 0ms; }
+  :root { --motion-fast: 0ms; --motion-normal: 0ms; --motion-slow: 0ms; --motion-topic: 0ms; }
   /* Includes preexisting inline transitions and genuine loading indicators. */
   .dashboard-layout *, .dashboard-layout *::before, .dashboard-layout *::after {
     animation-duration: 0ms !important;
@@ -99,6 +116,6 @@ button.ui-selectable-card { width: 100%; font: inherit; text-align: left; }
 }
 
 @media print {
-  .page-transition { animation: none; }
+  .page-transition, .manual-topic-content { animation: none; opacity: 1 !important; transform: none !important; }
   .help-button, .manual-back-button { display: none; }
 }

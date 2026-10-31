@@ -1,3 +1,4 @@
+import AnimatedDisclosure from '../components/ui/AnimatedDisclosure';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Battery,
@@ -133,21 +134,19 @@ function ControllerOverview({ photo, instructionalGuide }) {
         </table>
       </div>
       <p className="manual-muted">SC and unrelated controls are not assigned to rover operation.</p>
-      <details className="manual-details">
-        <summary>Controller Menu Buttons</summary>
+      <AnimatedDisclosure className="manual-details" title={"Controller Menu Buttons"}>
         <p>These buttons navigate the controller’s own menus. Use the sticks and assigned switches to operate the rover.</p>
         <dl className="manual-button-list">{menuButtons.map(([button, action]) => <div key={button}><dt>{button}</dt><dd>{action}</dd></div>)}</dl>
         <p className="manual-muted">Short / long presses and destinations can differ by firmware version and current screen. Follow the manual for the installed EdgeTX version.</p>
         <p className="manual-source">Reference: <a href="https://manual.edgetx.org/v2.11/bw-radios/user-inteface" target="_blank" rel="noreferrer">Official EdgeTX menu guide (v2.11, online)</a>.</p>
-      </details>
-      <details className="manual-details">
-        <summary>View actual hardware photos</summary>
+      </AnimatedDisclosure>
+      <AnimatedDisclosure className="manual-details" title={"View actual hardware photos"}>
         <div className="manual-photos">
           {photo(controller, 'Front photo of the RadioMaster Pocket controller, showing both sticks, screen and menu buttons', 'Controller reference photo. The pictured light is not a live rover status.')}
           {photo(controllerDiagram, 'Manufacturer diagram labeling SA, SB, SC, SD, left and right gimbals, menu buttons and ports', 'Manufacturer diagram: locate the controls, then use the custom assignments in this topic.')}
           {photo(shoulderSwitches, 'Close-up reference photo of the RadioMaster Pocket shoulder controls', 'Find the printed switch names on your controller; use the custom mapping table.')}
         </div>
-      </details>
+      </AnimatedDisclosure>
     </>
   );
 }
@@ -229,12 +228,12 @@ function ActuatorControl({ photo, instructionalGuide }) {
         <div className="manual-inset"><span className="manual-neutral" aria-hidden="true">●</span><strong>Return to NEUTRAL</strong><span>Stop actuator movement</span></div>
       </div>
       <p>Left stick vertical movement is unused.</p>
-      <details className="manual-details"><summary>View actual hardware photos</summary>
+      <AnimatedDisclosure className="manual-details" title={"View actual hardware photos"}>
         <div className="manual-photos">
           {photo(actuator, 'Close-up of the vertical actuator and lower mounting joint beside the rover body', 'Actuator close-up. Keep the probe’s path clear before moving it.')}
           {photo(roverSide, 'Side view showing where the vertical actuator is mounted on the rover', 'Actuator location on the rover.')}
         </div>
-      </details>
+      </AnimatedDisclosure>
       <Notice title="Keep hands clear" caution><p>Keep hands away from the probe and actuator. Never force the actuator against an obstruction or bypass a safety condition.</p></Notice>
     </>
   );
@@ -269,13 +268,13 @@ function BatteryPower({ photo, instructionalGuide }) {
           'Handle the battery carefully. Hold the battery body; do not pull its wires.',
         ]} /></section>
       </div>
-      <details className="manual-details"><summary>View actual hardware photos</summary>
+      <AnimatedDisclosure className="manual-details" title={"View actual hardware photos"}>
         <div className="manual-photos">
           {photo(roverSide, 'Gray top cover on the rover next to the actuator', 'Top cover: slide toward the rear, then remove for power access.')}
           {photo(xt90, 'Two disconnected yellow XT90 power connector halves inside the rover', 'Yellow XT90 connectors: join fully to power on; disconnect after use.')}
           {photo(batteryCover, 'Lower rover battery compartment opened with its white cover removed and battery visible', 'Lower compartment: battery access is separate from the gray top cover. Disconnect power before removal.')}
         </div>
-      </details>
+      </AnimatedDisclosure>
     </>
   );
 }
@@ -316,21 +315,21 @@ function BatteryCharging({ photo, instructionalGuide }) {
           <>Stop charging if the battery becomes unusually hot, swollen or damaged.</>,
         ]} />
       </section>
-      <details className="manual-details"><summary>View actual hardware photos</summary>
+      <AnimatedDisclosure className="manual-details" title={"View actual hardware photos"}>
         <div className="manual-photos">
           {photo(balanceLead, '6000mAh 4S battery with the small white balance connector circled in red', 'The small white plug is the balance connector. Identify its wires and markings before connecting.')}
           {photo(batteryChecker, 'Battery capacity checker with negative and numbered lithium cell pins on its right edge', 'Use the checker’s negative pin and cell positions 1–4. The photo does not establish plug orientation.')}
           {photo(charger, 'Blue iMAX B6 charger with an example screen showing LiPo CHARGE and 7.4V 2S', 'Equipment reference only: the pictured 2S CHARGE screen is wrong for this rover. Use 4S LiPo BALANCE settings above.')}
           {photo(chargerCables, 'iMAX B6 charger pictured with several assorted charging leads and alligator clips', 'Included leads are not all approved for our battery. The actual XT90 charging connection still needs verification.')}
         </div>
-      </details>
+      </AnimatedDisclosure>
       <Notice title="Use a secure charging connection" caution>
         <p>Do not use exposed or unsecured alligator clips as a permanent charging connection. Do not copy the example charger screen or assume every pictured lead fits this battery.</p>
       </Notice>
-      <details className="manual-details"><summary>Storage and charger reference</summary>
+      <AnimatedDisclosure className="manual-details" title={"Storage and charger reference"}>
         <p>Do not store a fully charged LiPo for long periods. Follow the charger manual’s LiPo storage program and the battery maker’s storage instructions.</p>
         <p className="manual-source">Reference: <a href="https://www.skyrc.com/files/26/IMAX_B6_Manual.pdf" target="_blank" rel="noreferrer">Official SkyRC iMAX B6 manual (PDF, online)</a>. Confirm the manual matches your charger version.</p>
-      </details>
+      </AnimatedDisclosure>
     </>
   );
 }
@@ -351,7 +350,7 @@ function Troubleshooting() {
         <p>Use <strong>HOLD or DISARM</strong> and confirm that movement has stopped. Disconnect XT90 before handling the rover. Never bypass a safety feature to restore movement.</p>
       </Notice>
       <div className="manual-troubleshooting">{problems.map(([problem, solution]) => (
-        <details className="manual-details" key={problem}><summary>{problem}</summary><p>{solution}</p></details>
+        <AnimatedDisclosure className="manual-details" key={problem} title={problem}><p>{solution}</p></AnimatedDisclosure>
       ))}</div>
       <div className="manual-inset"><h3>Keep these habits</h3><ul className="manual-bullets">
         <li>Keep people clear of the wheels, probe and actuator.</li>

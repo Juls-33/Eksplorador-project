@@ -1,3 +1,4 @@
+import AnimatedDisclosure from '../components/ui/AnimatedDisclosure';
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Download, MapPin, Undo2 } from 'lucide-react';
 import searchMap from '../assets/user-manual/offline-map/search-map.png';
@@ -86,7 +87,7 @@ function DownloadMap({ Steps, Notice }) {
     ]} />
     <Notice title="Check more than the completion message" caution><p><strong>Download complete</strong> and a Covered Areas entry can still appear when some tiles failed. They do not prove the whole area is available. Check the failed count and view the required area and detail offline before leaving.</p></Notice>
     <Notice title="Keep the app open and stay connected"><p>Keep internet connected until the download finishes. You can switch to another page in the app; the sidebar’s <strong>Offline Maps</strong> item shows progress. Closing the app stops the download.</p></Notice>
-    <details className="manual-details"><summary>If you need to stop</summary><p>Use <strong>Cancel download</strong> and wait for <strong>Download cancelled</strong>. Tiles already saved are kept, but a canceled new area is not added to Covered Areas. There is no Resume button or automatic restart after closing the app. To continue later, enter the same area and zoom range, choose <strong>Estimate</strong>, then <strong>Download</strong>; saved tiles are skipped.</p><p>Record the area name, coordinates and zoom range before leaving the page if you need to repeat it. The draft form is not kept when you switch pages. <strong>Dismiss</strong> only clears a finished status message.</p></details>
+    <AnimatedDisclosure className="manual-details" title={"If you need to stop"}><p>Use <strong>Cancel download</strong> and wait for <strong>Download cancelled</strong>. Tiles already saved are kept, but a canceled new area is not added to Covered Areas. There is no Resume button or automatic restart after closing the app. To continue later, enter the same area and zoom range, choose <strong>Estimate</strong>, then <strong>Download</strong>; saved tiles are skipped.</p><p>Record the area name, coordinates and zoom range before leaving the page if you need to repeat it. The draft form is not kept when you switch pages. <strong>Dismiss</strong> only clears a finished status message.</p></AnimatedDisclosure>
   </>;
 }
 
@@ -100,7 +101,7 @@ function OpenSavedMap({ Steps, Notice, instructionalGuide }) {
       <>Look for <strong>Offline — saved tiles</strong>, and check that the required map detail is actually visible. If part is blank or <strong>Map tiles unavailable</strong> appears, reconnect and download the missing coverage before traveling.</>,
     ]} />
     {instructionalGuide(savedAreas, 'Existing Covered Areas rows named cavite and Santa Rosa, both labeled z13–18 and Downloaded here', 'Existing saved-area entries from the desktop capture. Your names and zoom ranges will differ. An entry alone does not confirm every tile was saved.')}
-    <details className="manual-details"><summary>Find the saved-map menu</summary>{instructionalGuide(searchMap, 'Actual map showing Jump to downloaded map at the upper right', 'Click Jump to downloaded map… at the upper right. This reference capture shows Online map; it is not an offline-access test.')}</details>
+    <AnimatedDisclosure className="manual-details" title={"Find the saved-map menu"}>{instructionalGuide(searchMap, 'Actual map showing Jump to downloaded map at the upper right', 'Click Jump to downloaded map… at the upper right. This reference capture shows Online map; it is not an offline-access test.')}</AnimatedDisclosure>
     <Notice title="Open saved maps through the map menu"><p>The <strong>Covered Areas</strong> rows have no Open button. Use <strong>Jump to downloaded map…</strong> to move to an area. If a newly downloaded area is missing from that menu, leave the page and reopen it to reload the list.</p></Notice>
     <p className="manual-muted">The saved-map menu works offline. The map chooses saved tiles automatically when online tiles are unavailable; there is no separate offline switch. The offline label means some saved tiles loaded, so still check the whole area at the detail you need.</p>
   </>;
@@ -117,7 +118,7 @@ const problems = [
 ];
 
 function Troubleshooting() {
-  return <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <details className="manual-details" key={problem}><summary>{problem}</summary><p>{solution}</p></details>)}</div>;
+  return <div className="manual-troubleshooting">{problems.map(([problem, solution]) => <AnimatedDisclosure className="manual-details" key={problem} title={problem}><p>{solution}</p></AnimatedDisclosure>)}</div>;
 }
 
 const content = [WhyDownload, SearchLocation, DrawBoundaries, NameAndEstimate, DownloadMap, OpenSavedMap, Troubleshooting];

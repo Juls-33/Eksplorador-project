@@ -7,7 +7,7 @@ import { createServer } from 'vite';
 import { getHelpRoute, MANUAL_GUIDES } from '../src/config/helpRoutes.js';
 import { getSourceTab, helpNavigationReducer, initialNavigation } from '../src/utils/helpNavigation.js';
 
-let server, UserManual, HelpButton, PageTransition;
+let server, UserManual, HelpButton, PageTransition, AnimatedDisclosure;
 before(async () => {
   server = await createServer({
     configFile: false, root: fileURLToPath(new URL('../', import.meta.url)),
@@ -17,6 +17,7 @@ before(async () => {
   UserManual = (await server.ssrLoadModule('/src/views/UserManualView.jsx')).default;
   HelpButton = (await server.ssrLoadModule('/src/components/ui/HelpButton.jsx')).default;
   PageTransition = (await server.ssrLoadModule('/src/components/ui/PageTransition.jsx')).default;
+  AnimatedDisclosure = (await server.ssrLoadModule('/src/components/ui/AnimatedDisclosure.jsx')).default;
 });
 after(async () => { await server?.close(); });
 
@@ -92,4 +93,25 @@ test('covered source content is retained but hidden and inert during contextual 
   assert.match(html, /hidden=""/);
   assert.match(html, /inert=""/);
   assert.match(html, /value="draft mission"/);
+});
+
+test('closed disclosures link a native trigger to an inert, screen-reader-hidden panel', () => {
+  const html = render(AnimatedDisclosure, { title: 'Reference photographs', children: React.createElement('button', null, 'View larger') });
+  assert.match(html, /type="button"[^>]*aria-expanded="false"/);
+  const controlled = html.match(/aria-controls="([^"]+)"/)?.[1];
+  assert.ok(controlled && html.includes(`id="${controlled}"`));
+  assert.match(html, /aria-hidden="true" inert=""/);
+  assert.match(html, /View larger/);
+});
+
+test('default-open disclosure content is accessible and every guide uses the shared disclosure', () => {
+  const html = render(AnimatedDisclosure, { title: 'Help', defaultOpen: true, children: 'Instructions' });
+  assert.match(html, /aria-expanded="true"/);
+  assert.match(html, /class="disclosure-panel" aria-hidden="false"/);
+  assert.doesNotMatch(html, /inert=""/);
+  for (const guide of MANUAL_GUIDES) {
+    const manual = render(UserManual, { initialGuideId: guide.id });
+    assert.doesNotMatch(manual, /<details|<summary/);
+    if (guide.id !== 'rover' && guide.id !== 'offline') assert.match(manual, /class="disclosure-trigger"/);
+  }
 });
