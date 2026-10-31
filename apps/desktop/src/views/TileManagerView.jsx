@@ -11,6 +11,7 @@ import {
   X
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
+import HelpButton from '../components/ui/HelpButton';
 import {
   fetchAllCoverage,
   estimateArea,
@@ -38,7 +39,7 @@ function rectangleBoundary({ south, west, north, east }) {
   return [[s, w], [s, e], [n, e], [n, w]];
 }
 
-export default function TileManagerView() {
+export default function TileManagerView({ onHelp }) {
   const [coverage, setCoverage] = useState([]);
   const [loadingCoverage, setLoadingCoverage] = useState(true);
 
@@ -172,11 +173,14 @@ export default function TileManagerView() {
 
   return (
     <div className="tile-manager-view" style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '16px' }}>
-      <div>
+      <div className="view-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
         <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Offline Map Coverage</h2>
         <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
           Tiles bundled with the app, plus anything you've downloaded on this device.
         </p>
+        </div>
+        <HelpButton viewId="Offline Maps" onOpen={onHelp} />
       </div>
 
       {job.status !== 'idle' && (
@@ -416,6 +420,7 @@ export default function TileManagerView() {
 
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
+              className="ui-control"
               onClick={handleEstimate}
               disabled={downloading}
               style={{ padding: '7px 14px', borderRadius: '6px', border: '1px solid var(--card-border)', background: '#fff', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}
@@ -423,6 +428,7 @@ export default function TileManagerView() {
               Estimate
             </button>
             <button
+              className="ui-control"
               onClick={handleDownload}
               disabled={downloading || !estimate}
               style={{

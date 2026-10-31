@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 570" role="img" aria-labelledby="title desc">
+  <title id="title">Mission deployment handoff</title>
+  <desc id="desc">Process diagram, not a screenshot. Save a plan, keep HOLD and DISARM with rover RX, send and wait for matching radio ACK, restore desktop RX and rover TX, wait for fresh telemetry, then arm and select SEMI_AUTO when safe.</desc>
+  <rect width="960" height="570" rx="20" fill="#f4f8f5"/>
+  <g font-family="system-ui, sans-serif" fill="#102819">
+    <text x="32" y="45" font-size="25" font-weight="700">From saved plan to rover operation</text>
+    <text x="32" y="75" font-size="17" fill="#526070">Process diagram · follow the assistant’s actual status</text>
+    <g fill="white" stroke="#c9dece" stroke-width="2">
+      <rect x="32" y="104" width="420" height="167" rx="12"/>
+      <rect x="508" y="104" width="420" height="167" rx="12"/>
+      <rect x="32" y="310" width="420" height="180" rx="12"/>
+      <rect x="508" y="310" width="420" height="180" rx="12"/>
+    </g>
+    <g font-size="21" font-weight="700" fill="#1f5132">
+      <text x="54" y="140">1. Save and review</text><text x="530" y="140">2. Prepare and send</text>
+      <text x="54" y="348">3. Confirm the radio handoff</text><text x="530" y="348">4. Restore, then start safely</text>
+    </g>
+    <g font-size="19">
+      <text x="54" y="178">Launch Mission saves the plan.</text><text x="54" y="209">Review pins and movement sequence.</text><text x="54" y="240">Send Mission opens the assistant.</text>
+      <text x="530" y="178">SB: HOLD · SA: DISARM · SD: RX</text><text x="530" y="209">Desktop TX is prepared automatically.</text><text x="530" y="240">Confirm the checklist to transmit.</text>
+      <text x="54" y="386">Wait for a matching rover-radio ACK.</text><text x="54" y="418">Desktop returns to RX automatically.</text><text x="54" y="450" fill="#854b0c">ACK does not confirm Mega storage.</text>
+      <text x="530" y="386">SD: TX · wait for fresh telemetry.</text><text x="530" y="418">Keep HOLD and DISARM until ready.</text><text x="530" y="450">When safe: ARM, then SEMI_AUTO.</text>
+    </g>
+    <g stroke="#1f5132" stroke-width="3" fill="none"><path d="M465 188h28m-8-8 8 8-8 8"/><path d="M718 280v10H242v10m-8-8 8 8 8-8"/><path d="M465 400h28m-8-8 8 8-8 8"/></g>
+    <text x="32" y="532" font-size="18" fill="#854b0c">During upload or recovery: keep HOLD and DISARM. A sent packet cannot be recalled.</text>
+  </g>
+</svg>

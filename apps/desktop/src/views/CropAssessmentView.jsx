@@ -10,6 +10,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
+import HelpButton from '../components/ui/HelpButton';
 import {
   fetchCropProfiles,
   saveCropProfile,
@@ -108,7 +109,7 @@ function paddedBox(points, pad = 0.00015) {
   return [[south, west], [south, east], [north, east], [north, west]];
 }
 
-export default function CropAssessmentView() {
+export default function CropAssessmentView({ onHelp }) {
   const [crops, setCrops] = useState([]);
   const [plots, setPlots] = useState([]);
   const [selectedCropId, setSelectedCropId] = useState('');
@@ -286,7 +287,7 @@ export default function CropAssessmentView() {
   return (
     <div className="crop-assessment-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
       {/* Header Bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="view-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Crop Suitability & Threshold Assessment</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
@@ -294,7 +295,8 @@ export default function CropAssessmentView() {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div className="view-header-actions" style={{ display: 'flex', gap: '10px' }}>
+          <HelpButton viewId="Crop Assessment" onOpen={onHelp} />
           {/* Category Filter */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Filter size={14} color="var(--text-muted)" />
@@ -320,7 +322,7 @@ export default function CropAssessmentView() {
 
           <button
             onClick={handleOpenAddModal}
-            className="badge"
+            className="badge ui-control"
             style={{
               background: 'var(--primary-green)',
               color: '#fff',
@@ -348,7 +350,10 @@ export default function CropAssessmentView() {
             {filteredCrops.map(crop => {
               const isSelected = selectedCropId === crop.id;
               return (
-                <div
+                <button
+                  type="button"
+                  className="ui-selectable-card"
+                  aria-pressed={isSelected}
                   key={crop.id}
                   onClick={() => setSelectedCropId(crop.id)}
                   style={{
@@ -360,13 +365,12 @@ export default function CropAssessmentView() {
                     cursor: 'pointer',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '6px',
-                    transition: 'all 0.15s ease'
+                    gap: '6px'
                   }}
                 >
                   <strong style={{ fontSize: '0.9rem' }}>{crop.name}</strong>
                   <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>{crop.category}</span>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -593,7 +597,7 @@ export default function CropAssessmentView() {
           justifyContent: 'center',
           zIndex: 9999
         }}>
-          <div style={{
+          <div className="ui-dialog" style={{
             background: '#fff',
             borderRadius: '12px',
             padding: '24px',

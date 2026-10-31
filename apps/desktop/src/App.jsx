@@ -1,7 +1,9 @@
 import React, {
   useState,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useReducer,
   useRef
 } from 'react';
 import { listen } from '@tauri-apps/api/event';
@@ -25,7 +27,8 @@ import {
   Download,
   Upload,
   GitMerge,
-  HardDrive
+  HardDrive,
+  BookOpen
 } from 'lucide-react';
 
 import HeatmapMap from './components/HeatmapMap';
@@ -33,6 +36,10 @@ import FieldMapView from './views/FieldMapView';
 import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
 import TileManagerView from './views/TileManagerView';
+import UserManualView from './views/UserManualView';
+import HelpButton from './components/ui/HelpButton';
+import PageTransition from './components/ui/PageTransition';
+import { getSourceTab, helpNavigationReducer, initialNavigation } from './utils/helpNavigation.js';
 import LoRaConnectionStatus from './components/LoRaConnectionStatus';
 import { useLoRaConnection } from './hooks/useLoRaConnection';
 import { useDownloadPercent } from './hooks/useDownloadJob';
@@ -48,6 +55,7 @@ import {
 } from './services/db';
 
 import './App.css';
+import './styles/motion.css';
 
 const STALE_TIMEOUT_MS = 15000;
 const HISTORICAL_ASSESSMENT_MIN = 10;
@@ -410,7 +418,7 @@ function TelemetrySyncBar({
     >
       <button
         type="button"
-        className="badge"
+        className="badge ui-control"
         onClick={() => run('export')}
         disabled={busy || !total}
         title={
@@ -432,7 +440,7 @@ function TelemetrySyncBar({
 
       <button
         type="button"
-        className="badge"
+        className="badge ui-control"
         disabled={busy || total === null}
         title="Replace the whole database from one backup"
         onClick={() => run('import')}
@@ -444,7 +452,7 @@ function TelemetrySyncBar({
 
       <button
         type="button"
-        className="badge"
+        className="badge ui-control"
         disabled={busy || total === null}
         title="Combine one or more backups with the current database"
         onClick={() => run('merge')}
@@ -475,7 +483,30 @@ function TelemetrySyncBar({
 
 export default function App() {
   const receiverStatus = useLoRaConnection();
-  const [activeTab, setActiveTab] = useState('Dashboard');
+  const [navigation, dispatchNavigation] = useReducer(helpNavigationReducer, initialNavigation);
+  const { activeTab, help } = navigation;
+  const sourceTab = getSourceTab(navigation);
+  const manualOpen = activeTab === 'User Manual';
+  const mainRef = useRef(null);
+  const helpTriggerRef = useRef(null);
+  const sourceScrollRef = useRef(0);
+  const returningFromHelp = useRef(false);
+  const openHelp = event => {
+    helpTriggerRef.current = event.currentTarget;
+    sourceScrollRef.current = mainRef.current?.scrollTop ?? 0;
+    dispatchNavigation({ type: 'help' });
+  };
+  const backFromHelp = () => {
+    returningFromHelp.current = true;
+    dispatchNavigation({ type: 'back' });
+  };
+  useLayoutEffect(() => {
+    if (returningFromHelp.current && !manualOpen) {
+      returningFromHelp.current = false;
+      mainRef.current?.scrollTo({ top: sourceScrollRef.current });
+      helpTriggerRef.current?.focus({ preventScroll: true });
+    }
+  }, [manualOpen]);
   const [rxBoardMode, setRxBoardMode] = useState('RX');
   const [rxBoardBusy, setRxBoardBusy] = useState(false);
   // -1 when no map download is running, else 0-100 (drives the sidebar badge)
@@ -968,6 +999,11 @@ export default function App() {
       id: 'Offline Maps',
       label: 'Offline Maps',
       icon: HardDrive
+    },
+    {
+      id: 'User Manual',
+      label: 'User Manual',
+      icon: BookOpen
     }
   ];
 
@@ -1026,14 +1062,17 @@ export default function App() {
               const Icon = item.icon;
 
               return (
-                <div
+                <button
+                  type="button"
                   key={item.id}
+                  aria-label={item.label}
+                  aria-current={activeTab === item.id ? 'page' : undefined}
                   className={
                     `nav-item ${
                       activeTab === item.id ? 'active' : ''
                     }`
                   }
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => dispatchNavigation({ type: 'tab', tabId: item.id })}
                   title={
                     item.id === 'Offline Maps' && downloadPercent >= 0
                       ? `Map download ${downloadPercent}%`
@@ -1079,7 +1118,7 @@ export default function App() {
                       </span>
                     )
                   )}
-                </div>
+                </button>
               );
             })}
           </nav>
@@ -1099,25 +1138,28 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="main-content">
-        {activeTab === 'Field Map' ? (
+      <main className="main-content" ref={mainRef}>
+        <PageTransition transitionKey={sourceTab} hidden={manualOpen}>
+        {sourceTab === null ? null : sourceTab === 'Field Map' ? (
           <FieldMapView 
+            onHelp={openHelp}
             rxBoardMode={rxBoardMode}
             setRxBoardMode={setRxBoardMode}
             rxBoardBusy={rxBoardBusy}
             setRxBoardBusy={setRxBoardBusy}
           />
-        ) : activeTab === 'Crop Assessment' ? (
-          <CropAssessmentView />
-        ) : activeTab === 'Reports' ? (
-          <ReportsView />
-        ) : activeTab === 'Offline Maps' ? (
-          <TileManagerView />
+        ) : sourceTab === 'Crop Assessment' ? (
+          <CropAssessmentView onHelp={openHelp} />
+        ) : sourceTab === 'Reports' ? (
+          <ReportsView onHelp={openHelp} />
+        ) : sourceTab === 'Offline Maps' ? (
+          <TileManagerView onHelp={openHelp} />
         ) : (
           <>
             <header className="top-bar">
-              <div>
+              <div className="view-heading">
                 <h1>Live Monitoring Board</h1>
+                <HelpButton viewId="Dashboard" onOpen={openHelp} />
               </div>
 
               <TelemetrySyncBar
@@ -1833,6 +1875,11 @@ export default function App() {
             </section>
           </>
         )}
+        </PageTransition>
+        {manualOpen && <PageTransition transitionKey="manual">
+          <UserManualView key={help?.fromTab ?? 'direct'} initialGuideId={help?.guideId}
+            backLabel={help?.pageLabel} onBack={help ? backFromHelp : undefined} />
+        </PageTransition>}
       </main>
     </div>
   );

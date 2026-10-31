@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { appDate } from '../utils/time';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import HelpButton from '../components/ui/HelpButton';
 import { listen } from '@tauri-apps/api/event';
 import {
   Play,
@@ -144,7 +145,7 @@ const layerConfigurations = {
   }
 };
 
-export default function FieldMapView() {
+export default function FieldMapView({ onHelp }) {
   const receiverStatus = useLoRaConnection();
   const [deploymentSequence, setDeploymentSequence] = useState(null);
   const deploymentOpening = useRef(false);
@@ -851,7 +852,7 @@ export default function FieldMapView() {
         />
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', id: 'field-map-header' }}>
+      <div className="view-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', id: 'field-map-header' }}>
         <div>
           <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Field Map & Heatmap Analysis</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
@@ -864,7 +865,8 @@ export default function FieldMapView() {
 
         </div>
 
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <div className="view-header-actions" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <HelpButton viewId="Field Map" onOpen={onHelp} />
           {wizardStep === 'DRAWING_BOUNDARY' && (
             <>
               <button className="badge" disabled={tempBoundary.length === 0} onClick={() => setTempBoundary((prev) => prev.slice(0, -1))} style={{ cursor: 'pointer' }}>
@@ -934,10 +936,10 @@ export default function FieldMapView() {
 
           {wizardStep === 'IDLE' && (
             <>
-              <button className="badge" style={{ cursor: 'pointer', padding: '8px 16px', border: '1px solid var(--primary-green)', color: 'var(--primary-green)', background: '#fff' }} onClick={openFieldModal}>
+              <button className="badge ui-control" style={{ cursor: 'pointer', padding: '8px 16px', border: '1px solid var(--primary-green)', color: 'var(--primary-green)', background: '#fff' }} onClick={openFieldModal}>
                 <MapPin size={16} /> Add Field
               </button>
-              <button className="badge" style={{ background: 'var(--primary-green)', color: '#fff', cursor: 'pointer', padding: '8px 16px' }} onClick={() => openMissionModal()}>
+              <button className="badge ui-control" style={{ background: 'var(--primary-green)', color: '#fff', cursor: 'pointer', padding: '8px 16px' }} onClick={() => openMissionModal()}>
                 <Plus size={16} /> Start New Mission
               </button>
             </>
@@ -947,7 +949,7 @@ export default function FieldMapView() {
 
       {/* Notification Alert */}
       {notification && (
-        <div style={{
+        <div className={notification.type === 'success' ? 'ui-notice' : undefined} style={{
           padding: '10px 14px',
           borderRadius: '8px',
           background: notification.type === 'success' ? '#dcfce7' : notification.type === 'error' ? '#fee2e2' : '#fef3c7',
@@ -1011,7 +1013,10 @@ export default function FieldMapView() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {list.map((m) => (
-                    <div
+                    <button
+                      type="button"
+                      className="ui-selectable-card"
+                      aria-pressed={selectedMissionId === m.id}
                       key={m.id}
                       onClick={() => selectMission(m.id)}
                       style={{
@@ -1042,7 +1047,7 @@ export default function FieldMapView() {
                         <span>•</span>
                         <span>{m.sampleCount} pts</span>
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -1593,7 +1598,7 @@ export default function FieldMapView() {
       {/* Add Field Modal */}
       {isFieldModalOpen && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-          <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', width: '420px', display: 'flex', flexDirection: 'column', gap: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}>
+          <div className="ui-dialog" style={{ background: '#fff', borderRadius: '12px', padding: '24px', width: '420px', display: 'flex', flexDirection: 'column', gap: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Add Field</h3>
               <button onClick={() => setIsFieldModalOpen(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
@@ -1642,7 +1647,7 @@ export default function FieldMapView() {
       {/* Start Mission Modal */}
       {isMissionModalOpen && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-          <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', width: '480px', maxHeight: '90vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}>
+          <div className="ui-dialog" style={{ background: '#fff', borderRadius: '12px', padding: '24px', width: '480px', maxHeight: '90vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Create New Mission</h3>
               <button onClick={() => setIsMissionModalOpen(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>

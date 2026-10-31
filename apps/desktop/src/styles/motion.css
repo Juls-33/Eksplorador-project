@@ -1,0 +1,104 @@
+:root {
+  --motion-fast: 120ms;
+  --motion-normal: 180ms;
+  --motion-slow: 240ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --control-feedback: background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.page-transition {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.page-transition[hidden] { display: none; }
+.page-transition.is-entering,
+.manual-topic-content,
+.ui-dialog,
+.ui-menu,
+.ui-notice,
+.manual-lightbox[open] .manual-lightbox-content,
+.manual-details[open] > :not(summary) {
+  animation: ui-enter var(--motion-normal) var(--ease-out);
+}
+.manual-lightbox::backdrop { animation: ui-enter var(--motion-fast) var(--ease-out); }
+@keyframes ui-enter { from { opacity: 0.65; } to { opacity: 1; } }
+
+:where(.ui-control, .ui-selectable-card, .sidebar-toggle-btn, .nav-item,
+  .manual-guide-nav button, .manual-topic-nav button, .manual-page-nav button,
+  .manual-lightbox-toolbar button, .manual-photo button, .manual-details > summary) {
+  transition: var(--control-feedback);
+}
+.dashboard-layout :is(button, select, input, textarea, summary, a, [tabindex]):focus-visible {
+  outline: 3px solid var(--primary-green-light) !important;
+  outline-offset: 3px;
+}
+.sidebar :is(button, [tabindex]):focus-visible { outline-color: var(--accent-gold) !important; }
+.ui-control:not(:disabled):hover { box-shadow: 0 0 0 2px #c9dece; }
+.ui-control:not(:disabled):active,
+.manual-guide-nav button:active,
+.manual-page-nav button:not(:disabled):active { box-shadow: inset 0 0 0 2px #10281940; }
+.dashboard-layout button:disabled { cursor: not-allowed; }
+.ui-control:disabled { opacity: 0.55; box-shadow: none; }
+.ui-menu button:hover { background: #f0f6f2 !important; }
+
+.help-button, .manual-back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid #bfd3c5;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--primary-green);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.help-button:hover, .manual-back-button:hover { background: #f0f6f2; }
+.help-button svg, .manual-back-button svg { flex-shrink: 0; }
+.manual-back-button { margin-left: auto; }
+.view-header { gap: 12px; flex-wrap: wrap; }
+.view-header > :first-child { min-width: 0; }
+.view-header-actions { flex-wrap: wrap; align-items: center; }
+.view-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.top-bar > .view-heading { flex-basis: 100%; }
+
+button.ui-selectable-card { width: 100%; font: inherit; text-align: left; }
+.ui-selectable-card:hover { box-shadow: 0 0 0 2px #c9dece; }
+.ui-selectable-card:active { box-shadow: inset 0 0 0 1px var(--primary-green); }
+.historical-sample-row { transition: var(--control-feedback); }
+
+@media (max-width: 560px) {
+  .manual-header { flex-wrap: wrap; }
+  .manual-back-button { margin-left: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion-fast: 0ms; --motion-normal: 0ms; --motion-slow: 0ms; }
+  /* Includes preexisting inline transitions and genuine loading indicators. */
+  .dashboard-layout *, .dashboard-layout *::before, .dashboard-layout *::after {
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  .page-transition { animation: none; }
+  .help-button, .manual-back-button { display: none; }
+}

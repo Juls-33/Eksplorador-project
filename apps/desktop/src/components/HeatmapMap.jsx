@@ -420,7 +420,21 @@ export default function HeatmapMap({
       setFollowRover(false);
     });
 
+    // Contextual Help temporarily hides this mounted map. Recheck its size on
+    // return or sidebar collapse without rebuilding its layers or changing data.
+    let resizeFrame;
+    const resizeObserver = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width <= 0 || entry.contentRect.height <= 0) return;
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        mapInstanceRef.current?.invalidateSize({ animate: false, pan: false });
+      });
+    });
+    resizeObserver.observe(mapContainerRef.current);
+
     return () => {
+      resizeObserver.disconnect();
+      cancelAnimationFrame(resizeFrame);
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -902,6 +916,7 @@ export default function HeatmapMap({
           )}
           <button
             type="submit"
+            className="ui-control"
             disabled={searchBusy}
             style={{
               border: 'none',
@@ -938,7 +953,7 @@ export default function HeatmapMap({
         )}
 
         {searchResults.length > 0 && (
-          <ul
+          <ul className="ui-menu"
             style={{
               listStyle: 'none',
               margin: '6px 0 0',

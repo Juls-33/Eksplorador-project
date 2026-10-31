@@ -1,5 +1,6 @@
 import { appDate } from '../utils/time';
 import React, { useState, useEffect, useRef } from 'react';
+import HelpButton from '../components/ui/HelpButton';
 import { getAllTelemetry } from '../services/db';
 import {
   FileText,
@@ -124,7 +125,7 @@ function processTelemetryToReports(records){
   });
 }
 
-export default function ReportsView() {
+export default function ReportsView({ onHelp }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -204,7 +205,7 @@ export default function ReportsView() {
      
      
       {/* Top Banner & Print Actions */}
-      <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="no-print view-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Agronomic Field Reports</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
@@ -212,7 +213,8 @@ export default function ReportsView() {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div className="view-header-actions" style={{ display: 'flex', gap: '10px' }}>
+          <HelpButton viewId="Reports" onOpen={onHelp} />
           {/* Plot Filter */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Filter size={14} color="var(--text-muted)" />
@@ -238,7 +240,7 @@ export default function ReportsView() {
 
           <button
             onClick={handlePrint}
-            className="badge"
+            className="badge ui-control"
             style={{
               background: 'var(--primary-green)',
               color: '#fff',
@@ -272,7 +274,10 @@ export default function ReportsView() {
             {filteredReports.map(report => {
               const isSelected = selectedReportId === report.id;
               return (
-                <div
+                <button
+                  type="button"
+                  className="ui-selectable-card"
+                  aria-pressed={isSelected}
                   key={report.id}
                   onClick={() => setSelectedReportId(report.id)}
                   style={{
@@ -284,8 +289,7 @@ export default function ReportsView() {
                     cursor: 'pointer',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '6px',
-                    transition: 'all 0.15s ease'
+                    gap: '6px'
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -310,7 +314,7 @@ export default function ReportsView() {
                     <span>{report.id}</span>
                     <span>{report.surveyDate}</span>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
