@@ -2,6 +2,7 @@
 // Ultrasonic Phase 1 bench logic unchanged; timed obstacle detour added ONLY for Phase 3C indoor tests.
 #include <stdlib.h>
 #include <math.h>
+#include <avr/interrupt.h>  // A8-A11 quadrature encoder pin-change interrupts
 // =================================================================
 // ARDUINO MEGA 2560 - ROVER FIRMWARE
 // WITH BTS7960 ACTUATOR CURRENT-SENSE MONITORING
@@ -363,6 +364,203 @@ void printDebugTelemetry(
 );
 
 
+
+// =================================================================
+// A2.4 DRIVE ENCODERS - ADDITIVE, MEGA PORT K (A8-A11)
+// =================================================================
+// Connections: LEFT A=A8 B=A9; RIGHT A=A10 B=A11.
+// Encoder blue -> regulated 5V; black -> common GND.
+// Motor leads remain on their BTS7960 motor outputs.
+// Counts-per-drive-sprocket revolution were calibrated OFF-TRACKS.
+// These constants DO NOT establish ground distance or field turns.
+const int32_t ENC_LEFT_CPR  = 5925L;
+const int32_t ENC_RIGHT_CPR = 5842L;
+const int8_t ENC_LEFT_FORWARD_SIGN  = +1;
+const int8_t ENC_RIGHT_FORWARD_SIGN = -1;
+
+// Applies proportional encoder synchronization ONLY to existing
+// semi-auto straight 'F' / 'B' bench motor commands. Manual RC,
+// turns, timed detours and ALL sensing paths remain unchanged.
+// Set false if first combined-system validation reveals timing issues.
+const bool ENABLE_AUTO_STRAIGHT_ENCODER_SYNC = true;
+const float AUTO_SYNC_KP = 0.12f;
+const int AUTO_SYNC_MAX_CORRECTION = 18;
+const int AUTO_SYNC_MIN_PWM = 90;
+const int AUTO_SYNC_MAX_PWM = 145;
+const unsigned long AUTO_SYNC_NO_COUNT_MS = 500;
+const unsigned long ENCODER_REPORT_MS = 1000;
+
+volatile int32_t encoderLeftTicks = 0;
+volatile int32_t encoderRightTicks = 0;
+volatile uint32_t encoderInvalidLeft = 0;
+volatile uint32_t encoderInvalidRight = 0;
+volatile uint8_t encoderPreviousLeft = 0;
+volatile uint8_t encoderPreviousRight = 0;
+
+// Quadrature lookup: 4 edges per encoder A/B cycle.
+const int8_t ENCODER_QUAD_LUT[16] = {
+   0,-1, 1, 0,
+   1, 0, 0,-1,
+  -1, 0, 0, 1,
+   0, 1,-1, 0
+};
+
+struct DriveEncoderSnapshot {
+  int32_t left;
+  int32_t right;
+  uint32_t invalidL;
+  uint32_t invalidR;
+};
+
+// Explicit prototypes prevent Arduino IDE .ino auto-prototype errors.
+DriveEncoderSnapshot readDriveEncoders();
+void initializeDriveEncoders();
+void reportDriveEncoders();
+void resetDriveSync();
+void commandAutoStraightWithSync(bool forward);
+
+ISR(PCINT2_vect) {
+  const uint8_t pins = PINK;
+  const uint8_t leftNow = ((pins & _BV(PK0)) ? 2 : 0) |
+                          ((pins & _BV(PK1)) ? 1 : 0);
+  const uint8_t rightNow = ((pins & _BV(PK2)) ? 2 : 0) |
+                           ((pins & _BV(PK3)) ? 1 : 0);
+  const int8_t dl = ENCODER_QUAD_LUT[(encoderPreviousLeft << 2) | leftNow];
+  const int8_t dr = ENCODER_QUAD_LUT[(encoderPreviousRight << 2) | rightNow];
+  if (leftNow != encoderPreviousLeft && dl == 0) ++encoderInvalidLeft;
+  if (rightNow != encoderPreviousRight && dr == 0) ++encoderInvalidRight;
+  encoderLeftTicks += dl;
+  encoderRightTicks += dr;
+  encoderPreviousLeft = leftNow;
+  encoderPreviousRight = rightNow;
+}
+
+DriveEncoderSnapshot readDriveEncoders() {
+  DriveEncoderSnapshot s;
+  noInterrupts();
+  s.left = encoderLeftTicks;
+  s.right = encoderRightTicks;
+  s.invalidL = encoderInvalidLeft;
+  s.invalidR = encoderInvalidRight;
+  interrupts();
+  return s;
+}
+
+void initializeDriveEncoders() {
+  pinMode(A8, INPUT_PULLUP);
+  pinMode(A9, INPUT_PULLUP);
+  pinMode(A10, INPUT_PULLUP);
+  pinMode(A11, INPUT_PULLUP);
+  noInterrupts();
+  const uint8_t pins = PINK;
+  encoderPreviousLeft = ((pins & _BV(PK0)) ? 2 : 0) |
+                        ((pins & _BV(PK1)) ? 1 : 0);
+  encoderPreviousRight = ((pins & _BV(PK2)) ? 2 : 0) |
+                         ((pins & _BV(PK3)) ? 1 : 0);
+  PCMSK2 |= 0x0F;  // A8-A11 = PCINT16..PCINT19
+  PCIFR |= _BV(PCIF2);
+  PCICR |= _BV(PCIE2);
+  interrupts();
+  Serial.println(F("[ENC] Port K A8-A11 ready; 4x quadrature"));
+}
+
+void reportDriveEncoders() {
+  DriveEncoderSnapshot c = readDriveEncoders();
+  Serial.print(F("[ENC] L=")); Serial.print(c.left);
+  Serial.print(F(" R=")); Serial.print(c.right);
+  Serial.print(F(" L_rev=")); Serial.print((float)c.left / ENC_LEFT_CPR, 3);
+  Serial.print(F(" R_rev=")); Serial.print((float)c.right / ENC_RIGHT_CPR, 3);
+  Serial.print(F(" badL=")); Serial.print(c.invalidL);
+  Serial.print(F(" badR=")); Serial.println(c.invalidR);
+}
+
+bool driveSyncActive = false;
+bool driveSyncFaultLatched = false;
+bool driveSyncForward = true;
+int32_t driveSyncStartL = 0, driveSyncStartR = 0;
+int32_t driveSyncLastL = 0, driveSyncLastR = 0;
+uint32_t driveSyncBadL = 0, driveSyncBadR = 0;
+unsigned long driveSyncLastMoveL = 0, driveSyncLastMoveR = 0;
+
+void resetDriveSync() { driveSyncActive = false; }
+
+void latchDriveSyncFault(const __FlashStringHelper *reason) {
+  driveSyncFaultLatched = true;
+  driveSyncActive = false;
+  missionActive = false;
+  detourStage = 0;
+  // Direct PWM zero; avoid recursive call to resetDriveSync.
+  setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, 0);
+  setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, 0);
+  stopActuator();
+  Serial.print(F("[ENC SYNC FAULT] ")); Serial.println(reason);
+  espSerial.println(F("FAULT:ENCODER"));
+}
+
+void commandAutoStraightWithSync(bool forward) {
+  const int leftSign = forward ? -1 : +1;  // original motor polarity
+  const int rightSign = forward ? +1 : -1;
+  if (!ENABLE_AUTO_STRAIGHT_ENCODER_SYNC) {
+    setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, leftSign * AUTO_DRIVE_SPEED);
+    setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, rightSign * AUTO_DRIVE_SPEED);
+    return;
+  }
+  if (driveSyncFaultLatched) {
+    stopDriveMotors();
+    return;
+  }
+  const DriveEncoderSnapshot c = readDriveEncoders();
+  const unsigned long now = millis();
+  if (!driveSyncActive || driveSyncForward != forward) {
+    driveSyncActive = true;
+    driveSyncForward = forward;
+    driveSyncStartL = driveSyncLastL = c.left;
+    driveSyncStartR = driveSyncLastR = c.right;
+    driveSyncBadL = c.invalidL;
+    driveSyncBadR = c.invalidR;
+    driveSyncLastMoveL = driveSyncLastMoveR = now;
+  }
+  if (c.left != driveSyncLastL) {
+    driveSyncLastL = c.left;
+    driveSyncLastMoveL = now;
+  }
+  if (c.right != driveSyncLastR) {
+    driveSyncLastR = c.right;
+    driveSyncLastMoveR = now;
+  }
+  const int32_t l = (c.left - driveSyncStartL) *
+                    (forward ? ENC_LEFT_FORWARD_SIGN : -ENC_LEFT_FORWARD_SIGN);
+  const int32_t r = (c.right - driveSyncStartR) *
+                    (forward ? ENC_RIGHT_FORWARD_SIGN : -ENC_RIGHT_FORWARD_SIGN);
+  if (l < -30 || r < -30 ||
+      (uint32_t)(c.invalidL - driveSyncBadL) > 10 ||
+      (uint32_t)(c.invalidR - driveSyncBadR) > 10) {
+    latchDriveSyncFault(F("wrong direction/invalid quadrature"));
+    return;
+  }
+  if (now - driveSyncLastMoveL > AUTO_SYNC_NO_COUNT_MS ||
+      now - driveSyncLastMoveR > AUTO_SYNC_NO_COUNT_MS) {
+    latchDriveSyncFault(F("missing encoder movement"));
+    return;
+  }
+  // Unlike the one-revolution bench test, this correction does NOT stop
+  // after one revolution. Existing timed mission steps remain unchanged.
+  const float syncErr = ((float)l / ENC_LEFT_CPR -
+                         (float)r / ENC_RIGHT_CPR) * 5800.0f;
+  const int correction = constrain((int)(AUTO_SYNC_KP * syncErr),
+                                   -AUTO_SYNC_MAX_CORRECTION,
+                                   AUTO_SYNC_MAX_CORRECTION);
+  const int pwmL = constrain(AUTO_DRIVE_SPEED - correction,
+                             AUTO_SYNC_MIN_PWM, AUTO_SYNC_MAX_PWM);
+  const int pwmR = constrain(AUTO_DRIVE_SPEED + correction,
+                             AUTO_SYNC_MIN_PWM, AUTO_SYNC_MAX_PWM);
+  setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, leftSign * pwmL);
+  setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, rightSign * pwmR);
+}
+// =================================================================
+// END OF A2.4 ENCODER ADDITION
+// =================================================================
+
 // =================================================================
 // INTERRUPT SERVICE ROUTINES
 // =================================================================
@@ -468,6 +666,9 @@ void setup() {
   analogReference(DEFAULT);
 
   stopAllOutputs();
+
+  // A2.4 incremental addition: encoder pins/interrupts only.
+  initializeDriveEncoders();
 
   // Receiver Inputs
   pinMode(PIN_CH1_STEER, INPUT);
@@ -702,6 +903,13 @@ void loop() {
       else Serial.print(F("HOLD_NEUTRAL"));
     }
     Serial.println();
+  }
+
+  // Additional USB-only diagnostic: does not change ESP32 UART protocol.
+  static unsigned long lastEncoderPrintMs = 0;
+  if (millis() - lastEncoderPrintMs >= ENCODER_REPORT_MS) {
+    lastEncoderPrintMs = millis();
+    reportDriveEncoders();
   }
 
   delay(10);
@@ -1123,34 +1331,14 @@ void executeAutoCommand() {
 
   if (dir == 'F') {
 
-    setMotorSpeed(
-      PIN_L_RPWM,
-      PIN_L_LPWM,
-      -AUTO_DRIVE_SPEED
-    );
-
-    setMotorSpeed(
-      PIN_R_RPWM,
-      PIN_R_LPWM,
-      AUTO_DRIVE_SPEED
-    );
+    commandAutoStraightWithSync(true);
 
     stopActuator();
   }
 
   else if (dir == 'B') {
 
-    setMotorSpeed(
-      PIN_L_RPWM,
-      PIN_L_LPWM,
-      AUTO_DRIVE_SPEED
-    );
-
-    setMotorSpeed(
-      PIN_R_RPWM,
-      PIN_R_LPWM,
-      -AUTO_DRIVE_SPEED
-    );
+    commandAutoStraightWithSync(false);
 
     stopActuator();
   }
@@ -1274,6 +1462,7 @@ void setMotorSpeed(
 
 void stopDriveMotors() {
 
+  resetDriveSync();
   setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, 0);
   setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, 0);
 }
@@ -1653,6 +1842,11 @@ void processEspLine(const char *line) {
       Serial.println(imuValid);
     }
   } else if (strncmp(line, "RCV:", 4) == 0) {
+    if (driveSyncFaultLatched) {
+      Serial.println(F("[MISSION] Rejected while encoder fault latched; reset required"));
+      espSerial.println(F("MISSION_STATUS:REJECTED"));
+      return;
+    }
     if (safetyLatched) {
       Serial.println(F("[MISSION] Rejected while tilt fault latched"));
       return;
