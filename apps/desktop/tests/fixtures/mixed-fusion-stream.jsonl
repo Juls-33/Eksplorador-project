@@ -1,0 +1,24 @@
+{"type":"encoder","encoderSeq":170,"leftTicks":0,"rightTicks":0,"leftRPM":0,"rightRPM":0,"invalidL":0,"invalidR":0,"ageAtTransmitMs":25}
+DATA: {"seq":90,"lat":14.6094,"lng":120.9896,"soilValid":1,"moisture":38.5,"ph":6.7,"ec":0.4,"nitrogen":20,"phosphorus":15,"potassium":40,"temperature":27,"salinity":0.2,"heading":135,"satsLocked":8,"satsView":12,"rssi":-75,"snr":8,"pitch":0,"roll":0}
+ENC: {"type":"encoder","encoderSeq":171,"leftTicks":100,"rightTicks":-100,"leftRPM":20,"rightRPM":21,"invalidL":0,"invalidR":0,"ageAtTransmitMs":100}
+FUS: {"type":"fusion","fusionSeq":912,"encoderValid":1,"encoderAgeMs":237,"encoderSeq":9999,"leftRPM":999,"rightRPM":999,"lat":0,"lng":0,"soilValid":1}
+[RAW RX]: ENC: diagnostic echo, not another measurement
+DATA: {"seq":91,"lat":14.6095,"lng":120.9897,"soilValid":0,"moisture":38.5,"ph":6.7}
+ENC:{"type":"encoder","encoderSeq":172,"leftTicks":200,"rightTicks":-210,"leftRPM":-44.97,"rightRPM":-44.65,"invalidL":1,"invalidR":2,"ageAtTransmitMs":909}
+{"type":"fusion","fusionSeq":913,"encoderValid":1,"encoderAgeMs":287,"encoderSeq":0,"leftRPM":0,"rightRPM":0,"lat":1,"lng":1,"soilValid":1}
+ENC: {malformed JSON}
+DATA:{"seq":92,"lat":14.6096,"lng":120.9898,"soilValid":0,"moisture":39,"ph":6.8}
+ENC: {"type":"encoder","encoderSeq":173,"leftTicks":300,"rightTicks":-320,"leftRPM":-30,"rightRPM":60,"invalidL":1,"invalidR":2,"ageAtTransmitMs":200}
+FUS: {"type":"fusion","fusionSeq":914,"encoderValid":1,"encoderAgeMs":237,"encoderSeq":0,"leftRPM":999,"rightRPM":999,"lat":2,"lng":2,"soilValid":1}
+[ACK] normal radio diagnostic
+DATA: {"seq":93,"lat":14.6097,"lng":120.9899,"soilValid":0,"moisture":40,"ph":6.8}
+ENC: {"type":"encoder","encoderSeq":174,"leftTicks":400,"rightTicks":-430,"leftRPM":35,"rightRPM":36,"invalidL":1,"invalidR":2,"ageAtTransmitMs":100}
+FUS: {"type":"fusion","fusionSeq":915,"encoderValid":1,"encoderAgeMs":237,"encoderSeq":4294967295,"leftRPM":0,"rightRPM":0,"lat":3,"lng":3,"soilValid":1}
+[MODE] RX
+DATA: {"seq":94,"lat":14.6098,"lng":120.9900,"soilValid":0,"moisture":41,"ph":6.9}
+ENC: {"type":"encoder","encoderSeq":175,"leftTicks":500,"rightTicks":-540,"leftRPM":45,"rightRPM":46,"invalidL":2,"invalidR":3,"ageAtTransmitMs":100}
+FUS: {"type":"fusion","fusionSeq":916,"encoderValid":1,"encoderAgeMs":237,"encoderSeq":0,"leftRPM":999,"rightRPM":999,"lat":4,"lng":4,"soilValid":1}
+ENC: {"type":"encoder","encoderSeq":176,"leftRPM":"invalid"}
+DATA: {"seq":95,"lat":14.6099,"lng":120.9901,"soilValid":0,"moisture":42,"ph":6.9}
+ENC: {"type":"encoder","encoderSeq":176,"leftTicks":600,"rightTicks":-650,"leftRPM":50,"rightRPM":49,"invalidL":2,"invalidR":3,"ageAtTransmitMs":100}
+FUS: {"type":"fusion","fusionSeq":917,"encoderValid":1,"encoderAgeMs":237,"encoderSeq":0,"leftRPM":999,"rightRPM":999,"lat":5,"lng":5,"soilValid":1}

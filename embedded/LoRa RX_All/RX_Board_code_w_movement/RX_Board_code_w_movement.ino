@@ -408,6 +408,81 @@ void processSensorPacket(const String &incoming) {
 }
 
 // =====================================================
+// A2.6 additive wireless encoder message (separate from DATA JSON)
+// ENC:seq,leftTicks,rightTicks,leftRPM,rightRPM,badL,badR,ageMs
+// =====================================================
+void processEncoderPacket(const String& incoming) {
+  unsigned long seq, badL, badR, ageMs;
+  long leftTicks, rightTicks;
+  float leftRPM, rightRPM;
+  int end = 0;
+  const int n = sscanf(incoming.c_str(),
+    "ENC:%lu,%ld,%ld,%f,%f,%lu,%lu,%lu%n",
+    &seq, &leftTicks, &rightTicks, &leftRPM, &rightRPM,
+    &badL, &badR, &ageMs, &end);
+  if (n != 8 || end != incoming.length() ||
+      !isfinite(leftRPM) || !isfinite(rightRPM) ||
+      fabsf(leftRPM) > 10000 || fabsf(rightRPM) > 10000) {
+    Serial.println(F("[ENC RX ERROR] Malformed packet"));
+    return;
+  }
+  Serial.print(F("{\"type\":\"encoder\",\"encoderSeq\":")); Serial.print(seq);
+  Serial.print(F(",\"leftTicks\":")); Serial.print(leftTicks);
+  Serial.print(F(",\"rightTicks\":")); Serial.print(rightTicks);
+  Serial.print(F(",\"leftRPM\":")); Serial.print(leftRPM, 2);
+  Serial.print(F(",\"rightRPM\":")); Serial.print(rightRPM, 2);
+  Serial.print(F(",\"invalidL\":")); Serial.print(badL);
+  Serial.print(F(",\"invalidR\":")); Serial.print(badR);
+  Serial.print(F(",\"ageAtTransmitMs\":")); Serial.print(ageMs);
+  Serial.println(F("}"));
+}
+
+// =====================================================
+// A2.7 diagnostic-only fusion observer output.
+// GPS fix and heading validity MUST be checked before using coordinates.
+// No GPS/IMU/encoder dead reckoning is enabled in this firmware.
+// =====================================================
+void processFusionPacket(const String& incoming) {
+  unsigned long seq, gpsAge, imuAge, encAge;
+  unsigned int gpsValid, headingValid, imuValid, encoderValid;
+  double lat, lng;
+  float heading, yaw, left, right;
+  int end = 0;
+  const int n = sscanf(incoming.c_str(),
+    "FUS:%lu,%u,%lf,%lf,%u,%f,%u,%f,%u,%f,%f,%lu,%lu,%lu%n",
+    &seq, &gpsValid, &lat, &lng, &headingValid, &heading,
+    &imuValid, &yaw, &encoderValid, &left, &right,
+    &gpsAge, &imuAge, &encAge, &end);
+  if (n != 14 || end != incoming.length() ||
+      gpsValid > 1 || headingValid > 1 || imuValid > 1 || encoderValid > 1 ||
+      !isfinite(lat) || !isfinite(lng) || !isfinite(heading) ||
+      !isfinite(yaw) || !isfinite(left) || !isfinite(right) ||
+      fabs(lat) > 90.0 || fabs(lng) > 180.0 ||
+      heading < 0 || heading >= 360.01 ||
+      fabs(yaw) > 2000 || fabs(left) > 10000 || fabs(right) > 10000 ||
+      (headingValid && !gpsValid)) {
+    Serial.println(F("[FUS RX ERROR] Malformed packet"));
+    return;
+  }
+  Serial.print(F("{\"type\":\"fusion\",\"fusionSeq\":")); Serial.print(seq);
+  Serial.print(F(",\"gpsValid\":")); Serial.print(gpsValid);
+  Serial.print(F(",\"lat\":")); Serial.print(gpsValid ? lat : 0.0, 6);
+  Serial.print(F(",\"lng\":")); Serial.print(gpsValid ? lng : 0.0, 6);
+  Serial.print(F(",\"headingValid\":")); Serial.print(headingValid);
+  Serial.print(F(",\"headingDeg\":")); Serial.print(headingValid ? heading : 0.0f, 2);
+  Serial.print(F(",\"headingSource\":\"")); Serial.print(headingValid ? F("GPS_COURSE") : F("NONE")); Serial.print('"');
+  Serial.print(F(",\"imuValid\":")); Serial.print(imuValid);
+  Serial.print(F(",\"gyroZDps\":")); Serial.print(yaw, 2);
+  Serial.print(F(",\"encoderValid\":")); Serial.print(encoderValid);
+  Serial.print(F(",\"leftRPM\":")); Serial.print(left, 2);
+  Serial.print(F(",\"rightRPM\":")); Serial.print(right, 2);
+  Serial.print(F(",\"gpsAgeMs\":")); Serial.print(gpsAge);
+  Serial.print(F(",\"imuAgeMs\":")); Serial.print(imuAge);
+  Serial.print(F(",\"encoderAgeMs\":")); Serial.print(encAge);
+  Serial.println(F(",\"positionSource\":\"GPS_ONLY\",\"navigationEnabled\":false}"));
+}
+
+// =====================================================
 // SETUP
 // =====================================================
 
@@ -462,53 +537,25 @@ void setup() {
 
 void loop() {
   serviceMissionTransmission();
-  // Always allow manual mode switching.
   handleSerialCommands();
+  if (missionTxBusy) return; // Preserve async Mission V2 TX.
 
-  if (missionTxBusy) return; // parsePacket() would interrupt async transmission.
+  // Receive exactly once: old second parsePacket() consumed an empty FIFO.
+  const int packetSize = LoRa.parsePacket();
+  if (packetSize <= 0) return;
+  String incoming;
+  incoming.reserve(packetSize + 1);
+  while (LoRa.available()) incoming += (char)LoRa.read();
+  incoming.trim();
+  Serial.println("[RAW RX]: " + incoming);
 
-  
-  // Check for incoming LoRa packets in BOTH modes.
-  int packetSize = LoRa.parsePacket();
-
-  if (packetSize > 0) {
-    String incoming = "";
-
-    while (LoRa.available()) {
-      incoming += (char)LoRa.read();
-    }
-
-    incoming.trim();
-
-    Serial.println("[RAW RX]: " + incoming);
-
-    if (incoming == "PONG") {
-      Serial.println("[TEST] PONG received! LoRa communication confirmed.");
-    }
-    else if (!txMode) {
-      // Process normal sensor telemetry only in RX mode.
-      processSensorPacket(incoming);
-    }
-  }
-
-  // TX mode: don't process normal sensor reception.
-  if (txMode) {
-    return;
-  }
-
-
-  if (packetSize > 0) {
-    String incoming = "";
-
-    while (LoRa.available()) {
-      incoming += (char)LoRa.read();
-    }
-
-    incoming.trim();
-
-    // FIX: Print the raw incoming string so PoC transmissions aren't hidden by the "DATA:" filter
-    Serial.println("[RAW RX]: " + incoming);
-
-    processSensorPacket(incoming);
+  if (incoming == "PONG") {
+    Serial.println(F("[TEST] PONG received"));
+  } else if (!txMode && incoming.startsWith("DATA:")) {
+    processSensorPacket(incoming); // Existing 19-field JSON unchanged.
+  } else if (!txMode && incoming.startsWith("ENC:")) {
+    processEncoderPacket(incoming); // New additive encoder JSON.
+  } else if (!txMode && incoming.startsWith("FUS:")) {
+    processFusionPacket(incoming); // A2.7 status-only fusion observation.
   }
 }

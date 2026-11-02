@@ -13,6 +13,8 @@ use tauri::{Emitter, Manager, State};
 
 mod mission_deployment;
 mod mission_protocol;
+mod encoder_telemetry;
+mod serial_lines;
 static RADIO: OnceLock<Mutex<mission_deployment::Radio>> = OnceLock::new();
 
 fn radio() -> &'static Mutex<mission_deployment::Radio> {
@@ -1018,12 +1020,11 @@ fn probe_port(port_name: &str) -> bool {
                 let trimmed = line.trim();
                 if trimmed.starts_with("[STATUS] Current mode:") || trimmed.contains("EKSPLORADOR RX_BOARD") { return true; }
 
-                if let Ok(json) =
-                    serde_json::from_str::<Value>(trimmed)
-                {
-                    if json.get("seq").is_some() {
-                        return true;
-                    }
+                match encoder_telemetry::classify(trimmed) {
+                    encoder_telemetry::Message::Encoder(_) => return true,
+                    encoder_telemetry::Message::Sensor(json)
+                        if json.get("seq").and_then(Value::as_u64).is_some() => return true,
+                    _ => {}
                 }
             }
 
@@ -1150,7 +1151,10 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
 
                     update_radio(&app_handle, |radio| radio.connection(Some(port_name.clone())));
                     let mut reader = BufReader::new(port);
-                    let mut serial_line = String::new();
+                    let mut serial_lines = serial_lines::SerialLines::default();
+                    // A fresh stream per USB connection allows device counter resets.
+                    let mut encoders = encoder_telemetry::EncoderStream::default();
+                    let mut fusion = encoder_telemetry::FusionStream::default();
 
                     let mut reading_buffer:
                         Vec<BufferedReading> =
@@ -1173,12 +1177,17 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                             println!("[serial] Command failed: {}", error);
                             break;
                         }
+                        if let Some(event) = encoders.take_due(Instant::now()) {
+                            encoder_telemetry::trace("encoder_emitted", || serde_json::to_string(&event).unwrap_or_default());
+                            if let Err(error) = app_handle.emit("encoder-data", event) {
+                                encoder_telemetry::trace("rejected", || format!("encoder_event_emit_failed: {error}"));
+                            }
+                        }
                         // Retain partial lines across serial timeouts. Process
                         // commands before reading their firmware confirmations.
-                        let line = match reader.read_line(&mut serial_line) {
-                            Ok(0) => break,
-                            Ok(_) => Ok(std::mem::take(&mut serial_line)),
-                            Err(error) if error.kind() == ErrorKind::TimedOut => continue,
+                        let line = match serial_lines.read(&mut reader) {
+                            Ok(None) => continue,
+                            Ok(Some(line)) => Ok(line),
                             Err(error) => Err(error),
                         };
                         match line {
@@ -1205,19 +1214,38 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                                     continue;
                                 }
 
-                                println!(
-                                    "[serial] raw: {}",
-                                    trimmed
-                                );
-                                update_radio(&app_handle, |radio| radio.line(trimmed, Instant::now()));
-                                if trimmed.starts_with("[MODE]") || trimmed.starts_with("[STATUS]") || trimmed.starts_with("[RAW RX]:") || trimmed.starts_with("[LoRa TX]") || trimmed.starts_with("[ERROR]") || trimmed.starts_with("[MISSION") {
+                                // Raw DATA/ENC echoes can be much faster than UI
+                                // rendering. Preserve Mission V2 ACK/NACK evidence
+                                // while excluding repeated raw telemetry diagnostics.
+                                if !trimmed.starts_with("[RAW RX]")
+                                    || trimmed.starts_with("[RAW RX]: ACK2:")
+                                    || trimmed.starts_with("[RAW RX]: NACK2:")
+                                {
+                                    update_radio(&app_handle, |radio| radio.line(trimmed, Instant::now()));
+                                }
+                                if trimmed.starts_with("[MODE]") || trimmed.starts_with("[STATUS]") || trimmed.starts_with("[LoRa TX]") || trimmed.starts_with("[ERROR]") || trimmed.starts_with("[MISSION") {
                                     let _ = app_handle.emit("rx-board-log", trimmed.to_string());
                                 }
 
-                                match serde_json::from_str::<Value>(
-                                    trimmed
-                                ) {
-                                    Ok(json) => {
+                                match encoder_telemetry::classify(trimmed) {
+                                    encoder_telemetry::Message::Encoder(packet) => {
+                                        let received_at_ms = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as u64;
+                                        encoders.receive(packet, Instant::now(), received_at_ms);
+                                    }
+                                    encoder_telemetry::Message::Fusion(json) => {
+                                        // Fusion has its own route. It cannot refresh
+                                        // standalone ENC age, change GPS or create soil rows.
+                                        let received_at_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                                        if let Some(event) = fusion.receive(json, Instant::now(), received_at_ms) {
+                                            if let Err(error) = app_handle.emit("fusion-data", event) {
+                                                encoder_telemetry::trace("rejected", || format!("fusion_event_emit_failed: {error}"));
+                                            }
+                                        }
+                                    }
+                                    encoder_telemetry::Message::Sensor(json) => {
                                         if mission_deployment::is_rover_telemetry(&json) {
                                             update_radio(&app_handle, |radio| radio.telemetry());
                                         }
@@ -1304,12 +1332,7 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                                         );
                                     }
 
-                                    Err(error) => {
-                                        println!(
-                                            "[serial] skipped non-JSON line ({})",
-                                            error
-                                        );
-                                    }
+                                    encoder_telemetry::Message::Ignore => {}
                                 }
 
                                 if !reading_buffer.is_empty()

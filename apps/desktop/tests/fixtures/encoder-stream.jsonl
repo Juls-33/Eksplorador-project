@@ -1,0 +1,12 @@
+[RAW RX]: ENC:mock packet echo
+[ACK] mock diagnostic
+[MODE] RX
+{"type":"encoder","encoderSeq":170,"leftTicks":0,"rightTicks":0,"leftRPM":0,"rightRPM":0,"invalidL":0,"invalidR":0,"ageAtTransmitMs":25}
+{"seq":90,"lat":14.6094,"lng":120.9896,"soilValid":1,"moisture":38.5,"ph":6.7,"ec":0.4,"nitrogen":20,"phosphorus":15,"potassium":40,"temperature":27,"salinity":0.2,"heading":135,"satsLocked":8,"satsView":12,"rssi":-75,"snr":8,"pitch":0,"roll":0}
+{"type":"encoder","encoderSeq":171,"leftTicks":13501,"rightTicks":-13278,"leftRPM":45,"rightRPM":45,"invalidL":1,"invalidR":2,"ageAtTransmitMs":100}
+{"type":"encoder","encoderSeq":172,"leftTicks":-13501,"rightTicks":13278,"leftRPM":-44.97,"rightRPM":-44.65,"invalidL":0,"invalidR":0,"ageAtTransmitMs":909}
+{"type":"encoder","encoderSeq":173,"leftTicks":-15000,"rightTicks":14500,"leftRPM":-30,"rightRPM":60,"invalidL":3,"invalidR":5,"ageAtTransmitMs":200}
+{"type":"encoder","encoderSeq":174,"leftTicks":-15000,"rightTicks":14500,"leftRPM":-30,"rightRPM":60,"invalidL":3,"invalidR":5,"ageAtTransmitMs":5000}
+{"type":"encoder","encoderSeq":175,"leftRPM":"bad"}
+{"type":"encoder","encoderSeq":176,
+{"type":"unrecognized","seq":91,"lat":0,"lng":0,"soilValid":1}

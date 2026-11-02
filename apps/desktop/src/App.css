@@ -281,6 +281,19 @@ button.nav-item { width: 100%; border: 0; background: transparent; text-align: l
   min-height: 0;
 }
 
+/* Keep the dashboard's soil/GIS workspace readable below drivetrain monitoring. */
+.live-monitoring-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.live-monitoring-kpis > *, .live-monitoring-workspace > * { min-width: 0; }
+.live-monitoring-workspace { grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr); }
+@media (max-width: 1200px) {
+  .live-monitoring-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1000px) {
+  .workspace-grid.live-monitoring-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; flex: 0 0 auto; }
+  .live-monitoring-workspace > .card { grid-column: 1; grid-row: auto; min-height: 220px; }
+  .live-monitoring-workspace > .map-card { min-height: 360px; }
+}
+
 .card {
   background: #fff;
   border: 1px solid var(--card-border);

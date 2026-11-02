@@ -252,6 +252,7 @@ bool readIMU(float &p, float &r) {
   return isfinite(p) && isfinite(r);
 }
 
+extern uint32_t lastGoodImuFusion;
 void serviceIMU() {
   if (millis() - lastIMU < IMU_MS)
     return;
@@ -272,6 +273,7 @@ void serviceIMU() {
 
   if (good) {
     fail = 0;
+    lastGoodImuFusion = millis();
 
     if (!haveAngles) {
       pitchFilt = p;
@@ -364,6 +366,47 @@ bool parseSoil(const char *line) {
   return true;
 }
 
+// ================= A2.6 ENCODER UART =================
+// Mega message: ENC:leftTicks,rightTicks,leftRPM,rightRPM,badL,badR
+// Separate from existing SOIL: and mission traffic.
+struct EncoderTelemetry {
+  int32_t leftTicks = 0;
+  int32_t rightTicks = 0;
+  float leftRPM = 0;
+  float rightRPM = 0;
+  uint32_t badL = 0;
+  uint32_t badR = 0;
+  uint32_t receivedAt = 0;
+  bool received = false;
+} encoderTelemetry;
+
+const uint32_t ENCODER_FRESH_MS = 2500;
+const uint32_t ENCODER_RADIO_MS = 2000;
+uint32_t lastEncoderRadio = 0;
+uint32_t encoderRadioSeq = 0;
+
+bool parseEncoderLine(const char* line) {
+  if (strncmp(line, "ENC:", 4) != 0) return false;
+  long left, right;
+  float lrpm, rrpm;
+  unsigned long invalidL, invalidR;
+  int end = 0;
+  const int matched = sscanf(line + 4, "%ld,%ld,%f,%f,%lu,%lu%n",
+                             &left, &right, &lrpm, &rrpm, &invalidL, &invalidR, &end);
+  if (matched != 6 || line[4 + end] != '\0' ||
+      !isfinite(lrpm) || !isfinite(rrpm) || fabsf(lrpm) > 10000 || fabsf(rrpm) > 10000)
+    return false;
+  encoderTelemetry.leftTicks = (int32_t)left;
+  encoderTelemetry.rightTicks = (int32_t)right;
+  encoderTelemetry.leftRPM = lrpm;
+  encoderTelemetry.rightRPM = rrpm;
+  encoderTelemetry.badL = (uint32_t)invalidL;
+  encoderTelemetry.badR = (uint32_t)invalidR;
+  encoderTelemetry.receivedAt = millis();
+  encoderTelemetry.received = true;
+  return true;
+}
+
 // ================= MEGA UART =================
 
 void processMegaLine(const char *s) {
@@ -382,6 +425,9 @@ void processMegaLine(const char *s) {
 
     if (loraReady)
       LoRa.idle();
+
+  } else if (!strncmp(s, "ENC:", 4)) {
+    if (!parseEncoderLine(s)) Serial.println("[ENC] rejected invalid UART frame");
 
   } else if (!strncmp(s, "SOIL:", 5)) {
     if (!parseSoil(s))
@@ -592,6 +638,122 @@ void serviceTx() {
   sendCurrent();
 }
 
+// Best-effort extra LoRa frame. It never displaces DATA ACK/retries.
+// No ACK/retry for ENC packets in this first diagnostic integration.
+void serviceEncoderRadio() {
+  const uint32_t now = millis();
+  if (!encoderTelemetry.received || now - encoderTelemetry.receivedAt > ENCODER_FRESH_MS) return;
+  if (now - lastEncoderRadio < ENCODER_RADIO_MS) return;
+  // Give the existing 19-field sensor telemetry its scheduled airtime.
+  if (awaitingAck || now - lastTelemetry >= TELEMETRY_MS) return;
+  const uint32_t age = now - encoderTelemetry.receivedAt;
+  char packet[128];
+  const unsigned long nextSeq = (unsigned long)(encoderRadioSeq + 1);
+  const int written = snprintf(packet, sizeof(packet),
+    "ENC:%lu,%ld,%ld,%.2f,%.2f,%lu,%lu,%lu",
+    nextSeq,
+    (long)encoderTelemetry.leftTicks, (long)encoderTelemetry.rightTicks,
+    encoderTelemetry.leftRPM, encoderTelemetry.rightRPM,
+    (unsigned long)encoderTelemetry.badL, (unsigned long)encoderTelemetry.badR,
+    (unsigned long)age);
+  if (written <= 0 || written >= (int)sizeof(packet)) return;
+  LoRa.idle();
+  if (LoRa.beginPacket()) {
+    LoRa.print(packet);
+    if (LoRa.endPacket() == 1) {
+      encoderRadioSeq++;
+      lastEncoderRadio = now;
+      Serial.printf("[ENC LoRa TX] seq=%lu age=%lums L=%.2f R=%.2f\n",
+                    nextSeq, (unsigned long)age,
+                    encoderTelemetry.leftRPM, encoderTelemetry.rightRPM);
+    }
+  }
+  LoRa.receive();
+}
+
+// ================= A2.7 SENSOR FUSION OBSERVER =================
+// Diagnostic-only: NEVER writes motor commands, mission controls, or Mega UART.
+// GPS fixes are the ONLY source of latitude/longitude in this release.
+// GPS course is usable only during meaningful movement. MPU yaw-rate is
+// reported but NOT integrated into compass heading until its sign, bias and
+// mounting orientation are validated outdoors.
+// Encoder rotations DO NOT yield ground displacement on a tracked rover
+// until effective track advance and width have been calibrated under load.
+const uint32_t FUSION_RADIO_MS = 2000;
+const uint32_t FUSION_IMU_FRESH_MS = 350;
+const float FUSION_GPS_COURSE_MIN_KMPH = 3.0f;
+const bool ENABLE_GYRO_HEADING_PROPAGATION = false; // intentionally gated
+uint32_t lastFusionRadio = 0;
+uint32_t fusionSeq = 0;
+uint32_t lastGoodImuFusion = 0;
+
+static bool fusionGpsFix() {
+  return gps.location.isValid() && gps.location.age() <= GPS_MAX_AGE;
+}
+static bool fusionEncoderFresh() {
+  return encoderTelemetry.received &&
+    (uint32_t)(millis() - encoderTelemetry.receivedAt) <= ENCODER_FRESH_MS;
+}
+static bool fusionImuFresh() {
+  return haveAngles && lastGoodImuFusion != 0 &&
+    (uint32_t)(millis() - lastGoodImuFusion) <= FUSION_IMU_FRESH_MS;
+}
+
+// GPS heading/course is not meaningful while stationary. Return invalid
+// rather than an arbitrary zero-degree heading or an unverified gyro estimate.
+static bool fusionGpsCourse() {
+  return fusionGpsFix() && gps.course.isValid() &&
+    gps.course.age() <= GPS_MAX_AGE && gps.speed.isValid() &&
+    gps.speed.age() <= GPS_MAX_AGE &&
+    gps.speed.kmph() >= FUSION_GPS_COURSE_MIN_KMPH;
+}
+
+// Best-effort telemetry, never preempts an awaited DATA ACK or a mission.
+void serviceFusionRadio() {
+  const uint32_t now = millis();
+  if (now - lastFusionRadio < FUSION_RADIO_MS) return;
+  if (awaitingAck || now - lastTelemetry >= TELEMETRY_MS) return;
+  // Existing ENC frames get priority; do not starve A2.6 telemetry.
+  if (encoderTelemetry.received &&
+      now - encoderTelemetry.receivedAt <= ENCODER_FRESH_MS &&
+      now - lastEncoderRadio >= ENCODER_RADIO_MS) return;
+
+  const bool fix = fusionGpsFix();
+  const bool course = fusionGpsCourse();
+  const bool imu = fusionImuFresh();
+  const bool enc = fusionEncoderFresh();
+  const double lat = fix ? gps.location.lat() : 0.0;
+  const double lng = fix ? gps.location.lng() : 0.0;
+  const float heading = course ? gps.course.deg() : 0.0f;
+  const float yawRate = imu ? gyroZ : 0.0f;
+  const float left = enc ? encoderTelemetry.leftRPM : 0.0f;
+  const float right = enc ? encoderTelemetry.rightRPM : 0.0f;
+  const unsigned long gpsAge = fix ? gps.location.age() : 0UL;
+  const unsigned long imuAge = imu ? (unsigned long)(now - lastGoodImuFusion) : 0UL;
+  const unsigned long encAge = enc ? (unsigned long)(now - encoderTelemetry.receivedAt) : 0UL;
+  // FUS:seq,gpsFix,lat,lng,headingValid,headingDeg,imuValid,
+  //     yawRateDps,encoderValid,leftRPM,rightRPM,gpsAge,imuAge,encAge
+  char packet[196];
+  const unsigned long nextSeq = (unsigned long)(fusionSeq + 1);
+  int n = snprintf(packet, sizeof(packet),
+    "FUS:%lu,%u,%.6f,%.6f,%u,%.2f,%u,%.2f,%u,%.2f,%.2f,%lu,%lu,%lu",
+    nextSeq, fix ? 1U : 0U, lat, lng, course ? 1U : 0U, heading,
+    imu ? 1U : 0U, yawRate, enc ? 1U : 0U, left, right,
+    gpsAge, imuAge, encAge);
+  if (n <= 0 || n >= (int)sizeof(packet)) return;
+  LoRa.idle();
+  if (LoRa.beginPacket()) {
+    LoRa.print(packet);
+    if (LoRa.endPacket() == 1) {
+      lastFusionRadio = millis();
+      fusionSeq++;
+      Serial.printf("[A2.7 FUS TX] seq=%lu gps=%u course=%u imu=%u enc=%u (no odometry)\n",
+        nextSeq, fix ? 1U : 0U, course ? 1U : 0U, imu ? 1U : 0U, enc ? 1U : 0U);
+    }
+  }
+  LoRa.receive();
+}
+
 // ================= LORA RX =================
 
 void serviceRx() {
@@ -702,6 +864,10 @@ void loop() {
   if (loraReady) {
     if (txMode) {
       serviceTx();
+      if (!awaitingAck) {
+        serviceEncoderRadio();
+        serviceFusionRadio();
+      }
     } else {
       awaitingAck = false;
       serviceRx();

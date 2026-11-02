@@ -1,0 +1,46 @@
+.drivetrain-telemetry { flex-shrink: 0; min-width: 0; }
+.drivetrain-telemetry__header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.drivetrain-telemetry__status { padding: 3px 8px; border-radius: 12px; font-size: .68rem; font-weight: 700; color: var(--text-muted); background: #f1f5f9; }
+.drivetrain-telemetry__status--receiving { background: #dcfce7; color: #166534; }
+.drivetrain-telemetry__status--stale, .drivetrain-telemetry__status--unavailable { background: #fef3c7; color: #92400e; }
+.drivetrain-telemetry__body { padding: 10px 12px; }
+.drivetrain-telemetry__motors { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr)); gap: 8px; }
+.drivetrain-telemetry__motor { padding: 8px; background: var(--bg-main); border: 1px solid var(--card-border); border-radius: 6px; min-width: 0; }
+.drivetrain-telemetry h3 { font-size: .72rem; font-weight: 600; color: var(--text-muted); }
+.drivetrain-telemetry__rpm { font-size: 1.25rem; font-weight: 800; color: var(--primary-green); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.drivetrain-telemetry__rpm small { font-size: .65rem; font-weight: 500; color: var(--text-muted); }
+.drivetrain-telemetry__motor p { font-size: .67rem; color: var(--text-muted); margin: 3px 0 7px; }
+.drivetrain-telemetry dl > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 3px 8px; margin-top: 4px; font-size: .7rem; }
+.drivetrain-telemetry dt { color: var(--text-muted); }
+.drivetrain-telemetry dd { font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.drivetrain-telemetry__metrics { margin: 10px 0; }
+.drivetrain-telemetry__counter-status { padding-top: 6px; border-top: 1px solid var(--card-border); }
+.drivetrain-telemetry__timeout { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; font-size: .72rem; color: var(--text-muted); }
+.drivetrain-telemetry__timeout select { background: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 4px 6px; color: var(--text-dark); }
+.drivetrain-telemetry__note { font-size: .68rem; line-height: 1.5; color: var(--text-muted); margin: 8px 0; }
+
+.drivetrain-monitoring { flex-shrink: 0; min-width: 0; }
+.drivetrain-monitoring .drivetrain-telemetry__body { display: grid; grid-template-columns: minmax(250px, 1fr) minmax(0, 1.5fr); gap: 0 20px; }
+.drivetrain-monitoring .drivetrain-telemetry__motors { grid-column: 1; grid-row: 1; }
+.drivetrain-monitoring .drivetrain-telemetry__metrics { grid-column: 1; grid-row: 2; }
+.drivetrain-monitoring .drivetrain-telemetry__timeout { grid-column: 1; grid-row: 3; }
+.drivetrain-monitoring .drivetrain-telemetry__body > .drivetrain-telemetry__note { grid-column: 1 / -1; }
+.rpm-history { grid-column: 2; grid-row: 1 / span 3; min-width: 0; padding: 12px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--bg-main); }
+.rpm-history figcaption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; font-size: .78rem; }
+.rpm-history figcaption span { color: var(--text-muted); font-size: .68rem; }
+.rpm-history__legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: .7rem; font-weight: 700; margin-top: 10px; }
+.rpm-history__left { color: var(--primary-green); }
+.rpm-history__right { color: var(--earth-light); }
+.rpm-history svg { display: block; width: 100%; margin-top: 8px; }
+.rpm-history text { fill: var(--text-muted); font-size: 11px; }
+.rpm-history__grid { stroke: var(--card-border); stroke-width: 1; }
+.rpm-history__trace { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.rpm-history__trace--left { stroke: var(--primary-green); }
+.rpm-history__trace--right { stroke: var(--earth-light); stroke-dasharray: 5 3; }
+.rpm-history__point--left { fill: var(--primary-green); }
+.rpm-history__point--right { fill: var(--earth-light); }
+.rpm-history--inactive .rpm-history__trace, .rpm-history--inactive circle { opacity: .45; }
+.rpm-history__empty { display: grid; place-items: center; min-height: 150px; color: var(--text-muted); font-size: .75rem; text-align: center; }
+@media (max-width: 1000px) {
+  .drivetrain-monitoring .drivetrain-telemetry__body { display: flex; flex-direction: column; gap: 8px; }
+}

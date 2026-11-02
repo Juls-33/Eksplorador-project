@@ -42,6 +42,8 @@ import PageTransition from './components/ui/PageTransition';
 import { getSourceTab, helpNavigationReducer, initialNavigation } from './utils/helpNavigation.js';
 import LoRaConnectionStatus from './components/LoRaConnectionStatus';
 import { useLoRaConnection } from './hooks/useLoRaConnection';
+import { useEncoderTelemetrySource } from './hooks/useEncoderTelemetry';
+import DrivetrainTelemetry from './components/DrivetrainTelemetry';
 import { useDownloadPercent } from './hooks/useDownloadJob';
 import { calculateDistanceMeters } from './utils/geo';
 import { MOISTURE_LAYER, PH_LAYER } from './utils/layerBands';
@@ -483,6 +485,7 @@ function TelemetrySyncBar({
 
 export default function App() {
   const receiverStatus = useLoRaConnection();
+  useEncoderTelemetrySource(receiverStatus);
   const [navigation, dispatchNavigation] = useReducer(helpNavigationReducer, initialNavigation);
   const { activeTab, help } = navigation;
   const sourceTab = getSourceTab(navigation);
@@ -1277,7 +1280,7 @@ export default function App() {
               </div>
             </header>
 
-            <section className="kpi-row">
+            <section className="kpi-row live-monitoring-kpis">
               <div className="kpi-card">
                 <div className="kpi-header">
                   <div
@@ -1434,7 +1437,9 @@ export default function App() {
               </div>
             </section>
 
-            <section className="workspace-grid">
+            <DrivetrainTelemetry expanded />
+
+            <section className="workspace-grid live-monitoring-workspace">
               <div className="card map-card">
                 <div className="card-header">
                   <span className="card-title">

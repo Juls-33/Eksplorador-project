@@ -24,6 +24,7 @@ import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
 import MissionDeploymentWizard from '../components/MissionDeploymentWizard';
 import LoRaConnectionStatus from '../components/LoRaConnectionStatus';
+import DrivetrainTelemetry from '../components/DrivetrainTelemetry';
 import { useLoRaConnection } from '../hooks/useLoRaConnection';
 import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
 import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
@@ -45,6 +46,7 @@ import {
 } from '../services/db';
 import { summarizeSamples, compareSamples } from '../utils/soilHistory';
 import { hasBoundary } from '../utils/fieldGeo';
+import './FieldMapView.css';
 
 // --- Constants & Layer Configurations ---
 const DEFAULT_CENTER = [14.6095, 120.9895];
@@ -973,7 +975,7 @@ export default function FieldMapView({ onHelp }) {
       )}
 
       {/* Main 3-Column Layout */}
-      <div style={{ display: 'grid', gridTemplateColumns: '250px 1.9fr 1.35fr', gap: '14px', flex: 1, minHeight: 0 }}>
+      <div className="field-map-layout">
         {/* Left Column: Field filter + Mission Directory */}
         <div className="card" style={{ overflowY: 'auto' }}>
           <div className="card-header">
@@ -1218,7 +1220,7 @@ export default function FieldMapView({ onHelp }) {
         </div>
 
         {/* Right Column: Overview, Telemetry, Traversal, History */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
+        <div className="field-map-layout__details">
           <div className="card" style={{ flexShrink: 0 }}>
             <div className="card-header">
               <span className="card-title">Mission Overview{currentSelected ? `: #${currentSelected.id}` : ''}</span>
@@ -1278,6 +1280,7 @@ export default function FieldMapView({ onHelp }) {
               )}
             </div>
           </div>
+          <DrivetrainTelemetry />
           {/* Live Sensor Telemetry Monitor Card */}
           <div className="card" style={{ flexShrink: 0 }}>
             <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

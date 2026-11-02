@@ -1,0 +1,21 @@
+.field-map-layout {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1.9fr) minmax(290px, 1.35fr);
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+.field-map-layout > * { min-width: 0; }
+.field-map-layout__details { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.field-map-view > .view-header { flex-wrap: wrap; }
+
+@media (max-width: 1200px) {
+  .field-map-layout { grid-template-columns: 200px minmax(0, 1fr); flex: 0 0 auto; align-items: start; }
+  .field-map-layout > .card:nth-child(2) { min-height: 420px; }
+  .field-map-layout__details { grid-column: 1 / -1; overflow-y: visible; }
+}
+@media (max-width: 900px) {
+  .field-map-layout { grid-template-columns: minmax(0, 1fr); }
+  .field-map-layout > .card:first-child { max-height: 240px; }
+  .field-map-layout > .card:nth-child(2) > .card-header { flex-wrap: wrap; gap: 8px; }
+}

@@ -196,6 +196,19 @@ volatile uint32_t ch6_start = 0, ch6_pulse = 0;
 volatile uint32_t ch8_start = 0, ch8_pulse = 0;
 
 volatile uint32_t last_rc_time = 0;
+// Track freshness for EVERY PWM channel; never reuse an old arm/throttle pulse.
+volatile uint32_t ch1_lastValid = 0, ch2_lastValid = 0;
+volatile uint32_t ch4_lastValid = 0, ch5_lastValid = 0;
+volatile uint32_t ch6_lastValid = 0, ch8_lastValid = 0;
+const uint16_t RC_VALID_MIN_US = 850;
+const uint16_t RC_VALID_MAX_US = 2150;
+const unsigned long RC_REARM_HOLD_MS = 400;
+bool rcOutputAuthorized = false; // Final hardware-output software interlock.
+bool rcDisarmObserved = false;
+bool rcRearmRequired = true;
+unsigned long rcDisarmSince = 0;
+unsigned long rcLastSafetyPrint = 0;
+
 
 
 // ------------------------- STATES -------------------------------
@@ -474,6 +487,57 @@ void reportDriveEncoders() {
   Serial.print(F(" badR=")); Serial.println(c.invalidR);
 }
 
+// =============================================================
+// A2.6: Encoder speed sampler and additive Mega -> ESP32 UART.
+// Left/right signed RPM are normalized to A2.4 forward axes.
+// This does not modify IMU, soil, mission or motor control logic.
+// =============================================================
+const unsigned long ENC_RPM_SAMPLE_MS = 500;
+const unsigned long ENC_UART_REPORT_MS = 1000;
+float encoderSignedRPMLeft = 0.0f;
+float encoderSignedRPMRight = 0.0f;
+unsigned long encoderLastUartMs = 0;
+
+void serviceEncoderTelemetry() {
+  static bool rpmInitialized = false;
+  static unsigned long rpmLastMs = 0;
+  static int32_t rpmPrevLeft = 0, rpmPrevRight = 0;
+  const unsigned long now = millis();
+  const DriveEncoderSnapshot c = readDriveEncoders();
+  if (!rpmInitialized) {
+    rpmInitialized = true;
+    rpmLastMs = now;
+    rpmPrevLeft = c.left;
+    rpmPrevRight = c.right;
+    encoderLastUartMs = now;
+    return;
+  }
+  const unsigned long elapsed = now - rpmLastMs;
+  if (elapsed >= ENC_RPM_SAMPLE_MS) {
+    const int32_t deltaL = c.left - rpmPrevLeft;
+    const int32_t deltaR = c.right - rpmPrevRight;
+    encoderSignedRPMLeft = ((float)deltaL * 60000.0f / ((float)ENC_LEFT_CPR * elapsed)) * ENC_LEFT_FORWARD_SIGN;
+    encoderSignedRPMRight = ((float)deltaR * 60000.0f / ((float)ENC_RIGHT_CPR * elapsed)) * ENC_RIGHT_FORWARD_SIGN;
+    rpmPrevLeft = c.left;
+    rpmPrevRight = c.right;
+    rpmLastMs = now;
+    Serial.print(F("[A2.6 RPM] L=")); Serial.print(encoderSignedRPMLeft, 2);
+    Serial.print(F(" R=")); Serial.println(encoderSignedRPMRight, 2);
+  }
+  if (now - encoderLastUartMs < ENC_UART_REPORT_MS) return;
+  // Do not block the primary safety/soil UART with diagnostic traffic.
+  // A short frame is typically 35-60 bytes. If TX is busy, retry.
+  if (espSerial.availableForWrite() < 48) return;
+  encoderLastUartMs = now;
+  espSerial.print(F("ENC:"));
+  espSerial.print(c.left); espSerial.print(',');
+  espSerial.print(c.right); espSerial.print(',');
+  espSerial.print(encoderSignedRPMLeft, 2); espSerial.print(',');
+  espSerial.print(encoderSignedRPMRight, 2); espSerial.print(',');
+  espSerial.print(c.invalidL); espSerial.print(',');
+  espSerial.println(c.invalidR);
+}
+
 bool driveSyncActive = false;
 bool driveSyncFaultLatched = false;
 bool driveSyncForward = true;
@@ -569,8 +633,15 @@ void isrCh1() {
   if (digitalRead(PIN_CH1_STEER) == HIGH)
     ch1_start = micros();
   else {
-    ch1_pulse = micros() - ch1_start;
-    last_rc_time = millis();
+    uint32_t width = micros() - ch1_start;
+    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
+      ch1_pulse = width;
+      ch1_lastValid = millis();
+      last_rc_time = ch1_lastValid;
+    } else {
+      ch1_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
+      ch1_lastValid = 0;
+    }
   }
 }
 
@@ -578,8 +649,15 @@ void isrCh2() {
   if (digitalRead(PIN_CH2_THROTTLE) == HIGH)
     ch2_start = micros();
   else {
-    ch2_pulse = micros() - ch2_start;
-    last_rc_time = millis();
+    uint32_t width = micros() - ch2_start;
+    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
+      ch2_pulse = width;
+      ch2_lastValid = millis();
+      last_rc_time = ch2_lastValid;
+    } else {
+      ch2_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
+      ch2_lastValid = 0;
+    }
   }
 }
 
@@ -587,8 +665,15 @@ void isrCh4() {
   if (digitalRead(PIN_CH4_ACTUATOR) == HIGH)
     ch4_start = micros();
   else {
-    ch4_pulse = micros() - ch4_start;
-    last_rc_time = millis();
+    uint32_t width = micros() - ch4_start;
+    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
+      ch4_pulse = width;
+      ch4_lastValid = millis();
+      last_rc_time = ch4_lastValid;
+    } else {
+      ch4_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
+      ch4_lastValid = 0;
+    }
   }
 }
 
@@ -596,8 +681,15 @@ void isrCh5() {
   if (digitalRead(PIN_CH5_ARM) == HIGH)
     ch5_start = micros();
   else {
-    ch5_pulse = micros() - ch5_start;
-    last_rc_time = millis();
+    uint32_t width = micros() - ch5_start;
+    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
+      ch5_pulse = width;
+      ch5_lastValid = millis();
+      last_rc_time = ch5_lastValid;
+    } else {
+      ch5_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
+      ch5_lastValid = 0;
+    }
   }
 }
 
@@ -605,8 +697,15 @@ void isrCh6() {
   if (digitalRead(PIN_CH6_MODE) == HIGH)
     ch6_start = micros();
   else {
-    ch6_pulse = micros() - ch6_start;
-    last_rc_time = millis();
+    uint32_t width = micros() - ch6_start;
+    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
+      ch6_pulse = width;
+      ch6_lastValid = millis();
+      last_rc_time = ch6_lastValid;
+    } else {
+      ch6_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
+      ch6_lastValid = 0;
+    }
   }
 }
 
@@ -614,8 +713,15 @@ void isrCh8() {
   if (digitalRead(PIN_CH8_LORA) == HIGH)
     ch8_start = micros();
   else {
-    ch8_pulse = micros() - ch8_start;
-    last_rc_time = millis();
+    uint32_t width = micros() - ch8_start;
+    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
+      ch8_pulse = width;
+      ch8_lastValid = millis();
+      last_rc_time = ch8_lastValid;
+    } else {
+      ch8_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
+      ch8_lastValid = 0;
+    }
   }
 }
 
@@ -737,6 +843,7 @@ void loop() {
   uint16_t loraPulse;
 
   uint32_t lastSignal;
+  uint32_t t1, t2, t4, t5, t6, t8;
 
   noInterrupts();
 
@@ -749,6 +856,9 @@ void loop() {
   loraPulse = ch8_pulse;
 
   lastSignal = last_rc_time;
+  t1 = ch1_lastValid; t2 = ch2_lastValid;
+  t4 = ch4_lastValid; t5 = ch5_lastValid;
+  t6 = ch6_lastValid; t8 = ch8_lastValid;
 
   interrupts();
 
@@ -764,29 +874,79 @@ void loop() {
   // ---------------- ESP32 + IMU COMMANDS ----------------
   readEspLines();
 
-  // ---------------- RC FAILSAFE ----------------
+  // ---------------- A2.6 RC FAILSAFE ----------------
+  // All six channels must have fresh, in-range pulses. Receiver output
+  // failsafe MUST be configured to emit no pulses (or disarmed outputs)
+  // when the transmitter is disconnected: valid held PWM is not detectable
+  // as a radio failure by the Mega alone.
+  const unsigned long rcNow = millis();
+  const bool rcFresh =
+    t1 && t2 && t4 && t5 && t6 && t8 &&
+    rcNow - t1 <= SIGNAL_TIMEOUT && rcNow - t2 <= SIGNAL_TIMEOUT &&
+    rcNow - t4 <= SIGNAL_TIMEOUT && rcNow - t5 <= SIGNAL_TIMEOUT &&
+    rcNow - t6 <= SIGNAL_TIMEOUT && rcNow - t8 <= SIGNAL_TIMEOUT;
+  const bool rcNeutral =
+    abs((int)throttle - (int)RC_MID) < RC_DEADZONE &&
+    abs((int)steer - (int)RC_MID) < RC_DEADZONE &&
+    abs((int)actuator - (int)RC_MID) < RC_DEADZONE;
 
-  if (
-    lastSignal == 0 ||
-    millis() - lastSignal > SIGNAL_TIMEOUT
-  ) {
-
+  // Fail closed, require a fresh deliberate LOW-to-HIGH arm sequence.
+  if (!rcFresh) {
     currentState = STATE_NO_SIGNAL;
-
+    rcOutputAuthorized = false;
+    rcRearmRequired = true;
+    rcDisarmObserved = false;
+    rcDisarmSince = 0;
+    // Any interrupted autonomous operation must NOT resume on reconnection.
+    if (missionActive) {
+      missionActive = false;
+      detourStage = 0;
+      currentCommand = "";
+      missionSequence = "";
+      Serial.println(F("[RC FAILSAFE] Signal lost; active mission cancelled"));
+      espSerial.println(F("FAULT:RC_LOSS"));
+    }
   } else if (armPulse < 1500) {
-
     currentState = STATE_DISARMED;
+    rcOutputAuthorized = false;
+    if (!rcDisarmSince) rcDisarmSince = rcNow;
+    if (rcNeutral && rcNow - rcDisarmSince >= RC_REARM_HOLD_MS)
+      rcDisarmObserved = true;
+    if (!rcNeutral) {
+      rcDisarmObserved = false;
+      rcDisarmSince = rcNow;
+    }
+    rcRearmRequired = true;
+  } else if (rcRearmRequired) {
+    // An arm-high signal at boot or after RF loss is NOT authorization.
+    // The user must show fresh neutral/disarmed pulses first.
+    if (rcDisarmObserved && rcNeutral) {
+      rcRearmRequired = false;
+      rcDisarmObserved = false;
+    }
+    rcDisarmSince = 0;
+    if (rcRearmRequired) {
+      currentState = STATE_DISARMED;
+      rcOutputAuthorized = false;
+    }
+  }
 
-  } else {
+  if (rcFresh && armPulse >= 1500 && !rcRearmRequired) {
+    if (modePulse < 1300) currentState = STATE_MANUAL;
+    else if (modePulse <= 1700) currentState = STATE_HOLD;
+    else currentState = STATE_SEMI_AUTO;
+    rcOutputAuthorized = currentState == STATE_MANUAL || currentState == STATE_SEMI_AUTO;
+  }
+  if (!rcFresh || rcRearmRequired || armPulse < 1500)
+    rcOutputAuthorized = false;
 
-    if (modePulse < 1300)
-      currentState = STATE_MANUAL;
-
-    else if (modePulse <= 1700)
-      currentState = STATE_HOLD;
-
-    else
-      currentState = STATE_SEMI_AUTO;
+  if (!rcFresh || rcRearmRequired) {
+    if (rcNow - rcLastSafetyPrint >= 1000) {
+      rcLastSafetyPrint = rcNow;
+      Serial.print(F("[RC FAILSAFE] fresh=")); Serial.print(rcFresh);
+      Serial.print(F(" rearmRequired=")); Serial.print(rcRearmRequired);
+      Serial.print(F(" disarmObserved=")); Serial.println(rcDisarmObserved);
+    }
   }
 
 
@@ -794,7 +954,7 @@ void loop() {
 
   // ---------------- LORA SWITCH ----------------
 
-  if (loraPulse > 1500) {
+  if (rcFresh && loraPulse > 1500) {
 
     if (espInTxMode) {
 
@@ -805,7 +965,7 @@ void loop() {
       Serial.println(F("[LORA] ESP32 switched to RX Mode"));
     }
 
-  } else {
+  } else if (rcFresh) {
 
     if (!espInTxMode) {
 
@@ -911,6 +1071,7 @@ void loop() {
     lastEncoderPrintMs = millis();
     reportDriveEncoders();
   }
+  serviceEncoderTelemetry();
 
   delay(10);
 }
@@ -1409,6 +1570,8 @@ void setMotorSpeed(
 ) {
 
   speed = constrain(speed, -255, 255);
+  // Fail closed for drive AND actuator regardless of caller or old mission.
+  if (!rcOutputAuthorized) speed = 0;
 
   // Final motor-output interlock, including invalid IMU data.
   if (rpwmPin == PIN_ACT_RPWM) {
