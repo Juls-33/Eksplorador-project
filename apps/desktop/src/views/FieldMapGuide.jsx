@@ -15,7 +15,7 @@ const topics = [
   { id: 'sequence', label: 'Read the Movement Sequence', summary: 'Understand the route before sending it.' },
   { id: 'send', label: 'Send a Mission', summary: 'Use the Mission Deployment Assistant to upload safely.' },
   { id: 'status', label: 'Communication and ACKs', summary: 'Know what each confirmation actually proves.' },
-  { id: 'start', label: 'Restore Telemetry and Start', summary: 'Wait for fresh data before selecting SEMI_AUTO.' },
+  { id: 'start', label: 'Restore Telemetry and Verify Staging', summary: 'Keep HOLD and DISARM. Autonomous navigation remains disabled for calibration.' },
   { id: 'samples', label: 'Heatmaps and Sample Records', summary: 'Read saved measurements and understand logging.' },
   { id: 'help', label: 'Troubleshooting', summary: 'Check common problems while keeping the rover stopped.' },
 ];
@@ -82,7 +82,7 @@ function MovementSequence({ Steps, Notice, instructionalGuide }) {
     <Steps items={[
       <>Find the <strong>Operator RC Movement Guide</strong> in the right column. Scroll that column if needed.</>,
       'Review the current target pin, estimated distance, heading and turn instruction. Confirm that the position and heading used by the app are current.',
-      <>Read <strong>Generated Movement Sequence</strong>. <strong>L</strong> means turn left, <strong>R</strong> means turn right (degrees), and <strong>F</strong> means forward (meters).</>,
+      <>Read <strong>Legacy relative sequence · staging only</strong>. <strong>L</strong> means turn left, <strong>R</strong> means turn right (degrees), and <strong>F</strong> means forward (meters). These commands assume earlier moves succeeded and cannot confirm arrival. Fresh received GPS coordinates and a supplied planning bearing are required.</>,
       <>Check the full sequence before <strong>Send Mission</strong>. The first leg uses the app’s current rover position and heading; later legs follow the saved pin order. Position or heading updates can change the preview.</>,
     ]} />
     <Notice title="Planned movement is not confirmed arrival" caution><p>Outdoor navigation and heading calibration are still needed. Map distances, turn instructions and <strong>IN RANGE</strong> indicators do not guarantee actual arrival or safe movement.</p></Notice>
@@ -98,7 +98,7 @@ function Sending({ Steps, Notice, instructionalGuide }) {
       <>Follow the <strong>Mission Deployment Assistant</strong>. If it is waiting for the desktop receiver, check the USB/COM connection.</>,
       <>Set <strong>SB MIDDLE → HOLD</strong> and confirm the motors have stopped. Set <strong>SA UP → DISARM</strong>.</>,
       <>Set <strong>SD → rover RX</strong> (configured green indicator ON), so the rover can receive the mission.</>,
-      <>The assistant prepares <strong>desktop LoRa TX</strong> automatically. Check all three operator confirmations, then press <strong>Confirm rover ready · Send mission</strong> when available.</>,
+      <>Verify all three boards use the A2.9 safety firmware with the Mega autonomous lock. The assistant prepares <strong>desktop LoRa TX</strong> automatically. Complete the operator checklist, then press <strong>Confirm rover ready · Send mission</strong> when available.</>,
       <>Keep <strong>HOLD, DISARM and rover RX</strong> during transmission and automatic retries. Wait for the matching rover-radio ACK and desktop RX restoration.</>,
     ]} />
     <Notice title="The checklist is your confirmation" caution><p>The app does not electronically verify controller switch positions. Check the physical rover and surroundings. Opening the assistant alone does not mean the mission has been delivered.</p></Notice>
@@ -111,9 +111,9 @@ const evidence = [
   ['Local packet: Submitted', 'The desktop submitted a command locally; rover receipt is not yet confirmed.'],
   ['Ground station: Accepted', 'The ground station accepted the command; this is still not a rover ACK.'],
   ['Current radio packet: Transmitted', 'The local radio reported transmission; it does not prove rover receipt.'],
-  ['Rover radio ACK confirmed', 'The rover ESP32 acknowledged the matching mission ID and payload checksum.'],
-  ['Mega storage: Unverified', 'The desktop has no independent confirmation that the Mega stored the mission.'],
-  ['Mission execution: Not verified by desktop', 'Radio delivery is not proof that the rover executed the route.'],
+  ['Rover acknowledged delivery', 'ACK2 confirms the matching mission ID and checksum were queued for UART delivery.'],
+  ['Mega: STAGED or REJECTED', 'A separate matching Mega report confirms staging or rejection. STAGED does not mean execution.'],
+  ['Upload recovery: Complete', 'RX and telemetry recovery finished. This does not mean the mission completed.'],
 ];
 
 function Communication({ Steps, Notice }) {
@@ -133,11 +133,11 @@ function RestoreAndStart({ Steps, Notice }) {
   return <>
     <div className="manual-control-pair"><div className="manual-inset"><h3>During upload</h3><p>SB: HOLD · SA: DISARM</p><p>Rover SD: RX · desktop: TX</p></div><div className="manual-inset"><h3>After desktop RX returns</h3><p>SB: HOLD · SA: DISARM</p><p>Rover SD: TX · desktop: RX</p></div></div>
     <Steps items={[
-      <>Wait until the assistant confirms <strong>desktop RX</strong> and shows <strong>Restore telemetry and start when safe</strong>.</>,
+      <>Wait until the assistant confirms <strong>desktop RX</strong> and shows <strong>Restore telemetry and wait for Mega status</strong>.</>,
       <>Set <strong>SD → rover TX</strong> (configured green indicator OFF). The desktop changes its own radio; it does not change this rover switch.</>,
       <>Keep <strong>SB in HOLD</strong> and <strong>SA DISARMED</strong> until the assistant receives a fresh rover telemetry packet after desktop RX restoration.</>,
-      <>Review the restored data and check the actual surroundings. If the rover is ready and it is safe to proceed, set <strong>SA DOWN → ARM</strong> while SB stays in HOLD.</>,
-      <>Deliberately set <strong>SB DOWN → SEMI_AUTO</strong>. Watch the rover and be ready to return to <strong>HOLD or DISARM</strong>.</>,
+      <>Read the separate <strong>Last Mega mission report</strong>. A matching <strong>STAGED</strong> report means accepted for staging; a matching <strong>REJECTED</strong> report requires operator review.</>,
+      <>Remain in <strong>HOLD and DISARM</strong>. Autonomous navigation is disabled pending calibration. The sampling simulator is available in Field Map and never sends hardware commands.</>,
     ]} />
     <Notice title="Logging controls do not stop the rover" caution><p><strong>Pause Logging</strong>, <strong>Mark Finished</strong> and closing a desktop page are not rover stop commands. Use the physical controller’s HOLD or DISARM and check that movement has stopped. Telemetry restoration alone does not verify calibration or safe execution.</p></Notice>
   </>;
@@ -168,7 +168,7 @@ const problems = [
   ['A pin is rejected or clicking removes pins', 'Place pins inside the boundary. If removal mode is on, choose Done Removing before adding pins. Boundary drawing and pin placement are separate steps.'],
   ['The map is blank or the place is not found', 'Check internet for search, enter at least 3 characters and press Go. Offline maps need saved coverage at the current zoom. The supported map region is Nueva Ecija to Batangas.'],
   ['The map keeps returning to the marker', 'Drag the map to stop following. Selecting a search result or a downloaded area also stops following. Use Follow Rover only when you want to center on the marker.'],
-  ['Send Mission is unavailable', 'Review the selected mission’s pins and Generated Movement Sequence. A route with no generated movement cannot be sent. Wait if an assistant is already open.'],
+  ['Send Mission is unavailable', 'Review the pins, fresh GPS coordinates, planning reference bearing and legacy relative sequence. A route with no generated movement cannot be sent. Wait if an assistant is already open.'],
   ['The assistant is waiting or no ACK arrives', 'Keep HOLD and DISARM. Check the desktop receiver USB/COM connection, rover power and SD in rover RX. Read retry/error details. No ACK does not prove the rover received nothing.'],
   ['RX recovery fails or telemetry does not return', 'Keep HOLD and DISARM. Follow the assistant’s recovery message. Only after desktop RX is confirmed, return SD to rover TX and wait for fresh telemetry. Do not start on an old marker or reading.'],
   ['The rover rejects the mission or requests a protocol update', 'Do not arm or bypass the error. Keep HOLD and DISARM, note the exact message and ask the project team to check compatibility.'],
@@ -201,7 +201,7 @@ export default function FieldMapGuide({ Steps, Notice, instructionalGuide }) {
       <p className="manual-eyebrow">FIELD MAP GUIDE</p>
       <label className="manual-topic-select">Field Map topic<select value={topicIndex} aria-controls="field-manual-topic" onChange={event => setTopicIndex(Number(event.target.value))}>{topics.map((item, index) => <option key={item.id} value={index}>{String.fromCharCode(65 + index)}. {item.label}</option>)}</select></label>
       {topics.map((item, index) => <button type="button" key={item.id} aria-current={index === topicIndex ? 'step' : undefined} aria-controls="field-manual-topic" onClick={() => setTopicIndex(index)}><span className="manual-topic-letter">{String.fromCharCode(65 + index)}</span><span>{item.label}</span>{index === topicIndex && <ChevronRight size={16} aria-hidden="true" />}</button>)}
-      <div className="manual-topic-note"><ShieldCheck size={18} aria-hidden="true" /><span>Plan → review → upload → restore telemetry → start safely.</span></div>
+      <div className="manual-topic-note"><ShieldCheck size={18} aria-hidden="true" /><span>Plan → review → upload → restore telemetry → verify staging.</span></div>
     </nav>
     <article className="manual-article" id="field-manual-topic" aria-labelledby="field-manual-heading">
       <header className="manual-article-header"><p className="manual-eyebrow">FIELD MAP · {String(topicIndex + 1).padStart(2, '0')} / 09</p><h2 id="field-manual-heading" tabIndex={-1} ref={headingRef}>{topic.label}</h2><p>{topic.summary}</p></header>

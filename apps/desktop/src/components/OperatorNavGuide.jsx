@@ -17,7 +17,7 @@ import {
 
 export default function OperatorNavGuide({
   roverPos,
-  roverHeading = 0,
+  roverHeading = null,
   waypoints = [],
   currentWaypointIdx = 0,
   onAdvanceWaypoint = null,
@@ -29,10 +29,14 @@ export default function OperatorNavGuide({
 }) {
   const [sendingMission, setSendingMission] = useState(false);
   const [missionStatus, setMissionStatus] = useState('');
+  const [referenceHeading, setReferenceHeading] = useState('');
+  const planningHeading = Number.isFinite(roverHeading) ? roverHeading
+    : referenceHeading.trim() !== '' && Number.isFinite(Number(referenceHeading))
+      && Number(referenceHeading) >= 0 && Number(referenceHeading) < 360 ? Number(referenceHeading) : null;
 
   
 const generateMovementSequence = (route, position, heading) => {
-  if (!Array.isArray(route) || route.length === 0 || !position) {
+  if (!Array.isArray(route) || route.length === 0 || !position || !Number.isFinite(heading)) {
     return [];
   }
 
@@ -71,8 +75,8 @@ const generateMovementSequence = (route, position, heading) => {
   const reachedSet = reachedWaypointIdxs ? new Set(reachedWaypointIdxs) : null;
   
 const movementSequence = useMemo(
-  () => generateMovementSequence(waypoints, roverPos, roverHeading),
-  [waypoints, roverPos, roverHeading]
+  () => generateMovementSequence(waypoints, roverPos, planningHeading),
+  [waypoints, roverPos, planningHeading]
 );
 
 const movementSequenceText = movementSequence
@@ -83,7 +87,7 @@ const movementSequenceText = movementSequence
   const distanceToTarget = activeTarget ? calculateDistanceMeters(roverPos, activeTarget) : 0;
   const requiredBearing = activeTarget ? calculateBearing(roverPos, activeTarget) : 0;
   const cardinal = degreesToCardinal(requiredBearing);
-  const inRange = Boolean(activeTarget) && distanceToTarget <= reachRadiusM;
+  const inRange = Boolean(activeTarget && roverPos) && distanceToTarget <= reachRadiusM;
 
   // Turn difference between IMU heading and target bearing (-180 to 180)
   let turnOffset = (requiredBearing - roverHeading + 540) % 360 - 180;
@@ -97,7 +101,7 @@ const movementSequenceText = movementSequence
           Operator RC Movement Guide
         </span>
         <span style={{ fontSize: '0.72rem', background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>
-          IMU Yaw: {roverHeading}°
+          Heading: {Number.isFinite(roverHeading) ? `${roverHeading}°` : 'Unavailable'}
         </span>
       </div>
 
@@ -109,7 +113,7 @@ const movementSequenceText = movementSequence
         ) : (
           <>
             {/* Target Alignment & Distance in Meters Card */}
-            {activeTarget ? (
+            {!roverPos ? <p role="status">Waiting for real GPS coordinates. No rover location or waypoint arrival is inferred.</p> : activeTarget ? (
               <div style={{
                 background: 'var(--bg-main)',
                 borderRadius: '8px',
@@ -154,7 +158,7 @@ const movementSequenceText = movementSequence
                       {distanceToTarget} <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>meters</span>
                     </div>
                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: Math.abs(turnOffset) <= 5 ? 'var(--primary-green)' : '#d97706' }}>
-                      Face: {requiredBearing}° ({cardinal}) • {turnDirection}
+                      Face: {requiredBearing}° ({cardinal}) • {Number.isFinite(roverHeading) ? turnDirection : 'Heading unavailable; relative turns cannot be generated'}
                     </div>
                   </div>
                 </div>
@@ -205,7 +209,7 @@ const movementSequenceText = movementSequence
                 const isCurrent = idx === currentWaypointIdx;
                 const isPassed = reachedSet ? reachedSet.has(idx) : idx < currentWaypointIdx;
                 // With out-of-order progress, a later pin can be in range before the target is.
-                const rowInRange = !isPassed && calculateDistanceMeters(roverPos, pt) <= reachRadiusM;
+                const rowInRange = Boolean(roverPos) && !isPassed && calculateDistanceMeters(roverPos, pt) <= reachRadiusM;
                 const segDist = idx === 0 ? calculateDistanceMeters(roverPos, pt) : calculateDistanceMeters(waypoints[idx - 1], pt);
                 const segBearing = idx === 0 ? calculateBearing(roverPos, pt) : calculateBearing(waypoints[idx - 1], pt);
 
@@ -249,7 +253,7 @@ const movementSequenceText = movementSequence
 
                     <div style={{ display: 'flex', gap: '10px', fontWeight: 600 }}>
                       <span style={{ color: 'var(--text-muted)' }}>Heading: {segBearing}°</span>
-                      <span style={{ color: 'var(--primary-green)' }}>{segDist}m forward</span>
+                      <span style={{ color: 'var(--primary-green)' }}>{idx === 0 && !roverPos ? 'GPS unavailable' : `${segDist}m forward`}</span>
                     </div>
                   </div>
                 );
@@ -266,7 +270,7 @@ const movementSequenceText = movementSequence
               }}
             >
               <div style={{ fontSize: '0.8rem', fontWeight: 700, marginBottom: '6px' }}>
-                Generated Movement Sequence
+                Legacy relative sequence · staging only
               </div>
 
               <code
@@ -279,6 +283,11 @@ const movementSequenceText = movementSequence
               >
                 {movementSequenceText || 'No movement commands generated'}
               </code>
+              <p style={{fontSize:'0.75rem'}}>These turns and distances assume each previous move succeeded. They do not confirm waypoint arrival. A2.9 stages this payload only; physical autonomous navigation remains disabled pending calibration. Use the simulation to inspect coordinate-based sampling.</p>
+              {!Number.isFinite(roverHeading) && <label style={{fontSize:'0.75rem'}}>Planning reference bearing (degrees, operator supplied)
+                <input type="number" min="0" max="359.9" step="0.1" value={referenceHeading} onChange={e => setReferenceHeading(e.target.value)} />
+                <span>This assumption is used only for the staged relative sequence. Gyro rate is not an absolute heading.</span>
+              </label>}
             </div>
                         {/* Send Mission Button */}
             <div style={{ marginTop: '12px' }}>

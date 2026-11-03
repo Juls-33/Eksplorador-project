@@ -23,6 +23,8 @@ import {
 import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
 import MissionDeploymentWizard from '../components/MissionDeploymentWizard';
+import MissionStatusReport from '../components/MissionStatusReport';
+import MissionSimulationPanel from '../components/MissionSimulationPanel';
 import LoRaConnectionStatus from '../components/LoRaConnectionStatus';
 import DrivetrainTelemetry from '../components/DrivetrainTelemetry';
 import { useLoRaConnection } from '../hooks/useLoRaConnection';
@@ -168,8 +170,16 @@ export default function FieldMapView({ onHelp }) {
   const sampleCapturedForInsertionRef = useRef(false);
 
   // Live Rover Telemetry
-  const [roverPos, setRoverPos] = useState([14.6094, 120.9896]);
-  const [roverHeading, setRoverHeading] = useState(0);
+  const [roverPos, setRoverPos] = useState(null);
+  const [roverHeading, setRoverHeading] = useState(null);
+  const gpsExpiry = useRef(null);
+  useEffect(() => {
+    if (!receiverStatus.connected || receiverStatus.connectionError) {
+      setRoverPos(null); setRoverHeading(null);
+      clearTimeout(gpsExpiry.current);
+    }
+  }, [receiverStatus.connected, receiverStatus.connectionError]);
+  useEffect(() => () => clearTimeout(gpsExpiry.current), []);
   const [manualReached, setManualReached] = useState([]); // pin indexes the operator ticked off by hand
   const [showSamplePins, setShowSamplePins] = useState(false); // numbered pins for every recorded sample
 
@@ -484,6 +494,13 @@ export default function FieldMapView({ onHelp }) {
 
       if (hasValidGps) {
         setRoverPos([lat, lng]);
+        clearTimeout(gpsExpiry.current);
+        // DATA lacks calibrated accuracy/age metadata. This is only an RC
+        // planning display timeout; it cannot qualify autonomous localization.
+        gpsExpiry.current = setTimeout(() => { setRoverPos(null); setRoverHeading(null); }, 5000);
+      } else {
+        clearTimeout(gpsExpiry.current);
+        setRoverPos(null); setRoverHeading(null);
       }
 
       // Saving soil samples is separate from updating rover position.
@@ -1348,6 +1365,8 @@ export default function FieldMapView({ onHelp }) {
           </div>
 
           <div style={{ flexShrink: 0 }}>
+            <MissionStatusReport deployment={receiverStatus.deployment} connected={receiverStatus.connected}/>
+            <MissionSimulationPanel waypoints={displayedWaypoints}/>
             <OperatorNavGuide
               roverPos={roverPos}
               roverHeading={roverHeading}

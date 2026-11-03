@@ -30,7 +30,8 @@ impl MockRover {
             Some((old_id, old_packet)) if *old_id == id => assert_eq!(old_packet, packet),
             _ => {
                 self.latest = Some((id, packet.into()));
-                self.mega_lines.push(format!("RCV:{}", fields[3]));
+                self.mega_lines
+                    .push(format!("RCV2:{}:{}", fields[1], fields[3]));
             }
         }
         if self.drop_acks > 0 {
@@ -135,7 +136,7 @@ fn start(now: Instant) -> (Radio, u64, MockTransport) {
 #[test]
 fn first_attempt_success_restores_rx_then_requires_fresh_telemetry() {
     let now = Instant::now();
-    let (mut radio, _, mut transport) = start(now);
+    let (mut radio, id, mut transport) = start(now);
     transport.rover.rx = true;
     radio.telemetry();
     assert!(!radio.deployment.as_ref().unwrap().telemetry_seen);
@@ -150,7 +151,10 @@ fn first_attempt_success_restores_rx_then_requires_fresh_telemetry() {
     assert_eq!(radio.deployment.as_ref().unwrap().phase, Phase::Restore);
     radio.telemetry();
     assert_eq!(radio.deployment.as_ref().unwrap().phase, Phase::Complete);
-    assert_eq!(transport.rover.mega_lines, [format!("RCV:{PAYLOAD}")]);
+    assert_eq!(
+        transport.rover.mega_lines,
+        [format!("RCV2:{id:016X}:{PAYLOAD}")]
+    );
     assert_eq!(transport.packets.len(), 1);
 }
 
@@ -521,4 +525,112 @@ fn absent_telemetry_and_generic_json_never_unlock_start_instructions() {
     assert!(is_rover_telemetry(
         &serde_json::json!({"seq":1,"lat":0,"lng":0,"soilValid":0})
     ));
+}
+
+fn status(id: u64, seq: u32, state: &str) -> crate::mission_status::MissionStatus {
+    crate::mission_status::MissionStatus::parse(serde_json::json!({
+        "type":"missionStatus", "missionId":format!("{id:016X}"), "statusSeq":seq,
+        "state":state, "step":0, "reason":"NAV_NOT_CALIBRATED", "rssi":-42, "snr":8.6
+    }))
+    .unwrap()
+}
+
+#[test]
+fn mega_staging_is_independent_of_ack_and_transport_completion_and_never_sends_commands() {
+    let now = Instant::now();
+    let (mut radio, id, mut transport) = start(now);
+    let before = radio.deployment.as_ref().unwrap().phase;
+    radio.mission_status(status(id, 1, "STAGED"));
+    let d = radio.deployment.as_ref().unwrap();
+    assert_eq!(d.phase, before);
+    assert!(!d.acknowledged && !d.telemetry_seen);
+    assert!(d.pending.is_none());
+    assert!(radio.commands.is_empty());
+    transport.rover.rx = true;
+    transport.complete_tx(&mut radio, now);
+    transport.tick(&mut radio, now);
+    radio.telemetry();
+    let d = radio.deployment.as_ref().unwrap();
+    assert_eq!(d.phase, Phase::Complete); // Transport workflow only.
+    assert_eq!(d.mega_status.as_ref().unwrap().state, "STAGED");
+    assert_eq!(
+        transport.rover.mega_lines,
+        vec![format!("RCV2:{id:016X}:{PAYLOAD}")]
+    );
+    assert!(!transport
+        .commands
+        .iter()
+        .any(|s| s.contains("ARM") || s.contains("AUTO")));
+}
+
+#[test]
+fn statuses_deduplicate_reject_conflicts_and_keep_the_high_water_mark_across_usb_recovery() {
+    let now = Instant::now();
+    let (mut radio, id, _) = start(now);
+    radio.mission_status(status(id, 4, "STAGED"));
+    let revision = radio.revision;
+    radio.mission_status(status(id, 4, "STAGED"));
+    radio.mission_status(status(id, 4, "COMPLETE"));
+    radio.mission_status(status(id, 3, "REJECTED"));
+    radio.mission_status(status(id + 1, 50, "COMPLETE"));
+    assert_eq!(radio.revision, revision);
+    radio.connection(None);
+    radio.mission_status(status(id, 5, "COMPLETE"));
+    assert_eq!(
+        radio
+            .deployment
+            .as_ref()
+            .unwrap()
+            .mega_status
+            .as_ref()
+            .unwrap()
+            .status_seq,
+        4
+    );
+    radio.connection(Some("mock".into()));
+    radio.mission_status(status(id, 1, "COMPLETE"));
+    assert!(
+        !radio
+            .deployment
+            .as_ref()
+            .unwrap()
+            .status_connection_confirmed
+    );
+    radio.mission_status(status(id, 4, "STAGED"));
+    assert!(
+        radio
+            .deployment
+            .as_ref()
+            .unwrap()
+            .status_connection_confirmed
+    );
+    assert_eq!(radio.deployment.as_ref().unwrap().phase, Phase::Failed);
+    radio.mission_status(status(id, 5, "REJECTED"));
+    assert_eq!(
+        radio
+            .deployment
+            .as_ref()
+            .unwrap()
+            .mega_status
+            .as_ref()
+            .unwrap()
+            .state,
+        "REJECTED"
+    );
+    assert!(!radio.deployment.as_ref().unwrap().acknowledged);
+}
+
+#[test]
+fn an_old_or_unsent_mission_status_cannot_replace_the_current_mission() {
+    let now = Instant::now();
+    let (mut radio, id, _) = prepared(now);
+    radio.mission_status(status(id, 1, "STAGED"));
+    assert!(radio.deployment.as_ref().unwrap().mega_status.is_none());
+    radio.cancel(id);
+    radio.drive(now, |_| Ok(())).unwrap();
+    radio.line("[MODE] RX MODE", now);
+    let new = radio.begin(PAYLOAD.into()).unwrap();
+    radio.mission_status(status(id, u32::MAX, "COMPLETE"));
+    assert_eq!(radio.deployment.as_ref().unwrap().id, new.id);
+    assert!(radio.deployment.as_ref().unwrap().mega_status.is_none());
 }

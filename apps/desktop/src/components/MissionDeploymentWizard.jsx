@@ -4,6 +4,7 @@ import { CheckCircle2, X } from 'lucide-react';
 import { refreshLoRaConnection, useLoRaConnection } from '../hooks/useLoRaConnection';
 import { getDeploymentFailure, getDeploymentProgress, isReceiverUnavailable } from '../utils/loraStatus';
 import LoRaConnectionStatus from './LoRaConnectionStatus';
+import MissionStatusReport from './MissionStatusReport';
 import controllerGuide from '../assets/radiomaster-pocket-guide.png';
 import './MissionDeploymentWizard.css';
 
@@ -13,7 +14,7 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
   const radio = useLoRaConnection();
   const [sessionId, setSessionId] = useState(null);
   const deployment = radio.deployment?.id === sessionId ? radio.deployment : null;
-  const [checks, setChecks] = useState({hold:false,disarm:false,rx:false});
+  const [checks, setChecks] = useState({hold:false,disarm:false,rx:false,firmware:false});
   const [error, setError] = useState(null);
   const [pending, setPending] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -93,7 +94,7 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
     actionPending.current = true;
     setPending(true);
     setError(null);
-    setChecks({hold:false,disarm:false,rx:false});
+    setChecks({hold:false,disarm:false,rx:false,firmware:false});
     try { await invoke('retry_mission_deployment', {id:session.current}); }
     catch (reason) { setError({stage:'retry', message:String(reason)}); }
     finally { actionPending.current = false; setPending(false); }
@@ -102,7 +103,7 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
   const phase = deployment?.phase;
   const ready = radio.connected && !radio.connectionError && phase === 'READY' && !closing;
   const canConfirm = ready && Object.values(checks).every(Boolean) && !pending;
-  const canStart = radio.connected && !radio.connectionError && radio.mode === 'RX' && phase === 'COMPLETE' && deployment.telemetry_seen;
+  const telemetryRestored = radio.connected && !radio.connectionError && radio.mode === 'RX' && phase === 'COMPLETE' && deployment.telemetry_seen;
   const failure = getDeploymentFailure(deployment, error);
   const workflowStatus = getDeploymentProgress(deployment, closing);
   const operationActive = deployment && !terminal(phase) && phase !== 'READY';
@@ -123,9 +124,10 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
           <span>Ground station: {deployment.ground_submitted ? 'Accepted' : 'Unconfirmed'}</span>
           <span>Current radio packet: {deployment.radio_transmitted ? 'Transmitted' : 'Unconfirmed'}</span>
           <span>Rover ESP32: {deployment.acknowledged ? 'Acknowledged' : 'Unconfirmed'}</span>
-          <span>Mega storage: Unverified</span>
-          <span>Mission execution: Not verified by desktop</span>
+          <span>Mega: {deployment.mega_status?.state || 'Staging unconfirmed'}</span>
+          <span>Upload recovery: {phase === 'COMPLETE' ? 'Complete; this is not mission completion' : 'Pending'}</span>
         </div>}
+        <MissionStatusReport deployment={deployment} connected={radio.connected}/>
         {(!deployment || ['PREPARING','SWITCH_TX','READY'].includes(phase)) && <>
           <h3 className="mission-deployment-step-title">Prepare the rover safely</h3>
           <div className="mission-controller-step">
@@ -137,6 +139,7 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
                   ['hold', 'Set SB (CH6) to HOLD.', 'Confirm the motors are stopped.'],
                   ['disarm', 'Set SA (CH5) to DISARM.', 'Disarm before uploading; secure the rover during bench testing.'],
                   ['rx', 'Set SD (CH8) to RX.', 'Set rover LoRa to receive the mission.'],
+                  ['firmware', 'Confirm all three boards run the A2.9 safety firmware.', 'Verify the Mega autonomous lock before sending. The V2 radio banner alone does not verify the firmware version.'],
                 ].map(([key,title,body]) => <label key={key} className="mission-preparation-item">
                   <input type="checkbox" checked={checks[key]} disabled={closing || pending || !['PREPARING','SWITCH_TX','READY'].includes(phase)} onChange={event => setChecks(previous => ({...previous,[key]:event.target.checked}))}/>
                   <span><strong>{title}</strong><span className="mission-controller-detail">{body}</span></span>
@@ -148,20 +151,19 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
             </div>
           </div>
         </>}
-        {deployment?.acknowledged && pill('Rover radio ACK confirmed', 'The rover ESP32 acknowledged this mission ID and payload checksum. Duplicate retries are not forwarded again. Mega storage and execution are not independently verified.')}
+        {deployment?.acknowledged && pill('Rover acknowledged delivery', 'ACK2 confirms this immutable mission ID and checksum were queued for UART delivery. Mega acceptance and mission execution require separate reports.')}
         {['TRANSMITTING','WAIT_ACK','RETRYING','ACKNOWLEDGED','SWITCH_RX'].includes(phase) && <p className="mission-controller-detail">Keep SD (CH8) = RX, SA (CH5) = DISARM, and SB (CH6) = HOLD during upload. {deployment?.error ? 'The app is recovering desktop RX.' : 'The desktop stays in upload mode throughout the retry sequence.'}</p>}
-        {(phase === 'RESTORE' || canStart) && <>
-          <h3 style={{fontSize:16,marginTop:16}}>Restore telemetry and start when safe</h3>
+        {(phase === 'RESTORE' || telemetryRestored) && <>
+          <h3 style={{fontSize:16,marginTop:16}}>Restore telemetry and wait for Mega status</h3>
           <div className="mission-controller-step">
             <ControllerReference />
             <div>
               {pill('1 · Set SD (CH8) to TX.', 'Desktop RX is confirmed. Set the rover radio to TX to resume telemetry.')}
-              {pill('2 · Verify telemetry has resumed.', canStart
+              {pill('2 · Verify telemetry has resumed.', telemetryRestored
                 ? <><CheckCircle2 size={16} style={{verticalAlign:'middle'}}/> Backend received a fresh rover telemetry packet after desktop RX restoration.</>
                 : <span role="status">Waiting for a fresh rover telemetry packet. Keep SB (CH6) in HOLD and SA (CH5) DISARM.</span>)}
-              {canStart && <>
-                {pill('3 · Set SA (CH5) to ARM.', 'When the rover is safe to start, arm it while keeping SB (CH6) in HOLD.')}
-                {pill('4 · Set SB (CH6) to SEMI_AUTO.', 'Select SEMI_AUTO deliberately and verify rover behavior. The radio ACK does not confirm Mega mission storage.')}
+              {telemetryRestored && <>
+                {pill('3 · Remain in HOLD and DISARM.', 'Telemetry recovery finishes the upload workflow only. A2.9 does not enable autonomous execution. Mega reports are best effort and may arrive after telemetry resumes.')}
                 <button onClick={close} style={primary(false)}>Close guide</button>
               </>}
               <p className="mission-controller-note">Controller switch positions remain operator-confirmed. Only radio mode, mission ACK, and telemetry use backend evidence.</p>

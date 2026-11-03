@@ -43,6 +43,7 @@ pub struct EncoderEvent {
 }
 
 pub enum Message {
+    MissionStatus(crate::mission_status::MissionStatus),
     Encoder(EncoderPacket),
     Fusion(Value),
     Sensor(Value),
@@ -92,6 +93,11 @@ pub fn classify(line: &str) -> Message {
         });
         return Message::Ignore;
     }
+    if kind == Some("missionStatus") {
+        return crate::mission_status::MissionStatus::parse(json)
+            .map(Message::MissionStatus)
+            .unwrap_or(Message::Ignore);
+    }
     if kind == Some("encoder") {
         trace("classified", || "encoder".into());
         return match serde_json::from_value::<EncoderPacket>(json) {
@@ -134,6 +140,35 @@ pub fn classify(line: &str) -> Message {
             "unknown_type_or_missing_sensor_sequence".into()
         });
         Message::Ignore
+    }
+}
+
+#[cfg(test)]
+mod mission_routing_tests {
+    use super::*;
+    #[test]
+    fn mission_reports_never_route_to_sensor_fusion_or_encoder_data() {
+        let json = r#"{"type":"missionStatus","missionId":"0123456789ABCDEF","statusSeq":1,"state":"STAGED","step":0,"reason":"NAV_NOT_CALIBRATED","rssi":-42,"snr":8.6}"#;
+        assert!(matches!(classify(json), Message::MissionStatus(_)));
+        for prefix in ["DATA:", "ENC:", "FUS:", "[RAW RX]: "] {
+            assert!(matches!(
+                classify(&format!("{prefix}{json}")),
+                Message::Ignore
+            ));
+        }
+        let mut soil_lookalike: Value = serde_json::from_str(json).unwrap();
+        soil_lookalike["seq"] = 1.into();
+        soil_lookalike["soilValid"] = 1.into();
+        soil_lookalike["lat"] = 14.into();
+        soil_lookalike["lng"] = 120.into();
+        assert!(matches!(
+            classify(&soil_lookalike.to_string()),
+            Message::Ignore
+        ));
+        assert!(matches!(
+            classify(&json.replace("\"step\":0", "\"step\":-1")),
+            Message::Ignore
+        ));
     }
 }
 
@@ -313,7 +348,9 @@ mod tests {
                     assert_eq!(json.as_object().unwrap().len(), 19);
                 }
                 Message::Ignore => {}
-                Message::Fusion(_) => panic!("legacy fixture unexpectedly contained fusion"),
+                Message::Fusion(_) | Message::MissionStatus(_) => {
+                    panic!("legacy fixture unexpectedly contained a different stream")
+                }
             }
         }
         assert_eq!((encoders, sensors), (5, 1));
@@ -484,7 +521,7 @@ mod tests {
                     assert!(event.get("encoderSeq").is_none());
                     assert!(event.get("leftTicks").is_none());
                 }
-                Message::Ignore => {}
+                Message::Ignore | Message::MissionStatus(_) => {}
             }
         }
         assert_eq!(counts, (0, 2, 1));

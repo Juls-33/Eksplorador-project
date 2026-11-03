@@ -13,6 +13,7 @@ use tauri::{Emitter, Manager, State};
 
 mod mission_deployment;
 mod mission_protocol;
+mod mission_status;
 mod encoder_telemetry;
 mod serial_lines;
 static RADIO: OnceLock<Mutex<mission_deployment::Radio>> = OnceLock::new();
@@ -967,14 +968,8 @@ fn set_rx_board_mode(mode: String) -> Result<(), String> {
 
 #[tauri::command]
 fn send_movement_sequence(sequence: String) -> Result<(), String> {
-    let sequence = sequence.trim();
-
-    if sequence.is_empty() {
-        return Err("Movement sequence cannot be empty.".to_string());
-    }
-
-    mission_deployment::validate_sequence(sequence)?;
-    radio().lock().map_err(|e| e.to_string())?.queue(format!("MISSION:{}", sequence))
+    let _ = sequence;
+    Err("Legacy movement uploads are disabled. Use the Mission V2 staging assistant with A2.9 safety firmware.".into())
 }
 
 const BAUD_RATE: u32 = 115200;
@@ -1228,6 +1223,9 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                                 }
 
                                 match encoder_telemetry::classify(trimmed) {
+                                    encoder_telemetry::Message::MissionStatus(status) => {
+                                        update_radio(&app_handle, |radio| radio.mission_status(status));
+                                    }
                                     encoder_telemetry::Message::Encoder(packet) => {
                                         let received_at_ms = SystemTime::now()
                                             .duration_since(UNIX_EPOCH)

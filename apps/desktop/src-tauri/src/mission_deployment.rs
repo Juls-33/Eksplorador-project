@@ -48,6 +48,8 @@ pub struct Deployment {
     pub rx_restored: bool,
     pub retry_exhausted: bool,
     pub evidence: VecDeque<String>,
+    pub mega_status: Option<crate::mission_status::MissionStatus>,
+    pub status_connection_confirmed: bool,
     #[serde(skip)]
     confirmed: bool,
     #[serde(skip)]
@@ -147,6 +149,11 @@ pub fn is_rover_telemetry(json: &serde_json::Value) -> bool {
 
 impl Radio {
     pub fn connection(&mut self, port: Option<String>) {
+        if let Some(d) = self.deployment.as_mut() {
+            // Preserve sequence high-water mark across USB recovery. A reconnect
+            // is not a Mega reboot and cannot authorize accepting older reports.
+            d.status_connection_confirmed = false;
+        }
         self.connected = port.is_some();
         self.port = port;
         self.mode = None;
@@ -212,6 +219,8 @@ impl Radio {
             rx_restored: false,
             retry_exhausted: false,
             evidence: VecDeque::new(),
+            mega_status: None,
+            status_connection_confirmed: false,
             confirmed: false,
             cancelled: false,
             transmitted_attempts: 0,
@@ -494,6 +503,36 @@ impl Radio {
                 d.restore("TRANSMISSION_FAILED", Some(line.into()));
             }
         }
+    }
+
+    pub fn mission_status(&mut self, status: crate::mission_status::MissionStatus) {
+        if !self.connected {
+            return;
+        }
+        let Some(d) = self
+            .deployment
+            .as_mut()
+            .filter(|d| d.packet_submitted && status.mission_id == format!("{:016X}", d.id))
+        else {
+            return;
+        };
+        if let Some(previous) = &d.mega_status {
+            if status.status_seq < previous.status_seq {
+                return;
+            }
+            if status.status_seq == previous.status_seq {
+                // Radio metrics may change on retransmission; content may not.
+                if status.same_report(previous) && !d.status_connection_confirmed {
+                    d.status_connection_confirmed = true;
+                    self.revision += 1;
+                }
+                return;
+            }
+        }
+        d.mega_status = Some(status);
+        d.status_connection_confirmed = true;
+        self.revision += 1;
+        // Never set ACK, transport COMPLETE, soil validity, or actuator outputs.
     }
 
     pub fn telemetry(&mut self) {

@@ -35,7 +35,7 @@ const topics = [
   { id: 'start', label: 'Getting Started', summary: 'Prepare for your first operation.' },
   { id: 'controller', label: 'Controller Overview', summary: 'Know the switches, sticks and menu buttons.' },
   { id: 'manual', label: 'Manual Operation', summary: 'Drive and steer with the controller.' },
-  { id: 'mission', label: 'Automatic Mission Operation', summary: 'Send a mission, restore telemetry and start safely.' },
+  { id: 'mission', label: 'Mission Staging (A2.9)', summary: 'Send a mission, restore telemetry and verify Mega staging. Autonomous navigation remains disabled.' },
   { id: 'actuator', label: 'Actuator Control', summary: 'Lower and raise the soil probe.' },
   { id: 'power', label: 'Battery and Power', summary: 'Connect, disconnect and remove the battery.' },
   { id: 'charging', label: 'Charging and Battery Safety', summary: 'Check the cells and review the charging setup.' },
@@ -77,7 +77,7 @@ function GettingStarted({ photo }) {
     <>
       <div className="manual-columns">
         <div className="manual-stack">
-          <p>Operate the rover with the controller, or run a semi-automatic mission sent from <strong>Field Map</strong>.</p>
+          <p>Operate the rover with the controller, or stage an A2.9 mission from <strong>Field Map</strong> for controlled calibration. Autonomous navigation remains disabled.</p>
           <div className="manual-inset">
             <h3><ClipboardCheck size={18} aria-hidden="true" /> Before each use</h3>
             <ul className="manual-checklist">
@@ -179,10 +179,10 @@ function ManualOperation() {
 function MissionOperation() {
   return (
     <>
-      <h3>Semi-Automatic Mission Operation</h3>
+      <h3>A2.9 Mission Staging</h3>
       <p>Follow this deployment sequence. Keep the rover stopped and disarmed while the mission is being sent.</p>
       <div className="manual-flow" aria-label="Mission deployment sequence">
-        <span>Plan</span><ArrowRight aria-hidden="true" size={16} /><span>Prepare rover</span><ArrowRight aria-hidden="true" size={16} /><span>Send &amp; confirm</span><ArrowRight aria-hidden="true" size={16} /><span>Restore &amp; start</span>
+        <span>Plan</span><ArrowRight aria-hidden="true" size={16} /><span>Prepare rover</span><ArrowRight aria-hidden="true" size={16} /><span>Send &amp; confirm</span><ArrowRight aria-hidden="true" size={16} /><span>Restore &amp; verify staging</span>
       </div>
       <div className="manual-phase-grid">
         <section className="manual-inset"><h3>1. Plan in the desktop app</h3><Steps items={[
@@ -203,15 +203,15 @@ function MissionOperation() {
           <>Wait for a <strong>verified matching rover-radio acknowledgment (ACK)</strong>.</>,
           <>The desktop returns to <strong>RX automatically</strong>.</>,
         ]} /></section>
-        <section className="manual-inset"><h3>4. Restore telemetry, then start</h3><Steps start={13} items={[
+        <section className="manual-inset"><h3>4. Restore telemetry and verify staging</h3><Steps start={13} items={[
           <>Set the rover <strong>SD → TX</strong> (green indicator OFF).</>,
           <>Wait for <strong>live rover telemetry</strong>.</>,
-          <>Once the system is ready and the surroundings are safe, set <strong>SA to ARM</strong> while SB stays in HOLD. Then set <strong>SB DOWN → SEMI_AUTO</strong>.</>,
-          <>Monitor movement. Be ready to switch back to <strong>HOLD or DISARM</strong>.</>,
+          <>Keep <strong>SA DISARM</strong> and <strong>SB HOLD</strong>. Wait for the separate Mega mission report.</>,
+          <>A2.9 accepts staging only. Autonomous navigation remains disabled pending physical calibration.</>,
         ]} /></section>
       </div>
       <Notice title="Radio ACK ≠ Mega storage confirmation" caution>
-        <p>A matching ACK confirms that the rover radio received this mission ID and payload checksum. It does not independently confirm that the Arduino Mega stored or executed the mission.</p>
+        <p>A matching ACK2 confirms that this mission ID and checksum were queued for UART delivery. The separate Mega missionStatus report confirms staging or rejection. Telemetry recovery completes the upload workflow, not the mission.</p>
       </Notice>
       <p className="manual-muted">Navigation still needs outdoor calibration. Waypoint precision is not yet confirmed. If upload or telemetry fails, keep HOLD and DISARM selected and follow the assistant’s retry guidance.</p>
     </>
