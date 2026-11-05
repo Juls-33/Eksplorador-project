@@ -1,4 +1,6 @@
-.drivetrain-telemetry { flex-shrink: 0; min-width: 0; }
+.drivetrain-telemetry { width: 100%;
+    min-width: 0;
+    box-sizing: border-box; }
 .drivetrain-telemetry__header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .drivetrain-telemetry__status { padding: 3px 8px; border-radius: 12px; font-size: .68rem; font-weight: 700; color: var(--text-muted); background: #f1f5f9; }
 .drivetrain-telemetry__status--receiving { background: #dcfce7; color: #166534; }
@@ -19,7 +21,9 @@
 .drivetrain-telemetry__timeout select { background: #fff; border: 1px solid var(--card-border); border-radius: 6px; padding: 4px 6px; color: var(--text-dark); }
 .drivetrain-telemetry__note { font-size: .68rem; line-height: 1.5; color: var(--text-muted); margin: 8px 0; }
 
-.drivetrain-monitoring { flex-shrink: 0; min-width: 0; }
+.drivetrain-monitoring {  width: 100%;
+    min-width: 0;
+    box-sizing: border-box; }
 .drivetrain-monitoring .drivetrain-telemetry__body { display: grid; grid-template-columns: minmax(250px, 1fr) minmax(0, 1.5fr); gap: 0 20px; }
 .drivetrain-monitoring .drivetrain-telemetry__motors { grid-column: 1; grid-row: 1; }
 .drivetrain-monitoring .drivetrain-telemetry__metrics { grid-column: 1; grid-row: 2; }
