@@ -131,7 +131,7 @@ const unsigned int OBSTACLE_DISTANCE_CM = 8; // Bench test only: very short stop
 const unsigned int OBSTACLE_RESUME_CM = 15; // Clear distance before forward resumes
 // BENCH TEST ONLY: HC-SR04 no-echo can mean no target OR sensor failure.
 // Set FALSE for field use; FALSE requires valid echoes to resume.
-const bool SONAR_BENCH_NO_ECHO_CLEAR = true;
+const bool SONAR_BENCH_NO_ECHO_CLEAR = true; // Original MANUAL bench behavior; auto motion is LOCKED
 const uint8_t SONAR_CLEAR_SAMPLES = 3;
 const uint8_t SONAR_NO_ECHO_CLEAR_SAMPLES = 5;
 unsigned long sonarEchoUs = 0;
@@ -242,6 +242,58 @@ String missionSequence = "";
 String currentCommand = "";
 
 bool missionActive = false;
+
+// A2.9 DEFAULT-LOCKED: No real distance, GPS/DR localization or
+// probe-clearance calibration is available for physical autonomy.
+// NEVER remove this guard based only on a successful compile.
+const bool A29_ALLOW_AUTONOMOUS_ACTUATION = false;
+
+// Machine-readable, repeated mission status. ID is the 16-hex-digit
+// immutable Mission V2 ID forwarded by the rover ESP32.
+char a29MissionId[17] = "0000000000000000";
+char a29MissionState[22] = "IDLE";
+char a29MissionReason[34] = "NONE";
+uint32_t a29MissionRevision = 0;
+uint8_t a29MissionStep = 0;
+unsigned long a29LastMissionReportMs = 0;
+const unsigned long A29_MISSION_REPORT_MS = 2500;
+
+void a29PublishMissionStatus(const char* id, const char* state,
+                             uint8_t step, const char* reason) {
+  if (id && strlen(id) == 16) {
+    strncpy(a29MissionId, id, sizeof(a29MissionId)-1);
+    a29MissionId[16] = '\0';
+  }
+  strncpy(a29MissionState, state, sizeof(a29MissionState)-1);
+  a29MissionState[sizeof(a29MissionState)-1] = '\0';
+  strncpy(a29MissionReason, reason, sizeof(a29MissionReason)-1);
+  a29MissionReason[sizeof(a29MissionReason)-1] = '\0';
+  ++a29MissionRevision;
+  a29LastMissionReportMs = 0; // Force prompt reporting in loop.
+}
+
+void a29ServiceMissionStatus() {
+  if (strcmp(a29MissionState, "IDLE") == 0) return;
+  const unsigned long now = millis();
+  if (a29LastMissionReportMs != 0 &&
+      now - a29LastMissionReportMs < A29_MISSION_REPORT_MS) return;
+  a29LastMissionReportMs = now;
+  // MS:ID16:revision:state:step:reason (ASCII single line).
+  espSerial.print(F("MS:")); espSerial.print(a29MissionId);
+  espSerial.print(':'); espSerial.print(a29MissionRevision);
+  espSerial.print(':'); espSerial.print(a29MissionState);
+  espSerial.print(':'); espSerial.print(a29MissionStep);
+  espSerial.print(':'); espSerial.println(a29MissionReason);
+}
+
+bool a29ValidId16(const char* id) {
+  if (!id || strlen(id) != 16) return false;
+  for (uint8_t i = 0; i < 16; ++i) {
+    const char c = id[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) return false;
+  }
+  return true;
+}
 
 unsigned long missionTimerStart = 0;
 unsigned long missionTimerDuration = 0;
@@ -873,6 +925,7 @@ void loop() {
 
   // ---------------- ESP32 + IMU COMMANDS ----------------
   readEspLines();
+  a29ServiceMissionStatus();
 
   // ---------------- A2.6 RC FAILSAFE ----------------
   // All six channels must have fresh, in-range pulses. Receiver output
@@ -1341,6 +1394,19 @@ void startBenchDetour() {
 }
 
 void processAutoDrive() {
+  // Prevent timed F/L/R commands and detours from ever moving the rover
+  // as if they were calibrated distances/turns. Manual RC is unchanged.
+  if (!A29_ALLOW_AUTONOMOUS_ACTUATION) {
+    if (missionActive) {
+      missionActive = false;
+      missionSequence = "";
+      currentCommand = "";
+      a29PublishMissionStatus(a29MissionId, "HELD", 0,
+                              "NAV_NOT_CALIBRATED");
+    }
+    stopAllOutputs();
+    return;
+  }
   if (!missionActive || detourObstacleFault) {
     stopAllOutputs();
     return;
@@ -2004,54 +2070,53 @@ void processEspLine(const char *line) {
       Serial.print(F(" sensorValid="));
       Serial.println(imuValid);
     }
-  } else if (strncmp(line, "RCV:", 4) == 0) {
-    if (driveSyncFaultLatched) {
-      Serial.println(F("[MISSION] Rejected while encoder fault latched; reset required"));
-      espSerial.println(F("MISSION_STATUS:REJECTED"));
+  } else if (strncmp(line, "RCV2:", 5) == 0) {
+    // IMPORTANT: exact ID is preserved across PC->LoRa->Rover->Mega.
+    // No motor/actuator motion is performed on receipt.
+    const char *id = line + 5;
+    if (strlen(id) < 18 || id[16] != ':') {
+      a29PublishMissionStatus("0000000000000000", "REJECTED", 0,
+                              "BAD_ID_FORMAT");
       return;
     }
-    if (safetyLatched) {
-      Serial.println(F("[MISSION] Rejected while tilt fault latched"));
+    char id16[17]; memcpy(id16, id, 16); id16[16] = '\0';
+    if (!a29ValidId16(id16)) {
+      a29PublishMissionStatus("0000000000000000", "REJECTED", 0,
+                              "BAD_ID_FORMAT");
       return;
     }
-    String incoming = String(line + 4);
+    String incoming = String(id + 17);
     incoming.trim();
-    bool incomingTimed = incoming.startsWith("TIME:");
-    if (incomingTimed) incoming.remove(0, 5);
-    if (!validateMission(incoming, incomingTimed)) {
-      Serial.println(F("[MISSION REJECTED] Invalid, oversized, or unsafe command"));
-      espSerial.println(F("MISSION_STATUS:REJECTED"));
+    // Hard limit: the existing V2 sequence is <= MAX_SEQUENCE (226).
+    // Reject TIME: and all non-waypoint operations in mission delivery.
+    if (!validateMission(incoming, false)) {
+      a29PublishMissionStatus(id16, "REJECTED", 0, "INVALID_SEQUENCE");
       return;
     }
-    // Retain the complete mission independent of LoRa mode or manual/hold state.
-    savedMission = incoming;
-    missionSequence = incoming;
-    if (!missionSequence.endsWith(",")) missionSequence += ",";
-    currentCommand = "";
-    missionTimedMode = incomingTimed;
-    missionActive = true; // SEMI_AUTO executes a BENCH SIMULATION of all validated waypoint commands
-    benchRemainingMs = 0;
-    benchLastTickMs = millis();
-    benchStepNumber = 0;
-    benchStepTotal = 1;
-    for (unsigned int i = 0; i < incoming.length(); ++i)
-      if (incoming.charAt(i) == ',') ++benchStepTotal;
-    benchObstaclePaused = false;
-    detourStage = 0;
-    detourRemainingMs = 0;
-    detourObstacleFault = false;
-    autoObstacleEvents=0; obstaclePrevious=false;
-    missionTimerDuration = 0;
-    Serial.print(F("[MISSION STORED] "));
-    Serial.println(savedMission);
-    if (!missionTimedMode) {
-      // Original waypoint units remain meters/degrees; motor times are deliberately simulated.
-      Serial.println(F("[BENCH MISSION READY] Waypoints are virtual, not calibrated motion"));
-      espSerial.println(F("MISSION_STATUS:BENCH_READY"));
-    } else {
-      Serial.println(F("[BENCH MISSION READY] Timed sequence, bounded per-step"));
-      espSerial.println(F("MISSION_STATUS:BENCH_READY"));
+    if (driveSyncFaultLatched || safetyLatched || actuatorOverload) {
+      a29PublishMissionStatus(id16, "REJECTED", 0, "SAFETY_LATCHED");
+      return;
     }
+    // A staged mission is NOT an executable mission.
+    stopAllOutputs();
+    missionActive = false;
+    missionSequence = "";
+    currentCommand = "";
+    savedMission = incoming;
+    missionTimedMode = false;
+    benchRemainingMs = 0;
+    benchStepNumber = 0;
+    benchStepTotal = 0;
+    detourStage = 0;
+    a29PublishMissionStatus(id16, "STAGED", 0,
+                            "NAV_NOT_CALIBRATED");
+    Serial.print(F("[A2.9] Mission STAGED only, no actuation, id="));
+    Serial.println(id16);
+  } else if (strncmp(line, "RCV:", 4) == 0) {
+    // Block legacy unguided mission execution on this safety build.
+    a29PublishMissionStatus("0000000000000000", "REJECTED", 0,
+                            "LEGACY_DISABLED");
+    Serial.println(F("[A2.9] Legacy RCV rejected"));
   }
 }
 

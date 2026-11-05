@@ -482,6 +482,33 @@ void processFusionPacket(const String& incoming) {
   Serial.println(F(",\"positionSource\":\"GPS_ONLY\",\"navigationEnabled\":false}"));
 }
 
+
+// A2.9 explicit Mega mission acceptance/execution status.
+// Never infer mission success from ACK2 or the presence of DATA telemetry.
+void processMissionStatusPacket(const String& incoming) {
+  char id[17] = {}, state[22] = {}, reason[34] = {};
+  unsigned long revision = 0;
+  unsigned step = 0;
+  int end = 0;
+  const int count = sscanf(incoming.c_str(),
+    "MS:%16[0-9A-F]:%lu:%21[A-Z_]:%u:%33[A-Z_]%n",
+    id, &revision, state, &step, reason, &end);
+  if (count != 5 || end != incoming.length() ||
+      strlen(id) != 16 || step > 50) {
+    Serial.println(F("[MISSION STATUS ERROR] Malformed frame"));
+    return;
+  }
+  Serial.print(F("{\"type\":\"missionStatus\",\"missionId\":\""));
+  Serial.print(id);
+  Serial.print(F("\",\"statusSeq\":")); Serial.print(revision);
+  Serial.print(F(",\"state\":\"")); Serial.print(state);
+  Serial.print(F("\",\"step\":")); Serial.print(step);
+  Serial.print(F(",\"reason\":\"")); Serial.print(reason);
+  Serial.print(F("\",\"rssi\":")); Serial.print(LoRa.packetRssi());
+  Serial.print(F(",\"snr\":")); Serial.print(LoRa.packetSnr(), 1);
+  Serial.println(F("}"));
+}
+
 // =====================================================
 // SETUP
 // =====================================================
@@ -557,5 +584,7 @@ void loop() {
     processEncoderPacket(incoming); // New additive encoder JSON.
   } else if (!txMode && incoming.startsWith("FUS:")) {
     processFusionPacket(incoming); // A2.7 status-only fusion observation.
+  } else if (!txMode && incoming.startsWith("MS:")) {
+    processMissionStatusPacket(incoming); // A2.9 rover-confirmed state.
   }
 }

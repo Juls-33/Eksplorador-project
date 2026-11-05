@@ -77,6 +77,28 @@ size_t pendingMegaOffset = 0;
 String deferredImuLine;
 String deferredModeAck;
 
+// A2.9 last-known Mega execution state; repeated while rover radio is TX.
+// Not an ACK2 substitute: ACK2 still means UART queued, not accepted.
+String a29LastMegaStatus;
+unsigned long a29LastStatusRadio = 0;
+const uint32_t A29_STATUS_RADIO_MS = 2200;
+
+void serviceMissionStatusRadio() {
+  if (!loraReady || !txMode || !a29LastMegaStatus.length()) return;
+  const uint32_t now = millis();
+  if (a29LastStatusRadio && now - a29LastStatusRadio < A29_STATUS_RADIO_MS) return;
+  a29LastStatusRadio = now;
+  LoRa.idle();
+  if (LoRa.beginPacket()) {
+    LoRa.print(a29LastMegaStatus);
+    if (LoRa.endPacket() == 1) {
+      Serial.print("[MEGA STATUS LoRa TX] ");
+      Serial.println(a29LastMegaStatus);
+    }
+  }
+  LoRa.receive();
+}
+
 void sendImuLine(const String& line) {
   if (pendingMegaMission.length()) deferredImuLine = line;
   else Serial2.println(line);
@@ -120,7 +142,7 @@ void initMissionJournal() {
 
 // UART handoff is serviced in small chunks so GPS, IMU, RC mode commands and
 // safety messages continue to be serviced during an upload. No execution command
-// is sent: the Mega still receives exactly RCV:<original sequence>.
+// is sent: the Mega receives RCV2:<missionId16>:<original sequence>.
 void serviceMissionForward() {
   if (pendingMegaMission.length() == 0) return;
   const size_t room = Serial2.availableForWrite();
@@ -175,7 +197,14 @@ void receiveMissionV2(const String& packet) {
   } else if (pendingMegaMission.length() != 0) {
     sendMissionResponse("NACK2:", frame, "PREVIOUS_HANDOFF_PENDING");
   } else if (persistMissionRecord(MissionProtocol::reserve(frame))) {
-    pendingMegaMission = "RCV:" + String(frame.sequence) + "\n";
+    // Preserve the Mission V2 identifier for Mega-confirmed statuses.
+    // The first 16 bytes of the canonical key are the immutable mission ID.
+    char missionKey[26];
+    MissionProtocol::key(frame, missionKey, sizeof(missionKey));
+    pendingMegaMission = "RCV2:" + String(missionKey).substring(0,16) +
+                         ":" + String(frame.sequence) + "\n";
+    a29LastMegaStatus = ""; // Prevent old status appearing for a new mission.
+    a29LastStatusRadio = 0;
     pendingMegaOffset = 0;
     LoRa.receive();
   } else {
@@ -433,6 +462,37 @@ void processMegaLine(const char *s) {
     if (!parseSoil(s))
       Serial.println("[SOIL] rejected malformed data");
 
+  } else if (!strncmp(s, "MS:", 3)) {
+    // Bounded protocol: MS:<16HEX>:<revision>:<state>:<step>:<reason>
+    const size_t len = strlen(s);
+    if (len > 3 && len < 110) {
+      // Only accept a syntactically well-formed frame; receiver validates again.
+      char id[17] = {}, state[22] = {}, reason[34] = {};
+      unsigned long revision = 0;
+      unsigned step = 0;
+      int end = 0;
+      const int count = sscanf(s,
+        "MS:%16[0-9A-F]:%lu:%21[A-Z_]:%u:%33[A-Z_]%n",
+        id, &revision, state, &step, reason, &end);
+      if (count == 5 && end == (int)len && strlen(id) == 16 && step <= 50) {
+        // A stale UART frame must never be presented as the current mission.
+        if (missionRecord.magic == MissionProtocol::JOURNAL_MAGIC) {
+          MissionProtocol::Frame expectedFrame;
+          expectedFrame.id = missionRecord.id;
+          expectedFrame.checksum = missionRecord.checksum;
+          expectedFrame.sequence = missionRecord.sequence;
+          char expectedKey[26];
+          MissionProtocol::key(expectedFrame, expectedKey, sizeof(expectedKey));
+          if (strncmp(id, expectedKey, 16) != 0) {
+            Serial.println("[MEGA MISSION STATE] ignored older mission id");
+            return;
+          }
+        }
+        a29LastMegaStatus = s;
+        a29LastStatusRadio = 0;  // Next safe TX opportunity.
+        Serial.print("[MEGA MISSION STATE] "); Serial.println(s);
+      } else Serial.println("[MEGA MISSION STATE] invalid frame discarded");
+    }
   } else if (!strncmp(s, "MISSION_STATUS:", 15)) {
     Serial.print("[MEGA MISSION] ");
     Serial.println(s + 15);
@@ -865,6 +925,7 @@ void loop() {
     if (txMode) {
       serviceTx();
       if (!awaitingAck) {
+        serviceMissionStatusRadio();
         serviceEncoderRadio();
         serviceFusionRadio();
       }
