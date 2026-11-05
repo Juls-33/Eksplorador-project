@@ -12,10 +12,10 @@ const topics = [
   { id: 'fields', label: 'Fields and Missions', summary: 'Choose a saved mission or prepare a new one.' },
   { id: 'map', label: 'Find Your Way on the Map', summary: 'Pan, zoom, search and return to the rover marker.' },
   { id: 'pins', label: 'Plan Your Waypoints', summary: 'Place the route in order and check every pin.' },
-  { id: 'sequence', label: 'Read the Movement Sequence', summary: 'Understand the route before sending it.' },
+  { id: 'sequence', label: 'Read the Movement Sequence', summary: 'Send coordinates and let the rover update movement targets.' },
   { id: 'send', label: 'Send a Mission', summary: 'Use the Mission Deployment Assistant to upload safely.' },
   { id: 'status', label: 'Communication and ACKs', summary: 'Know what each confirmation actually proves.' },
-  { id: 'start', label: 'Restore Telemetry and Verify Staging', summary: 'Keep HOLD and DISARM. Autonomous navigation remains disabled for calibration.' },
+  { id: 'start', label: 'Restore Telemetry and Supervise the Test', summary: 'Verify staging and calibration, then deliberately authorize RC semi-auto.' },
   { id: 'samples', label: 'Heatmaps and Sample Records', summary: 'Read saved measurements and understand logging.' },
   { id: 'help', label: 'Troubleshooting', summary: 'Check common problems while keeping the rover stopped.' },
 ];
@@ -76,34 +76,29 @@ function Waypoints({ Steps, Notice }) {
   </>;
 }
 
-function MovementSequence({ Steps, Notice, instructionalGuide }) {
-  return <>
-    {instructionalGuide(movement, 'Schematic showing position and heading leading to pin 1, then pin 2, with L and R turns and F forward commands', 'Process illustration, not a screenshot or measured route. It explains the actual sequence generator without example performance figures.')}
-    <Steps items={[
-      <>Find the <strong>Operator RC Movement Guide</strong> in the right column. Scroll that column if needed.</>,
-      'Review the current target pin, estimated distance, heading and turn instruction. Confirm that the position and heading used by the app are current.',
-      <>Read <strong>Legacy relative sequence · staging only</strong>. <strong>L</strong> means turn left, <strong>R</strong> means turn right (degrees), and <strong>F</strong> means forward (meters). These commands assume earlier moves succeeded and cannot confirm arrival. Fresh received GPS coordinates and a supplied planning bearing are required.</>,
-      <>Check the full sequence before <strong>Send Mission</strong>. The first leg uses the app’s current rover position and heading; later legs follow the saved pin order. Position or heading updates can change the preview.</>,
-    ]} />
-    <Notice title="Planned movement is not confirmed arrival" caution><p>Outdoor navigation and heading calibration are still needed. Map distances, turn instructions and <strong>IN RANGE</strong> indicators do not guarantee actual arrival or safe movement.</p></Notice>
-    <AnimatedDisclosure className="manual-details" title={"What does Reached do?"}><p><strong>Reached</strong> advances the guide’s target by hand. It does not drive the rover, upload a changed route or save a soil sample. The app can also mark a pin reached when a recorded sample is within its configured 5 m matching radius. That is a progress rule, not a GPS accuracy claim.</p><p>The generated upload still uses the full pin list, including pins already marked reached. Recheck the whole payload before sending again.</p></AnimatedDisclosure>
-  </>;
+function MovementSequence({Steps,Notice,instructionalGuide}){
+ return <>
+  {instructionalGuide(movement,'Waypoint targets sent to onboard pose estimation and bounded movement correction','N1 transmits coordinates. The rover calculates and updates its movement targets.')}
+  <Steps items={[
+   'Review every selected pin in order in Send Mission. Up to ten normal coordinates fit the existing 226-byte Mission V2 packet; oversized lists are rejected without omissions.',
+   'The desktop sends N1 waypoint targets, not hundreds of precomputed F/L/R commands. Live GPS is not required for transmission.',
+   'Use Rover navigation feedback to inspect target pin, GPS/estimated position, remaining distance, uncertainty, heading and correction actions.',
+  ]}/>
+  <Notice title="Arrival and sampling are separate"><p>PIN_CHECKED establishes reported GPS arrival for the matching waypoint. STEP_DONE only completes an onboard encoder movement segment. Guide marks and soil sample matching do not create navigation arrival evidence. Automatic probe deployment remains disabled.</p></Notice>
+ </>;
 }
 
-function Sending({ Steps, Notice, instructionalGuide }) {
-  return <>
-    {instructionalGuide(handoff, 'Mission deployment process diagram separating saving the plan, preparing HOLD DISARM and rover RX, matching the radio ACK and restoring telemetry', 'Process diagram based on the current Mission Deployment Assistant. It does not show a live connection, acknowledgment or successful mission.')}
-    <Steps items={[
-      <>Review the saved mission and movement sequence. Click <strong>Send Mission</strong> in the Operator RC Movement Guide.</>,
-      <>Follow the <strong>Mission Deployment Assistant</strong>. If it is waiting for the desktop receiver, check the USB/COM connection.</>,
-      <>Set <strong>SB MIDDLE → HOLD</strong> and confirm the motors have stopped. Set <strong>SA UP → DISARM</strong>.</>,
-      <>Set <strong>SD → rover RX</strong> (configured green indicator ON), so the rover can receive the mission.</>,
-      <>Verify all three boards use the A2.9 safety firmware with the Mega autonomous lock. The assistant prepares <strong>desktop LoRa TX</strong> automatically. Complete the operator checklist, then press <strong>Confirm rover ready · Send mission</strong> when available.</>,
-      <>Keep <strong>HOLD, DISARM and rover RX</strong> during transmission and automatic retries. Wait for the matching rover-radio ACK and desktop RX restoration.</>,
-    ]} />
-    <Notice title="The checklist is your confirmation" caution><p>The app does not electronically verify controller switch positions. Check the physical rover and surroundings. Opening the assistant alone does not mean the mission has been delivered.</p></Notice>
-    <AnimatedDisclosure className="manual-details" title={"Cancel or close the assistant"}><p>Cancel stops unsent work and asks the desktop to restore RX. Wait for recovery to finish or report a failure. A radio packet already sent cannot be recalled. Keep HOLD and DISARM selected.</p></AnimatedDisclosure>
-  </>;
+function Sending({Steps,Notice,instructionalGuide}){
+ return <>
+  {instructionalGuide(handoff,'Review pins, send coordinates, verify delivery/staging and authorize movement separately','Upload and powered execution are separate operations.')}
+  <Steps items={[
+   'Keep the rover stopped: CH6 HOLD and CH5 DISARM. Set rover CH8 to RX for upload.',
+   <>Review the ordered pins, then press <strong>Send Mission</strong>. No GPS, firmware-compatibility checkbox or calibration checkbox blocks coordinate delivery.</>,
+   'The desktop prepares radio TX, sends Mission V2 with identity/CRC/retries, restores RX and waits for fresh feedback.',
+   'After desktop RX is confirmed, set rover CH8 to TX. Read rover delivery and Mega staging separately.',
+  ]}/>
+  <Notice title="A sent packet cannot be recalled" caution><p>Closing cancels unsent upload work. It is not a rover stop command. Keep physical RC controls available and use HOLD/DISARM to stop movement.</p></Notice>
+ </>;
 }
 
 const evidence = [
@@ -125,22 +120,22 @@ function Communication({ Steps, Notice }) {
     ]} />
     <div className="manual-table-wrap" role="region" aria-label="Meaning of mission communication evidence" tabIndex={0}><table className="manual-table"><caption>What the assistant’s labels mean</caption><thead><tr><th scope="col">Label</th><th scope="col">What it confirms</th></tr></thead><tbody>{evidence.map(([label, meaning]) => <tr key={label}><th scope="row">{label}</th><td>{meaning}</td></tr>)}</tbody></table></div>
     <Notice title="Rover-radio ACK is not Mega storage confirmation" caution><p>A matching ACK confirms radio receipt of this payload. It does not independently confirm Mega storage, mission execution or waypoint arrival. The labels above are explanations, not current hardware statuses.</p></Notice>
-    <AnimatedDisclosure className="manual-details" title={"When an upload fails"}><p>Keep <strong>HOLD and DISARM</strong>. An upload without a confirmed ACK may still have reached the rover. If <strong>Retry Mission — reconfirm safety</strong> is offered, check the physical setup and repeat the checklist. The retry retains the same mission ID. Retry can remain unavailable until the desktop is connected and back in RX, or when a rejection needs operator recovery.</p></AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"When an upload fails"}><p>Keep <strong>HOLD and DISARM</strong>. An upload without a confirmed ACK may still have reached the rover. If Retry upload is offered, check the physical setup first. The retry retains the same mission ID. Retry can remain unavailable until the desktop is connected and back in RX, or when a rejection needs operator recovery.</p></AnimatedDisclosure>
   </>;
 }
 
-function RestoreAndStart({ Steps, Notice }) {
-  return <>
-    <div className="manual-control-pair"><div className="manual-inset"><h3>During upload</h3><p>SB: HOLD · SA: DISARM</p><p>Rover SD: RX · desktop: TX</p></div><div className="manual-inset"><h3>After desktop RX returns</h3><p>SB: HOLD · SA: DISARM</p><p>Rover SD: TX · desktop: RX</p></div></div>
-    <Steps items={[
-      <>Wait until the assistant confirms <strong>desktop RX</strong> and shows <strong>Restore telemetry and wait for Mega status</strong>.</>,
-      <>Set <strong>SD → rover TX</strong> (configured green indicator OFF). The desktop changes its own radio; it does not change this rover switch.</>,
-      <>Keep <strong>SB in HOLD</strong> and <strong>SA DISARMED</strong> until the assistant receives a fresh rover telemetry packet after desktop RX restoration.</>,
-      <>Read the separate <strong>Last Mega mission report</strong>. A matching <strong>STAGED</strong> report means accepted for staging; a matching <strong>REJECTED</strong> report requires operator review.</>,
-      <>Remain in <strong>HOLD and DISARM</strong>. Autonomous navigation is disabled pending calibration. The sampling simulator is available in Field Map and never sends hardware commands.</>,
-    ]} />
-    <Notice title="Logging controls do not stop the rover" caution><p><strong>Pause Logging</strong>, <strong>Mark Finished</strong> and closing a desktop page are not rover stop commands. Use the physical controller’s HOLD or DISARM and check that movement has stopped. Telemetry restoration alone does not verify calibration or safe execution.</p></Notice>
-  </>;
+function RestoreAndStart({Steps,Notice}){
+ return <>
+  <Steps items={[
+   'After desktop RX recovery, switch rover CH8 to TX and wait for fresh N1 navigation telemetry.',
+   'Inspect actual firmware versions, stored calibration and readiness in Developer Tools. The main view shows the current navigation gate without manual compatibility assertions.',
+   'Establish the initial true-north heading through Developer Tools before upload, or through the disarmed Mega USB console after staging. A valid GPS fix and usable heading are required before motion, not before sending.',
+   'Once ready, inspect the area, authorize RC and deliberately transition HOLD to SEMI_AUTO.',
+   'Observe bounded encoder movements, steering/turn corrections, GPS waypoint verification and any uncertainty, obstacle or fault hold.',
+  ]}/>
+  <Notice title="Bounded navigation, supervised testing" caution><p>The actual estimator/controller runs onboard. Its uncertainty model and policy limits still need physical validation. Temporary GPS loss permits limited calibrated encoder/gyro dead reckoning; an unverified arrival never advances the waypoint. Obstacle holds never perform blind detours or resume automatically.</p></Notice>
+  <p>Use physical RC HOLD/DISARM to stop. Soil logging controls and closing pages do not stop the rover. Export current and archived run data in Developer Tools.</p>
+ </>;
 }
 
 function Heatmaps({ Steps, Notice, instructionalGuide }) {
@@ -168,7 +163,7 @@ const problems = [
   ['A pin is rejected or clicking removes pins', 'Place pins inside the boundary. If removal mode is on, choose Done Removing before adding pins. Boundary drawing and pin placement are separate steps.'],
   ['The map is blank or the place is not found', 'Check internet for search, enter at least 3 characters and press Go. Offline maps need saved coverage at the current zoom. The supported map region is Nueva Ecija to Batangas.'],
   ['The map keeps returning to the marker', 'Drag the map to stop following. Selecting a search result or a downloaded area also stops following. Use Follow Rover only when you want to center on the marker.'],
-  ['Send Mission is unavailable', 'Review the pins, fresh GPS coordinates, planning reference bearing and legacy relative sequence. A route with no generated movement cannot be sent. Wait if an assistant is already open.'],
+  ['Send Mission is unavailable', 'Select valid ordered pins within 226 bytes and ten waypoints. GPS and calibration do not gate upload. Check the receiver for delivery and onboard readiness for movement.'],
   ['The assistant is waiting or no ACK arrives', 'Keep HOLD and DISARM. Check the desktop receiver USB/COM connection, rover power and SD in rover RX. Read retry/error details. No ACK does not prove the rover received nothing.'],
   ['RX recovery fails or telemetry does not return', 'Keep HOLD and DISARM. Follow the assistant’s recovery message. Only after desktop RX is confirmed, return SD to rover TX and wait for fresh telemetry. Do not start on an old marker or reading.'],
   ['The rover rejects the mission or requests a protocol update', 'Do not arm or bypass the error. Keep HOLD and DISARM, note the exact message and ask the project team to check compatibility.'],

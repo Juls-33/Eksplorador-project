@@ -1,4 +1,6 @@
-// Pure simulation. No Tauri, serial, telemetry subscription, database, or motor API.
+// Historical research simulation, retained for regression coverage. This future
+// sampling/DR model is NOT the A3.0 execution model and is not used by its UI.
+// No Tauri, serial, telemetry subscription, database, or motor API.
 import { calculateDistance } from './geo.js';
 
 const coordinate = p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite)

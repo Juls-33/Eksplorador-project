@@ -1,5 +1,8 @@
 # Reliable mission upload (V2)
 
+> Current coordinated firmware uses N1 ordered waypoint targets inside the unchanged V2 transport envelope. Upload needs no GPS or calibration attestation. All three firmware targets and the desktop must be updated together. See [feedback-navigation implementation, calibration and physical-test procedure](mission-a3.0-desktop.md).
+> The rollout notes below are historical; their endpoint paths, Mega behavior and movement/start instructions do not describe N1. No check script flashes firmware.
+
 > A2.9 desktop integration: see [the current integration and safety audit](mission-a2.9-audit.md).
 > The endpoint paths and Mega behavior below describe the earlier V2 rollout.
 > A2.9 requires all three coordinated firmwares from the supplied A2.9 package,

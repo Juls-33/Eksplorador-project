@@ -35,7 +35,7 @@ const topics = [
   { id: 'start', label: 'Getting Started', summary: 'Prepare for your first operation.' },
   { id: 'controller', label: 'Controller Overview', summary: 'Know the switches, sticks and menu buttons.' },
   { id: 'manual', label: 'Manual Operation', summary: 'Drive and steer with the controller.' },
-  { id: 'mission', label: 'Mission Staging (A2.9)', summary: 'Send a mission, restore telemetry and verify Mega staging. Autonomous navigation remains disabled.' },
+  { id: 'mission', label: 'Waypoint Missions (N1)', summary: 'Send coordinate targets, observe onboard readiness and authorize execution with RC.' },
   { id: 'actuator', label: 'Actuator Control', summary: 'Lower and raise the soil probe.' },
   { id: 'power', label: 'Battery and Power', summary: 'Connect, disconnect and remove the battery.' },
   { id: 'charging', label: 'Charging and Battery Safety', summary: 'Check the cells and review the charging setup.' },
@@ -77,7 +77,7 @@ function GettingStarted({ photo }) {
     <>
       <div className="manual-columns">
         <div className="manual-stack">
-          <p>Operate the rover with the controller, or stage an A2.9 mission from <strong>Field Map</strong> for controlled calibration. Autonomous navigation remains disabled.</p>
+          <p>Operate the rover with the controller, or send ordered waypoint coordinates from <strong>Field Map</strong>. The onboard controller estimates pose, makes bounded corrections and verifies arrival separately from encoder completion. GPS is not required for uploading targets. Movement requires reported calibration and positioning readiness plus deliberate RC authorization. Automatic soil sampling is disabled.</p>
           <div className="manual-inset">
             <h3><ClipboardCheck size={18} aria-hidden="true" /> Before each use</h3>
             <ul className="manual-checklist">
@@ -177,45 +177,21 @@ function ManualOperation() {
 }
 
 function MissionOperation() {
-  return (
-    <>
-      <h3>A2.9 Mission Staging</h3>
-      <p>Follow this deployment sequence. Keep the rover stopped and disarmed while the mission is being sent.</p>
-      <div className="manual-flow" aria-label="Mission deployment sequence">
-        <span>Plan</span><ArrowRight aria-hidden="true" size={16} /><span>Prepare rover</span><ArrowRight aria-hidden="true" size={16} /><span>Send &amp; confirm</span><ArrowRight aria-hidden="true" size={16} /><span>Restore &amp; verify staging</span>
-      </div>
-      <div className="manual-phase-grid">
-        <section className="manual-inset"><h3>1. Plan in the desktop app</h3><Steps items={[
-          <>Open <strong>Field Map</strong>.</>,
-          'Create or select a mission.',
-          'Review the generated waypoints and movement sequence.',
-          <>Press <strong>Send Mission</strong>.</>,
-          <>Follow the <strong>Mission Deployment Assistant</strong>.</>,
-        ]} /></section>
-        <section className="manual-inset"><h3>2. Prepare the controller</h3><Steps start={6} items={[
-          <>Set <strong>SB MIDDLE → HOLD</strong>.</>,
-          <>Set <strong>SA UP → DISARM</strong>.</>,
-          <>Set <strong>SD → rover RX</strong> (green indicator ON).</>,
-          'Confirm the safety checklist in the assistant.',
-        ]} /></section>
-        <section className="manual-inset"><h3>3. Let the desktop send</h3><Steps start={10} items={[
-          <>The desktop automatically switches <strong>its LoRa to TX</strong> and transmits the mission.</>,
-          <>Wait for a <strong>verified matching rover-radio acknowledgment (ACK)</strong>.</>,
-          <>The desktop returns to <strong>RX automatically</strong>.</>,
-        ]} /></section>
-        <section className="manual-inset"><h3>4. Restore telemetry and verify staging</h3><Steps start={13} items={[
-          <>Set the rover <strong>SD → TX</strong> (green indicator OFF).</>,
-          <>Wait for <strong>live rover telemetry</strong>.</>,
-          <>Keep <strong>SA DISARM</strong> and <strong>SB HOLD</strong>. Wait for the separate Mega mission report.</>,
-          <>A2.9 accepts staging only. Autonomous navigation remains disabled pending physical calibration.</>,
-        ]} /></section>
-      </div>
-      <Notice title="Radio ACK ≠ Mega storage confirmation" caution>
-        <p>A matching ACK2 confirms that this mission ID and checksum were queued for UART delivery. The separate Mega missionStatus report confirms staging or rejection. Telemetry recovery completes the upload workflow, not the mission.</p>
-      </Notice>
-      <p className="manual-muted">Navigation still needs outdoor calibration. Waypoint precision is not yet confirmed. If upload or telemetry fails, keep HOLD and DISARM selected and follow the assistant’s retry guidance.</p>
-    </>
-  );
+ return <>
+  <h3>Waypoint missions with onboard feedback</h3>
+  <Steps items={[
+   <>Select a mission and review the ordered pins in <strong>Field Map</strong>.</>,
+   <>Keep CH6 HOLD and CH5 DISARM, set rover CH8 to RX, then press <strong>Send Mission</strong>. The app sends N1 coordinate targets without needing a live GPS fix.</>,
+   'Watch delivery and staging separately. ACK2 confirms UART delivery queueing; a matching Mega event or navigation report establishes staging.',
+   'After desktop RX returns, set rover CH8 to TX. Wait for fresh navigation feedback: measured calibration, valid GPS, usable heading and IMU must be reported before movement.',
+   <>Initial measured true-north heading and loaded-track calibration setup are in <strong>Developer Tools</strong>. Sending does not claim firmware compatibility or calibration through checkboxes.</>,
+   'When ready and the area is clear, authorize RC and deliberately transition HOLD to SEMI_AUTO. A switch left in SEMI_AUTO does not authorize start.',
+   'Observe target pin, remaining distance, estimated uncertainty, encoder progress and corrections. PIN_CHECKED verifies a waypoint; STEP_DONE only reports an encoder movement segment.',
+   'Use RC HOLD/DISARM for a stop. A hold or fault requires intervention and a newly staged mission; there is no automatic obstacle detour or resume.',
+  ]}/>
+  <Notice title="Motion readiness is onboard" caution><p>Zero or invalid stored calibration, missing positioning or heading, encoder disagreement, unsafe tilt, RC loss, obstacle detection and excessive uncertainty prevent powered autonomous movement. Temporary GPS interruption allows only bounded dead reckoning; arrival still requires fresh GPS.</p></Notice>
+  <p>Automatic soil-probe deployment remains disabled. Manual sampling and existing soil logging remain available. Export sensor, encoder, estimated pose and mission events in Developer Tools before closing the application. Software simulations are not field validation.</p>
+ </>;
 }
 
 function ActuatorControl({ photo, instructionalGuide }) {

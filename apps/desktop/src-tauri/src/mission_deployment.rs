@@ -50,12 +50,15 @@ pub struct Deployment {
     pub evidence: VecDeque<String>,
     pub mega_status: Option<crate::mission_status::MissionStatus>,
     pub status_connection_confirmed: bool,
+    pub status_history: VecDeque<crate::mission_status::MissionStatus>,
+    pub status_packets_missing: u32,
+    pub status_history_dropped: u32,
+    pub status_received_at_ms: Option<u64>,
     #[serde(skip)]
     confirmed: bool,
     #[serde(skip)]
     cancelled: bool,
-    #[serde(skip)]
-    transmitted_attempts: u32,
+    pub transmitted_attempts: u32,
     #[serde(skip)]
     delivery_possible: bool,
     #[serde(skip)]
@@ -102,6 +105,13 @@ pub struct Radio {
     pub protocol_v2: bool,
     pub revision: u64,
     pub deployment: Option<Deployment>,
+    pub planning_gps: crate::mission_gps::PlanningGpsTracker,
+    pub navigation: Option<serde_json::Value>,
+    pub navigation_calibration: Option<serde_json::Value>,
+    #[serde(skip)]
+    navigation_sequence: Option<u32>,
+    #[serde(skip)]
+    navigation_boot: Option<u32>,
     #[serde(skip)]
     next_id: u64,
     #[serde(skip)]
@@ -117,14 +127,7 @@ pub fn confirmed_mode(line: &str) -> Option<&'static str> {
 }
 
 pub fn validate_sequence(sequence: &str) -> Result<(), String> {
-    if sequence.is_empty()
-        || !sequence
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ',' || c == '.')
-    {
-        return Err("Invalid or empty movement sequence.".into());
-    }
-    Ok(())
+    mission_protocol::validate_sequence(sequence)
 }
 
 pub fn is_rover_telemetry(json: &serde_json::Value) -> bool {
@@ -149,6 +152,11 @@ pub fn is_rover_telemetry(json: &serde_json::Value) -> bool {
 
 impl Radio {
     pub fn connection(&mut self, port: Option<String>) {
+        self.planning_gps.reset();
+        self.navigation = None;
+        self.navigation_calibration = None;
+        self.navigation_sequence = None;
+        self.navigation_boot = None;
         if let Some(d) = self.deployment.as_mut() {
             // Preserve sequence high-water mark across USB recovery. A reconnect
             // is not a Mega reboot and cannot authorize accepting older reports.
@@ -221,6 +229,10 @@ impl Radio {
             evidence: VecDeque::new(),
             mega_status: None,
             status_connection_confirmed: false,
+            status_history: VecDeque::new(),
+            status_packets_missing: 0,
+            status_history_dropped: 0,
+            status_received_at_ms: None,
             confirmed: false,
             cancelled: false,
             transmitted_attempts: 0,
@@ -231,6 +243,44 @@ impl Radio {
         self.deployment = Some(d.clone());
         self.revision += 1;
         Ok(d)
+    }
+
+    pub fn fusion_gps(&mut self, event: &serde_json::Value) {
+        if self.connected && self.planning_gps.receive(event) {
+            self.revision += 1;
+        }
+    }
+
+    pub fn navigation_packet(&mut self, mut json: serde_json::Value, received_at_ms: u64) {
+        if !self.connected || !crate::encoder_telemetry::navigation_json_valid(&json) {
+            return;
+        }
+        if json["type"] == "navigation" {
+            let sequence = json["navSeq"].as_u64().unwrap() as u32;
+            let boot = json["bootId"].as_u64().unwrap() as u32;
+            if self
+                .navigation_boot
+                .is_some_and(|old| boot != 0 && boot < old)
+            {
+                return;
+            }
+            if self.navigation_boot != Some(boot) {
+                self.navigation_sequence = None;
+                self.navigation_boot = Some(boot);
+            }
+            if self.navigation_sequence.is_some_and(|old| {
+                sequence.wrapping_sub(old) == 0 || sequence.wrapping_sub(old) >= (1 << 31)
+            }) {
+                return;
+            }
+            self.navigation_sequence = Some(sequence);
+            json["receivedAtMs"] = received_at_ms.into();
+            self.navigation = Some(json);
+        } else {
+            json["receivedAtMs"] = received_at_ms.into();
+            self.navigation_calibration = Some(json);
+        }
+        self.revision += 1;
     }
 
     pub fn retry(&mut self, id: u64) -> Result<(), String> {
@@ -524,12 +574,36 @@ impl Radio {
                 // Radio metrics may change on retransmission; content may not.
                 if status.same_report(previous) && !d.status_connection_confirmed {
                     d.status_connection_confirmed = true;
+                    d.status_received_at_ms = Some(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                    );
                     self.revision += 1;
                 }
                 return;
             }
         }
+        let previous_seq = d.mega_status.as_ref().map_or(0, |s| s.status_seq);
+        d.status_packets_missing = d.status_packets_missing.saturating_add(
+            status
+                .status_seq
+                .saturating_sub(previous_seq)
+                .saturating_sub(1),
+        );
+        if d.status_history.len() == 256 {
+            d.status_history.pop_front();
+            d.status_history_dropped = d.status_history_dropped.saturating_add(1);
+        }
+        d.status_history.push_back(status.clone());
         d.mega_status = Some(status);
+        d.status_received_at_ms = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        );
         d.status_connection_confirmed = true;
         self.revision += 1;
         // Never set ACK, transport COMPLETE, soil validity, or actuator outputs.

@@ -2,6 +2,8 @@
 // Ultrasonic Phase 1 bench logic unchanged; timed obstacle detour added ONLY for Phase 3C indoor tests.
 #include <stdlib.h>
 #include <math.h>
+bool a31TelemetryBusy=false;
+void a31AbortTelemetry();
 #include <avr/interrupt.h>  // A8-A11 quadrature encoder pin-change interrupts
 // =================================================================
 // ARDUINO MEGA 2560 - ROVER FIRMWARE
@@ -109,6 +111,7 @@ void finishSoilReply(bool complete){
  Serial2.print(',');Serial2.println(k);
 }
 void serviceSoil(){
+ if(a31TelemetryBusy)return;
  if(!soilWaiting){startSoilPoll();return;}
  uint8_t budget=24;
  while(Serial3.available() && budget-- && soilCount<sizeof(soilReply))soilReply[soilCount++]=Serial3.read();
@@ -188,27 +191,11 @@ const float ADC_REFERENCE_VOLTAGE = 5.0;
 
 // -------------------- RC INTERRUPT VARIABLES --------------------
 
-volatile uint32_t ch1_start = 0, ch1_pulse = 0;
-volatile uint32_t ch2_start = 0, ch2_pulse = 0;
-volatile uint32_t ch4_start = 0, ch4_pulse = 0;
-volatile uint32_t ch5_start = 0, ch5_pulse = 0;
-volatile uint32_t ch6_start = 0, ch6_pulse = 0;
-volatile uint32_t ch8_start = 0, ch8_pulse = 0;
-
-volatile uint32_t last_rc_time = 0;
-// Track freshness for EVERY PWM channel; never reuse an old arm/throttle pulse.
-volatile uint32_t ch1_lastValid = 0, ch2_lastValid = 0;
-volatile uint32_t ch4_lastValid = 0, ch5_lastValid = 0;
-volatile uint32_t ch6_lastValid = 0, ch8_lastValid = 0;
-const uint16_t RC_VALID_MIN_US = 850;
-const uint16_t RC_VALID_MAX_US = 2150;
-const unsigned long RC_REARM_HOLD_MS = 400;
-bool rcOutputAuthorized = false; // Final hardware-output software interlock.
-bool rcDisarmObserved = false;
-bool rcRearmRequired = true;
-unsigned long rcDisarmSince = 0;
-unsigned long rcLastSafetyPrint = 0;
-
+// Shared capture retains the first bad edge until the safety loop consumes it.
+// Constants remain 850..2150 us, 250 ms freshness and 400 ms neutral disarm.
+#include "RcMega.h"
+static_assert(SIGNAL_TIMEOUT==RcSafety::TIMEOUT_MS,"RC timeout policy mismatch");
+static_assert(RC_MID==RcSafety::MID_US&&RC_DEADZONE==RcSafety::DEADZONE_US,"RC center policy mismatch");
 
 
 // ------------------------- STATES -------------------------------
@@ -243,10 +230,9 @@ String currentCommand = "";
 
 bool missionActive = false;
 
-// A2.9 DEFAULT-LOCKED: No real distance, GPS/DR localization or
-// probe-clearance calibration is available for physical autonomy.
-// NEVER remove this guard based only on a successful compile.
-const bool A29_ALLOW_AUTONOMOUS_ACTUATION = false;
+// N1 uses the measured-calibration, positioning and RC gates in NavigationMega.h.
+// A successful compile never establishes loaded calibration or field accuracy.
+// Timed movement, automatic probing and blind obstacle detours are not used.
 
 // Machine-readable, repeated mission status. ID is the 16-hex-digit
 // immutable Mission V2 ID forwarded by the rover ESP32.
@@ -268,11 +254,13 @@ void a29PublishMissionStatus(const char* id, const char* state,
   a29MissionState[sizeof(a29MissionState)-1] = '\0';
   strncpy(a29MissionReason, reason, sizeof(a29MissionReason)-1);
   a29MissionReason[sizeof(a29MissionReason)-1] = '\0';
+  a29MissionStep = step;
   ++a29MissionRevision;
   a29LastMissionReportMs = 0; // Force prompt reporting in loop.
 }
 
 void a29ServiceMissionStatus() {
+  if(a31TelemetryBusy) return;
   if (strcmp(a29MissionState, "IDLE") == 0) return;
   const unsigned long now = millis();
   if (a29LastMissionReportMs != 0 &&
@@ -502,12 +490,12 @@ ISR(PCINT2_vect) {
 
 DriveEncoderSnapshot readDriveEncoders() {
   DriveEncoderSnapshot s;
-  noInterrupts();
+  const uint8_t saved=SREG;cli();const uint32_t maskedAt=micros();
   s.left = encoderLeftTicks;
   s.right = encoderRightTicks;
   s.invalidL = encoderInvalidLeft;
   s.invalidR = encoderInvalidRight;
-  interrupts();
+  const uint32_t duration=micros()-maskedAt;SREG=saved;rcRecordMasked(duration);
   return s;
 }
 
@@ -551,6 +539,7 @@ float encoderSignedRPMRight = 0.0f;
 unsigned long encoderLastUartMs = 0;
 
 void serviceEncoderTelemetry() {
+  if(a31TelemetryBusy) return;
   static bool rpmInitialized = false;
   static unsigned long rpmLastMs = 0;
   static int32_t rpmPrevLeft = 0, rpmPrevRight = 0;
@@ -610,7 +599,7 @@ void latchDriveSyncFault(const __FlashStringHelper *reason) {
   setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, 0);
   stopActuator();
   Serial.print(F("[ENC SYNC FAULT] ")); Serial.println(reason);
-  espSerial.println(F("FAULT:ENCODER"));
+  a31AbortTelemetry(); espSerial.println(F("FAULT:ENCODER"));
 }
 
 void commandAutoStraightWithSync(bool forward) {
@@ -678,104 +667,24 @@ void commandAutoStraightWithSync(bool forward) {
 // =================================================================
 
 // =================================================================
+// N1 SUPERVISED WAYPOINT FEEDBACK NAVIGATION
+// =================================================================
+// N1 feedback navigation uses only measured, CRC-validated EEPROM calibration.
+// New/invalid storage remains calibration-locked. See NavigationMega.h.
+#include "NavigationMega.h"
+// END A3.0
+// =================================================================
+
+// =================================================================
 // INTERRUPT SERVICE ROUTINES
 // =================================================================
 
-void isrCh1() {
-  if (digitalRead(PIN_CH1_STEER) == HIGH)
-    ch1_start = micros();
-  else {
-    uint32_t width = micros() - ch1_start;
-    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
-      ch1_pulse = width;
-      ch1_lastValid = millis();
-      last_rc_time = ch1_lastValid;
-    } else {
-      ch1_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
-      ch1_lastValid = 0;
-    }
-  }
-}
-
-void isrCh2() {
-  if (digitalRead(PIN_CH2_THROTTLE) == HIGH)
-    ch2_start = micros();
-  else {
-    uint32_t width = micros() - ch2_start;
-    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
-      ch2_pulse = width;
-      ch2_lastValid = millis();
-      last_rc_time = ch2_lastValid;
-    } else {
-      ch2_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
-      ch2_lastValid = 0;
-    }
-  }
-}
-
-void isrCh4() {
-  if (digitalRead(PIN_CH4_ACTUATOR) == HIGH)
-    ch4_start = micros();
-  else {
-    uint32_t width = micros() - ch4_start;
-    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
-      ch4_pulse = width;
-      ch4_lastValid = millis();
-      last_rc_time = ch4_lastValid;
-    } else {
-      ch4_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
-      ch4_lastValid = 0;
-    }
-  }
-}
-
-void isrCh5() {
-  if (digitalRead(PIN_CH5_ARM) == HIGH)
-    ch5_start = micros();
-  else {
-    uint32_t width = micros() - ch5_start;
-    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
-      ch5_pulse = width;
-      ch5_lastValid = millis();
-      last_rc_time = ch5_lastValid;
-    } else {
-      ch5_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
-      ch5_lastValid = 0;
-    }
-  }
-}
-
-void isrCh6() {
-  if (digitalRead(PIN_CH6_MODE) == HIGH)
-    ch6_start = micros();
-  else {
-    uint32_t width = micros() - ch6_start;
-    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
-      ch6_pulse = width;
-      ch6_lastValid = millis();
-      last_rc_time = ch6_lastValid;
-    } else {
-      ch6_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
-      ch6_lastValid = 0;
-    }
-  }
-}
-
-void isrCh8() {
-  if (digitalRead(PIN_CH8_LORA) == HIGH)
-    ch8_start = micros();
-  else {
-    uint32_t width = micros() - ch8_start;
-    if (width >= RC_VALID_MIN_US && width <= RC_VALID_MAX_US) {
-      ch8_pulse = width;
-      ch8_lastValid = millis();
-      last_rc_time = ch8_lastValid;
-    } else {
-      ch8_pulse = 0; // Out-of-range pulse invalidates this channel immediately.
-      ch8_lastValid = 0;
-    }
-  }
-}
+void isrCh1(){rcInputEdge(0,PIN_CH1_STEER);}
+void isrCh2(){rcInputEdge(1,PIN_CH2_THROTTLE);}
+void isrCh4(){rcInputEdge(2,PIN_CH4_ACTUATOR);}
+void isrCh5(){rcInputEdge(3,PIN_CH5_ARM);}
+void isrCh6(){rcInputEdge(4,PIN_CH6_MODE);}
+void isrCh8(){rcInputEdge(5,PIN_CH8_LORA);}
 
 
 // =================================================================
@@ -827,6 +736,7 @@ void setup() {
 
   // A2.4 incremental addition: encoder pins/interrupts only.
   initializeDriveEncoders();
+  a31LoadCalibration();
 
   // Receiver Inputs
   pinMode(PIN_CH1_STEER, INPUT);
@@ -886,35 +796,12 @@ void setup() {
 // =================================================================
 
 void loop() {
+  const uint32_t usbStartedUs=micros();
+  a31ReadUsb();
+  a31ServiceTelemetry();
+  rcUsbWorkUs=micros()-usbStartedUs;
 
-  uint16_t steer;
-  uint16_t throttle;
-  uint16_t actuator;
-  uint16_t armPulse;
-  uint16_t modePulse;
-  uint16_t loraPulse;
-
-  uint32_t lastSignal;
-  uint32_t t1, t2, t4, t5, t6, t8;
-
-  noInterrupts();
-
-  steer = ch1_pulse;
-  throttle = ch2_pulse;
-  actuator = ch4_pulse;
-
-  armPulse = ch5_pulse;
-  modePulse = ch6_pulse;
-  loraPulse = ch8_pulse;
-
-  lastSignal = last_rc_time;
-  t1 = ch1_lastValid; t2 = ch2_lastValid;
-  t4 = ch4_lastValid; t5 = ch5_lastValid;
-  t6 = ch6_lastValid; t8 = ch8_lastValid;
-
-  interrupts();
-
-
+  const uint32_t sensorStartedUs=micros();
   // ---------------- SENSOR UPDATES ----------------
 
   updateUltrasonicDistance();
@@ -923,83 +810,50 @@ void loop() {
   serviceSoil();
 
 
+  rcSensorWorkUs=micros()-sensorStartedUs;
   // ---------------- ESP32 + IMU COMMANDS ----------------
+  const uint32_t espStartedUs=micros();
   readEspLines();
   a29ServiceMissionStatus();
+  rcEspWorkUs=micros()-espStartedUs;
 
-  // ---------------- A2.6 RC FAILSAFE ----------------
-  // All six channels must have fresh, in-range pulses. Receiver output
-  // failsafe MUST be configured to emit no pulses (or disarmed outputs)
-  // when the transmitter is disconnected: valid held PWM is not detectable
-  // as a radio failure by the Mega alone.
-  const unsigned long rcNow = millis();
-  const bool rcFresh =
-    t1 && t2 && t4 && t5 && t6 && t8 &&
-    rcNow - t1 <= SIGNAL_TIMEOUT && rcNow - t2 <= SIGNAL_TIMEOUT &&
-    rcNow - t4 <= SIGNAL_TIMEOUT && rcNow - t5 <= SIGNAL_TIMEOUT &&
-    rcNow - t6 <= SIGNAL_TIMEOUT && rcNow - t8 <= SIGNAL_TIMEOUT;
-  const bool rcNeutral =
-    abs((int)throttle - (int)RC_MID) < RC_DEADZONE &&
-    abs((int)steer - (int)RC_MID) < RC_DEADZONE &&
-    abs((int)actuator - (int)RC_MID) < RC_DEADZONE;
-
-  // Fail closed, require a fresh deliberate LOW-to-HIGH arm sequence.
-  if (!rcFresh) {
-    currentState = STATE_NO_SIGNAL;
-    rcOutputAuthorized = false;
-    rcRearmRequired = true;
-    rcDisarmObserved = false;
-    rcDisarmSince = 0;
-    // Any interrupted autonomous operation must NOT resume on reconnection.
-    if (missionActive) {
-      missionActive = false;
-      detourStage = 0;
-      currentCommand = "";
-      missionSequence = "";
-      Serial.println(F("[RC FAILSAFE] Signal lost; active mission cancelled"));
-      espSerial.println(F("FAULT:RC_LOSS"));
-    }
-  } else if (armPulse < 1500) {
-    currentState = STATE_DISARMED;
-    rcOutputAuthorized = false;
-    if (!rcDisarmSince) rcDisarmSince = rcNow;
-    if (rcNeutral && rcNow - rcDisarmSince >= RC_REARM_HOLD_MS)
-      rcDisarmObserved = true;
-    if (!rcNeutral) {
-      rcDisarmObserved = false;
-      rcDisarmSince = rcNow;
-    }
-    rcRearmRequired = true;
-  } else if (rcRearmRequired) {
-    // An arm-high signal at boot or after RF loss is NOT authorization.
-    // The user must show fresh neutral/disarmed pulses first.
-    if (rcDisarmObserved && rcNeutral) {
-      rcRearmRequired = false;
-      rcDisarmObserved = false;
-    }
-    rcDisarmSince = 0;
-    if (rcRearmRequired) {
-      currentState = STATE_DISARMED;
-      rcOutputAuthorized = false;
-    }
+  // Snapshot AFTER potentially blocking sensor/UART work. All six widths,
+  // last-valid times and first bad-edge evidence belong to one atomic instant.
+  RcSafety::Snapshot rcSnapshot;rcTakeSnapshot(rcSnapshot);rcGate.evaluate(rcSnapshot);
+  const unsigned long rcNow=rcSnapshot.nowMs;
+  const uint16_t steer=rcSnapshot.channels[0].valid?rcSnapshot.channels[0].width:0;
+  const uint16_t throttle=rcSnapshot.channels[1].valid?rcSnapshot.channels[1].width:0;
+  const uint16_t actuator=rcSnapshot.channels[2].valid?rcSnapshot.channels[2].width:0;
+  const uint16_t armPulse=rcSnapshot.channels[3].valid?rcSnapshot.channels[3].width:0;
+  const uint16_t modePulse=rcSnapshot.channels[4].valid?rcSnapshot.channels[4].width:0;
+  const uint16_t loraPulse=rcSnapshot.channels[5].valid?rcSnapshot.channels[5].width:0;
+  uint32_t lastSignal=0,youngestAge=UINT32_MAX;
+  for(uint8_t i=0;i<RcSafety::COUNT;++i)if(rcSnapshot.channels[i].seen){
+    const uint32_t age=rcNow-rcSnapshot.channels[i].lastValidMs;
+    if(age<youngestAge){youngestAge=age;lastSignal=rcSnapshot.channels[i].lastValidMs;}
   }
-
-  if (rcFresh && armPulse >= 1500 && !rcRearmRequired) {
-    if (modePulse < 1300) currentState = STATE_MANUAL;
-    else if (modePulse <= 1700) currentState = STATE_HOLD;
-    else currentState = STATE_SEMI_AUTO;
-    rcOutputAuthorized = currentState == STATE_MANUAL || currentState == STATE_SEMI_AUTO;
+  const bool rcFresh=rcGate.fresh;
+  const bool rcNeutral=RcSafety::neutral(steer)&&RcSafety::neutral(throttle)&&RcSafety::neutral(actuator);
+  rcRearmRequired=rcGate.rearmRequired;rcDisarmObserved=rcGate.disarmObserved;
+  rcOutputAuthorized=false;
+  if(!rcFresh)currentState=STATE_NO_SIGNAL;
+  else if(!rcGate.authorized)currentState=STATE_DISARMED;
+  else if(modePulse<1300)currentState=STATE_MANUAL;
+  else if(modePulse<=1700)currentState=STATE_HOLD;
+  else currentState=STATE_SEMI_AUTO;
+  rcOutputAuthorized=rcGate.authorized&&(currentState==STATE_MANUAL||currentState==STATE_SEMI_AUTO);
+  // Stop BEFORE diagnostics, mode messages or other serial output. Existing
+  // motor interlocks still independently reject unauthorized hardware writes.
+  if(!rcOutputAuthorized)stopAllOutputs();
+  if(!rcFresh&&missionActive){
+    missionActive=false;detourStage=0;currentCommand="";missionSequence="";
+    a30MissionReady=false;a30StepActive=false;
+    a29PublishMissionStatus(a29MissionId,"CANCELLED",a30CurrentStep,"RC_SIGNAL_LOST");
+    a31AbortTelemetry();espSerial.println(F("FAULT:RC_LOSS"));
   }
-  if (!rcFresh || rcRearmRequired || armPulse < 1500)
-    rcOutputAuthorized = false;
-
-  if (!rcFresh || rcRearmRequired) {
-    if (rcNow - rcLastSafetyPrint >= 1000) {
-      rcLastSafetyPrint = rcNow;
-      Serial.print(F("[RC FAILSAFE] fresh=")); Serial.print(rcFresh);
-      Serial.print(F(" rearmRequired=")); Serial.print(rcRearmRequired);
-      Serial.print(F(" disarmObserved=")); Serial.println(rcDisarmObserved);
-    }
+  if(rcGate.changes)rcQueueDiagnostic(rcGate.changes,rcSnapshot);
+  if((!rcFresh||rcRearmRequired)&&rcNow-rcLastSummaryMs>=1000){
+    rcLastSummaryMs=rcNow;rcQueueDiagnostic(0,rcSnapshot);
   }
 
 
@@ -1011,7 +865,7 @@ void loop() {
 
     if (espInTxMode) {
 
-      espSerial.println("SET_MODE:RX");
+      a31AbortTelemetry(); espSerial.println("SET_MODE:RX");
 
       espInTxMode = false;
 
@@ -1022,7 +876,7 @@ void loop() {
 
     if (!espInTxMode) {
 
-      espSerial.println("SET_MODE:TX");
+      a31AbortTelemetry(); espSerial.println("SET_MODE:TX");
 
       espInTxMode = true;
 
@@ -1035,6 +889,10 @@ void loop() {
   // The mission clock does not advance outside SEMI_AUTO or during safety recovery.
   if (currentState != STATE_SEMI_AUTO || safetyLatched || recoveryState == REC_RETRACT)
     benchLastTickMs = millis();
+
+  // A3.0: mode edge controls intentional mission start; manual or HOLD
+  // cancels active missions and never silently auto-resumes.
+  a30HandleArmAndMode(rcFresh, rcNeutral, modePulse);
 
   // ---------------- MOTOR CONTROL + SAFETY ----------------
   if (recoveryState == REC_RETRACT) {
@@ -1126,6 +984,8 @@ void loop() {
   }
   serviceEncoderTelemetry();
 
+  rcServiceDiagnostics();
+  rcPreviousTailUs=micros()-rcSnapshot.nowUs;
   delay(10);
 }
 
@@ -1394,98 +1254,10 @@ void startBenchDetour() {
 }
 
 void processAutoDrive() {
-  // Prevent timed F/L/R commands and detours from ever moving the rover
-  // as if they were calibrated distances/turns. Manual RC is unchanged.
-  if (!A29_ALLOW_AUTONOMOUS_ACTUATION) {
-    if (missionActive) {
-      missionActive = false;
-      missionSequence = "";
-      currentCommand = "";
-      a29PublishMissionStatus(a29MissionId, "HELD", 0,
-                              "NAV_NOT_CALIBRATED");
-    }
-    stopAllOutputs();
-    return;
-  }
-  if (!missionActive || detourObstacleFault) {
-    stopAllOutputs();
-    return;
-  }
-  if (currentCommand.length() == 0 && detourStage == 0) {
-    fetchNextAutoCommand();
-    if (!missionActive) return;
-  }
-
-  const unsigned long now = millis();
-  const char motion = detourStage ? detourOperation(detourStage) : currentCommand.charAt(0);
-  const bool forward = motion == 'F';
-  const bool closeObstacle = ULTRASONIC_ENABLED && sonarValid &&
-                             currentObstacleDist <= OBSTACLE_DISTANCE_CM;
-  const bool sonarHold = ULTRASONIC_ENABLED && forward && forwardBlocked;
-
-  // Only a REAL valid close echo triggers a detour. Merely missing echoes
-  // must not initiate a blind reverse maneuver. Phase 1 sonar behavior is
-  // preserved as-is, including its BENCH no-echo override.
-  if (forward && closeObstacle) {
-    startBenchDetour();
-    return;
-  }
-
-  if (sonarHold) {
-    stopDriveMotors();
-    stopActuator();
-    benchLastTickMs = now;  // pause original OR detour step clock
-    if (!benchObstaclePaused) {
-      benchObstaclePaused = true;
-      Serial.println(F("[AVOID WAIT] Forward blocked without close valid echo"));
-    }
-    return;
-  }
-  if (benchObstaclePaused) {
-    benchObstaclePaused = false;
-    Serial.println(F("[AVOID WAIT END] Forward permitted"));
-  }
-
-  const unsigned long elapsed = now - benchLastTickMs;
-  benchLastTickMs = now;
-
-  if (detourStage) {
-    if (elapsed >= detourRemainingMs) {
-      stopDriveMotors();
-      detourRemainingMs = 0;
-      if (detourStage == 5) {
-        detourStage = 0;
-        benchLastTickMs = millis();
-        Serial.print(F("[AVOID COMPLETE] Original command resumes: "));
-        Serial.println(currentCommand);
-        // NOTE: This resumes the original TIMED TEST command, NOT the GPS route.
-      } else {
-        startDetourStage(detourStage + 1);
-      }
-      return;
-    }
-    detourRemainingMs -= elapsed;
-    commandBenchDetourMotors(motion);
-    return;
-  }
-
-  // The original waypoint's remaining time is frozen during the detour.
-  if (elapsed >= benchRemainingMs) {
-    benchRemainingMs = 0;
-    stopDriveMotors();
-    stopActuator();
-    Serial.print(F("[BENCH STEP DONE] "));
-    Serial.print(benchStepNumber);
-    Serial.print('/');
-    Serial.print(benchStepTotal);
-    Serial.print(F(" cmd="));
-    Serial.println(currentCommand);
-    currentCommand = "";
-    fetchNextAutoCommand();
-    return;
-  }
-  benchRemainingMs -= elapsed;
-  executeAutoCommand();
+  // The old timed/detour executor is unreachable in A3.0.
+  // Encoder-target stepping operates only following an intentional
+  // operator semi-auto mode edge and calibration validation.
+  a30RunAutoStep();
 }
 
 // =================================================================
@@ -1862,22 +1634,13 @@ void printDebugTelemetry(
   uint32_t lastSig
 ) {
 
-  unsigned long timeSinceLastPulse =
-    millis() - lastSig;
-
+  // Aggregate freshness must cover all six channels, not just the most
+  // recently active input. A fresh signal can still have a retained latch.
+  (void)lastSig;
   Serial.print(F("[RC STATUS] "));
-
-  if (
-    lastSig == 0 ||
-    timeSinceLastPulse > SIGNAL_TIMEOUT
-  ) {
-
-    Serial.print(F("NO SIGNAL"));
-
-  } else {
-
-    Serial.print(F("OK"));
-  }
+  Serial.print(rcGate.fresh?F("ALL_FRESH"):F("INPUT_FAULT"));
+  Serial.print(F(" rearmRequired="));Serial.print(rcRearmRequired);
+  Serial.print(F(" disarmObserved="));Serial.print(rcDisarmObserved);
 
   Serial.print(F(" | CH1:"));
   Serial.print(ch1);
@@ -2004,35 +1767,11 @@ void readEspLines() {
 // Reject malformed mission strings without losing any previously stored mission.
 // Existing desktop waypoints (F=m, L/R=degrees) are deliberately NOT timed drive commands.
 bool validateMission(const String &seq, bool timed) {
-  if (seq.length() == 0 || seq.length() > 280) return false;
-  int start = 0;
-  unsigned steps = 0;
-  while (start < (int)seq.length()) {
-    int comma = seq.indexOf(',', start);
-    if (comma < 0) comma = seq.length();
-    if (comma == start || comma - start > 18) return false;
-    char op = seq.charAt(start);
-    if (op != 'F' && op != 'B' && op != 'L' && op != 'R') return false;
-    // Waypoint messages should contain only driving commands.
-    if (!timed && (op == 'U' || op == 'D' || op == 'B')) return false;
-    for (int i = start + 1; i < comma; ++i) {
-      char c = seq.charAt(i);
-      if (!((c >= '0' && c <= '9') || c == '.')) return false;
-    }
-    String number = seq.substring(start + 1, comma);
-    if (!number.length()) return false;
-    float amount = number.toFloat();
-    if (amount <= 0 || !isfinite(amount)) return false;
-    if (timed && (number.indexOf('.') >= 0 || amount > 15.0f)) return false;
-    if (++steps > 50) return false;
-    start = comma + 1;
-  }
-  return true;
+  WaypointProtocol::Plan plan;return !timed && WaypointProtocol::parse(seq.c_str(),plan);
 }
 
-// AVR Mega: sscanf("%f") is not supported by the default AVR libc build.
-// Use strtod() to parse signed pitch and roll values reliably.
 void processEspLine(const char *line) {
+  if(a31SensorLine(line))return;
   if (strncmp(line, "IMU:", 4) == 0) {
     const char *cursor = line + 4;
     char *endptr;
@@ -2097,21 +1836,25 @@ void processEspLine(const char *line) {
       a29PublishMissionStatus(id16, "REJECTED", 0, "SAFETY_LATCHED");
       return;
     }
-    // A staged mission is NOT an executable mission.
+    // Stage only. Receipt does not authorize movement.
     stopAllOutputs();
-    missionActive = false;
-    missionSequence = "";
-    currentCommand = "";
-    savedMission = incoming;
-    missionTimedMode = false;
-    benchRemainingMs = 0;
-    benchStepNumber = 0;
-    benchStepTotal = 0;
-    detourStage = 0;
-    a29PublishMissionStatus(id16, "STAGED", 0,
-                            "NAV_NOT_CALIBRATED");
-    Serial.print(F("[A2.9] Mission STAGED only, no actuation, id="));
-    Serial.println(id16);
+    missionActive=false;
+    a30MissionReady=true;
+    a30StepActive=false;
+    missionSequence="";
+    currentCommand="";
+    savedMission=incoming;
+    missionTimedMode=false;
+    benchRemainingMs=0;
+    benchStepNumber=0;
+    benchStepTotal=0;
+    detourStage=0;
+    WaypointProtocol::Plan targets;WaypointProtocol::parse(incoming.c_str(),targets);
+    if(strcmp(a29MissionId,id16)) a29MissionRevision=0;
+    strncpy(a29MissionId,id16,17);
+    a31Navigation.stage(targets);a31AnchorStaged();a30WasSemiAuto=(currentState==STATE_SEMI_AUTO);
+    a31LastState="";a31LastReason="";a31PublishState();
+    Serial.print(F("[A3.0 STAGED] ")); Serial.println(id16);
   } else if (strncmp(line, "RCV:", 4) == 0) {
     // Block legacy unguided mission execution on this safety build.
     a29PublishMissionStatus("0000000000000000", "REJECTED", 0,
@@ -2199,12 +1942,18 @@ void updateTiltSafety(SystemState state, uint16_t armPulse, uint16_t actuatorRaw
 
 void latchTiltFault(const char *reason) {
   if (safetyLatched) return;
+  const bool autonomousWasActive = missionActive;
   faultOrigin = currentState;
   recoveryCompleted = false;
   safetyLatched = true;
   faultReverseActive = false;
   faultReverseNeedsNeutral = true; // left stick must be released after the fault
   missionActive = false;
+  if (autonomousWasActive) {
+    a30MissionReady=false;
+    a30StepActive=false;
+    a29PublishMissionStatus(a29MissionId,"FAULT",a30CurrentStep,"TILT_SAFETY");
+  }
   detourStage = 0;
   detourRemainingMs = 0;
   missionSequence = "";
@@ -2214,7 +1963,7 @@ void latchTiltFault(const char *reason) {
   Serial.print(F("[TILT FAULT] ")); Serial.println(reason);
   Serial.print(F("[TILT] dPitch=")); Serial.print(pitchDelta(), 2);
   Serial.print(F(" dRoll=")); Serial.println(rollDelta(), 2);
-  espSerial.println("FAULT:TILT");
+  a31AbortTelemetry(); espSerial.println("FAULT:TILT");
   if (ENABLE_BOUNDED_RETRACTION && imuFresh() && !actuatorOverload &&
       (faultOrigin == STATE_MANUAL || faultOrigin == STATE_SEMI_AUTO)) {
     recoveryState = REC_RETRACT;

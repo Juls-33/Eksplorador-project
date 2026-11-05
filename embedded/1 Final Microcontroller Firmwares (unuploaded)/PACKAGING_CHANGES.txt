@@ -1,0 +1,7 @@
+Only project header include directive delimiters were changed for Arduino IDE local resolution:
+01_Mega_2560/Mega_A3_0/RcMega.h: localized project header #include
+01_Mega_2560/Mega_A3_0/NavigationMega.h: localized project header #include
+02_Rover_ESP32/Rover_A3_0/Rover_A3_0.ino: localized project header #include
+03_Desktop_ESP32/Receiver_A3_0/NavigationReceiver.h: localized project header #include
+03_Desktop_ESP32/Receiver_A3_0/Receiver_A3_0.ino: localized project header #include
+Original code bodies were retained.

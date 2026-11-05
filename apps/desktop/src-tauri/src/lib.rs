@@ -14,6 +14,7 @@ use tauri::{Emitter, Manager, State};
 mod mission_deployment;
 mod mission_protocol;
 mod mission_status;
+mod mission_gps;
 mod encoder_telemetry;
 mod serial_lines;
 static RADIO: OnceLock<Mutex<mission_deployment::Radio>> = OnceLock::new();
@@ -1223,6 +1224,10 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                                 }
 
                                 match encoder_telemetry::classify(trimmed) {
+                                    encoder_telemetry::Message::Navigation(json) => {
+                                        let at=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                                        update_radio(&app_handle,|radio|radio.navigation_packet(json,at));
+                                    }
                                     encoder_telemetry::Message::MissionStatus(status) => {
                                         update_radio(&app_handle, |radio| radio.mission_status(status));
                                     }
@@ -1235,15 +1240,17 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                                     }
                                     encoder_telemetry::Message::Fusion(json) => {
                                         // Fusion has its own route. It cannot refresh
-                                        // standalone ENC age, change GPS or create soil rows.
+                                        // standalone ENC age or create soil rows. Explicit
+                                        // FUS GPS also feeds the isolated planning tracker.
                                         let received_at_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
                                         if let Some(event) = fusion.receive(json, Instant::now(), received_at_ms) {
+                                            update_radio(&app_handle, |radio| radio.fusion_gps(&event));
                                             if let Err(error) = app_handle.emit("fusion-data", event) {
                                                 encoder_telemetry::trace("rejected", || format!("fusion_event_emit_failed: {error}"));
                                             }
                                         }
                                     }
-                                    encoder_telemetry::Message::Sensor(json) => {
+                                    encoder_telemetry::Message::Sensor(mut json) => {
                                         if mission_deployment::is_rover_telemetry(&json) {
                                             update_radio(&app_handle, |radio| radio.telemetry());
                                         }
@@ -1324,6 +1331,10 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                                             );
                                         }
 
+                                        json["receivedAtMs"] = serde_json::json!(
+                                            SystemTime::now().duration_since(UNIX_EPOCH)
+                                                .unwrap_or_default().as_millis() as u64
+                                        );
                                         let _ = app_handle.emit(
                                             "sensor-data",
                                             json,

@@ -2,7 +2,100 @@
 //! and never emits Tauri events or supplies application telemetry.
 use super::*;
 
-const PAYLOAD: &str = "R90,F12.3,L45,F2";
+const PAYLOAD: &str = "N1,W104609000.300989000,W104609500.300989328";
+
+#[test]
+fn navigation_readiness_reports_are_observations_not_acks_or_execution_commands() {
+    let mut radio = Radio::default();
+    radio.connection(Some("n1".into()));
+    let first: serde_json::Value = serde_json::from_str(
+        include_str!("../../tests/fixtures/n1-navigation.jsonl")
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    radio.navigation_packet(first.clone(), 1000);
+    assert!(radio.navigation.as_ref().unwrap()["ready"] == true);
+    radio.navigation_packet(first.clone(), 2000);
+    assert_eq!(radio.navigation.as_ref().unwrap()["receivedAtMs"], 1000);
+    assert!(radio.deployment.is_none());
+    assert!(radio
+        .commands
+        .iter()
+        .all(|s| !s.contains("ARM") && !s.contains("START")));
+    let mut reboot = first.clone();
+    reboot["bootId"] = 101.into();
+    reboot["navSeq"] = 0.into();
+    radio.navigation_packet(reboot, 3000);
+    assert_eq!(radio.navigation.as_ref().unwrap()["bootId"], 101);
+    radio.navigation_packet(first, 4000);
+    assert_eq!(radio.navigation.as_ref().unwrap()["receivedAtMs"], 3000);
+    radio.connection(None);
+    assert!(radio.navigation.is_none());
+}
+
+#[test]
+fn waypoint_upload_needs_no_navigation_readiness_and_sends_no_execution_command() {
+    let mut radio = Radio::default();
+    radio.connection(Some("coordinate-only".into()));
+    assert!(radio.planning_gps.current.is_none());
+    let d = radio.begin(PAYLOAD.into()).unwrap();
+    assert_eq!(d.sequence, PAYLOAD);
+    assert!(!d.acknowledged);
+    assert!(radio
+        .commands
+        .iter()
+        .all(|c| !c.contains("ARM") && !c.contains("START")));
+}
+
+#[test]
+fn actual_a30_execution_status_packets_preserve_identity_step_and_loss_without_invented_ack() {
+    let (mut radio, id, _) = start(Instant::now());
+    let lines: Vec<_> = include_str!("../../tests/fixtures/a30-status.jsonl")
+        .lines()
+        .collect();
+    for index in [0, 1, 2, 3, 5, 9] {
+        // PIN_CHECKED is deliberately lost in this trace.
+        let json = lines[index].replace("0123456789ABCDEF", &format!("{id:016X}"));
+        let crate::encoder_telemetry::Message::MissionStatus(status) =
+            crate::encoder_telemetry::classify(&json)
+        else {
+            panic!("not a mission report");
+        };
+        radio.mission_status(status.clone());
+        radio.mission_status(status);
+    }
+    let d = radio.deployment.as_ref().unwrap();
+    assert!(!d.acknowledged);
+    assert_eq!(d.status_history.len(), 6);
+    assert_eq!(d.status_history[3].state, "STEP_DONE");
+    assert_eq!(d.status_history[3].step, 1);
+    assert!(!d.status_history.iter().any(|s| s.state == "PIN_CHECKED"));
+    assert_eq!(d.status_packets_missing, 4);
+    assert_eq!(d.mega_status.as_ref().unwrap().state, "COMPLETE");
+}
+
+#[test]
+fn a30_status_loss_duplicates_and_encoder_completion_never_invent_waypoint_arrival() {
+    let now = Instant::now();
+    let (mut radio, id, mut transport) = start(now);
+    radio.mission_status(status(id, 1, "STAGED"));
+    radio.mission_status(status(id, 3, "STEP_COMPLETE"));
+    radio.mission_status(status(id, 3, "GPS_WAYPOINT_VERIFIED")); // conflicting duplicate
+    radio.mission_status(status(id, 2, "RUNNING_ENCODER")); // late packet
+    let d = radio.deployment.as_ref().unwrap();
+    assert_eq!(d.status_history.len(), 2);
+    assert_eq!(d.status_packets_missing, 1);
+    assert_eq!(d.mega_status.as_ref().unwrap().state, "STEP_COMPLETE");
+    assert!(!d.acknowledged);
+    transport.rover.rx = true;
+    transport.complete_tx(&mut radio, now);
+    radio.mission_status(status(id, 4, "GPS_WAYPOINT_VERIFIED"));
+    radio.mission_status(status(id, 5, "COMPLETE"));
+    assert_eq!(radio.deployment.as_ref().unwrap().status_history.len(), 4);
+    assert_eq!(radio.deployment.as_ref().unwrap().status_packets_missing, 1);
+}
 
 #[derive(Default)]
 struct MockRover {
@@ -407,9 +500,9 @@ fn oversize_routes_are_rejected_whole_and_never_truncated() {
     let mut radio = Radio::default();
     radio.connection(Some("mock-port".into()));
     assert!(radio
-        .begin("F1,".repeat(76))
+        .begin(format!("N1{}", ",W104609000.300989000".repeat(11)))
         .unwrap_err()
-        .contains("226-byte"));
+        .contains("226"));
     assert!(radio.deployment.is_none());
 }
 

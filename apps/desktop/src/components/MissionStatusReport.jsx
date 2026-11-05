@@ -1,14 +1,20 @@
-import React from 'react';
-import { describeMissionStatus } from '../utils/missionStatus';
+import React,{useEffect,useState} from 'react';
+import {describeMissionStatus,missionEvidence,missionStepEvidence} from '../utils/missionStatus';
 
-export default function MissionStatusReport({ deployment, connected }) {
-  if (!deployment) return null;
-  const status = deployment.mega_status;
-  return <div role="status" aria-live="polite" className="mission-status-report" style={{padding:12, background:'#f4f7f5', borderRadius:8}}>
-    <strong>Last Mega mission report</strong>
-    <p>{describeMissionStatus(deployment)}</p>
-    {status && <p><code>{status.missionId}</code> · revision {status.statusSeq}
-      {(!connected || !deployment.status_connection_confirmed) && ' · Historical report; awaiting confirmation after reconnection.'}</p>}
-    <p>Physical autonomous navigation is disabled for A2.9 calibration. Keep SB (CH6) in HOLD and SA (CH5) DISARM during staging.</p>
-  </div>;
+export default function MissionStatusReport({deployment,connected,advanced=false}){
+ const [now,setNow]=useState(Date.now);
+ useEffect(()=>{const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[]);
+ if(!deployment)return null;const status=deployment.mega_status;
+ return <section role="status" aria-live="polite" style={{padding:12,background:'#f4f7f5',borderRadius:8}}>
+  <strong>Mission delivery and rover events</strong><p>{describeMissionStatus(deployment)}</p>
+  {status&&(!connected||!deployment.status_connection_confirmed)&&<p>Historical report; awaiting confirmation after reconnection.</p>}
+  {status&&(!deployment.status_received_at_ms||now-deployment.status_received_at_ms>10000)&&<p>Report freshness is unconfirmed or older than 10 seconds. Current execution and arrival are unverified; no automatic resume is sent.</p>}
+  {deployment.status_packets_missing>0&&<p>Some mission events were missed. Unobserved movement and waypoint arrivals remain unverified.</p>}
+  <ol>{missionStepEvidence(deployment).map(s=><li key={s.step}>Pin {s.pin||s.step}: {s.evidence}</li>)}</ol>
+  {advanced&&<details><summary>Communication and status diagnostics</summary>
+   <p>Mission {status?.missionId||deployment.mission_key} · revision {status?.statusSeq??'unreported'} · missed revisions {deployment.status_packets_missing||0} · evicted history {deployment.status_history_dropped||0}</p>
+   <dl>{missionEvidence(deployment).map(([label,evidence])=><React.Fragment key={label}><dt>{label}</dt><dd>{evidence}</dd></React.Fragment>)}</dl>
+   <ol>{(deployment.status_history||[]).map(s=><li key={s.statusSeq}>Revision {s.statusSeq} · waypoint {s.step}: {s.state} / {s.reason}</li>)}</ol>
+  </details>}
+ </section>;
 }

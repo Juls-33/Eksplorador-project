@@ -31,9 +31,16 @@ impl MissionStatus {
                 .all(|c| c.is_ascii_digit() || (b'A'..=b'F').contains(&c))
             && status.mission_id != "0000000000000000"
             && status.status_seq > 0
-            && status.step <= 50
+            && status.step <= 40
+            && (status.state != "STAGED" || status.step == 0)
+            && (!["STEP_DONE", "PIN_CHECKED"].contains(&status.state.as_str()) || status.step >= 1)
             && token(&status.state, 21)
-            && token(&status.reason, 33)
+            && !status.reason.is_empty()
+            && status.reason.len() <= 33
+            && status
+                .reason
+                .bytes()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
             && (-200..=0).contains(&status.rssi)
             && status.snr.is_finite()
             && (-30.0..=30.0).contains(&status.snr))
@@ -52,6 +59,26 @@ impl MissionStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn actual_a30_states_reasons_and_one_based_execution_steps_parse() {
+        for line in include_str!("../../tests/fixtures/a30-status.jsonl").lines() {
+            assert!(
+                MissionStatus::parse(serde_json::from_str(line).unwrap()).is_some(),
+                "rejected {line}"
+            );
+        }
+        for state in ["STEP_DONE", "PIN_CHECKED"] {
+            let mut json = packet();
+            json["state"] = state.into();
+            assert!(MissionStatus::parse(json.clone()).is_none());
+            json["step"] = 40.into();
+            json["reason"] = "GPS_WITHIN_5M".into();
+            assert!(MissionStatus::parse(json).is_some());
+        }
+        let mut staged = packet();
+        staged["step"] = 1.into();
+        assert!(MissionStatus::parse(staged).is_none());
+    }
     pub fn packet() -> serde_json::Value {
         serde_json::json!({"type":"missionStatus", "missionId":"0123456789ABCDEF",
             "statusSeq":1, "state":"STAGED", "step":0, "reason":"NAV_NOT_CALIBRATED", "rssi":-42, "snr":8.6})
@@ -66,6 +93,7 @@ mod tests {
             ("statusSeq", serde_json::json!(4294967296u64)),
             ("statusSeq", serde_json::json!(1.5)),
             ("step", serde_json::json!(51)),
+            ("step", serde_json::json!(41)),
             ("state", serde_json::json!("bad state")),
             ("reason", serde_json::json!("")),
             ("rssi", serde_json::json!(30)),
