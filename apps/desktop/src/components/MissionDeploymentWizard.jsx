@@ -4,16 +4,19 @@ import { CheckCircle2, X } from 'lucide-react';
 import { refreshLoRaConnection, useLoRaConnection } from '../hooks/useLoRaConnection';
 import { getDeploymentFailure, getDeploymentProgress, isReceiverUnavailable } from '../utils/loraStatus';
 import LoRaConnectionStatus from './LoRaConnectionStatus';
+import { validateTimedLeg } from '../utils/timedMission';
 import controllerGuide from '../assets/radiomaster-pocket-guide.png';
 import './MissionDeploymentWizard.css';
 
 const terminal = phase => ['COMPLETE', 'FAILED', 'CANCELLED'].includes(phase);
 
-export default function MissionDeploymentWizard({ sequence, onClose }) {
+export default function MissionDeploymentWizard({ sequence, onClose, timed = false, blocked = false, onDeploymentUpdate, onAuthorizeStart }) {
   const radio = useLoRaConnection();
   const [sessionId, setSessionId] = useState(null);
   const deployment = radio.deployment?.id === sessionId ? radio.deployment : null;
   const [checks, setChecks] = useState({hold:false,disarm:false,rx:false});
+  const [startChecks, setStartChecks] = useState({freshNeutral:false,armedHold:false,holdToSemi:false});
+  const contractError = timed ? validateTimedLeg(sequence).error : null;
   const [error, setError] = useState(null);
   const [pending, setPending] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -38,9 +41,9 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
   useEffect(() => {
     // A receiver that has not been discovered is a waiting condition, not an
     // error. Begin the existing preparation workflow once USB is confirmed.
-    if (!radio.connected || radio.connectionError || session.current !== null) return;
+    if (!radio.connected || radio.connectionError || session.current !== null || contractError || blocked) return;
     const prepare = async () => {
-      if (!starting.current) starting.current = invoke('prepare_mission_deployment', {sequence});
+      if (!starting.current) starting.current = invoke('prepare_mission_deployment', timed ? {sequence, timed:true} : {sequence});
       const started = await starting.current;
       session.current = started.id;
       if (!mounted.current) {
@@ -60,7 +63,20 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
         setError({stage:'prepare', message});
       }
     });
-  }, [sequence, radio.connected, radio.connectionError]);
+  }, [sequence, radio.connected, radio.connectionError, timed, contractError, blocked]);
+
+  useEffect(() => {
+    if (deployment) onDeploymentUpdate?.(deployment);
+  }, [deployment, onDeploymentUpdate]);
+
+  useEffect(() => {
+    if (!blocked || !deployment || terminal(deployment.phase)) return;
+    invoke('cancel_mission_deployment', {id:session.current}).catch(reason => setError({stage:'cancel', message:String(reason)}));
+  }, [blocked, deployment?.phase]);
+
+  const startAvailable = radio.connected && !radio.connectionError && radio.mode === 'RX' && deployment?.phase === 'COMPLETE' &&
+    deployment.acknowledged && deployment.telemetry_seen && deployment.rx_restored && !blocked && !contractError;
+  useEffect(() => { if (!startAvailable) setStartChecks({freshNeutral:false,armedHold:false,holdToSemi:false}); }, [startAvailable]);
 
   useEffect(() => {
     if (closing && deployment?.phase === 'CANCELLED') onClose();
@@ -79,7 +95,7 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
     finally { actionPending.current = false; }
   };
   const confirm = async () => {
-    if (actionPending.current || closing || deployment?.phase !== 'READY' || !Object.values(checks).every(Boolean)) return;
+    if (actionPending.current || closing || blocked || contractError || deployment?.phase !== 'READY' || !Object.values(checks).every(Boolean)) return;
     actionPending.current = true;
     setPending(true);
     setError(null);
@@ -89,7 +105,7 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
   };
 
   const retry = async () => {
-    if (actionPending.current || closing || deployment?.phase !== 'FAILED') return;
+    if (actionPending.current || closing || blocked || contractError || deployment?.phase !== 'FAILED') return;
     actionPending.current = true;
     setPending(true);
     setError(null);
@@ -100,14 +116,14 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
   };
 
   const phase = deployment?.phase;
-  const ready = radio.connected && !radio.connectionError && phase === 'READY' && !closing;
+  const ready = radio.connected && !radio.connectionError && phase === 'READY' && !closing && !blocked && !contractError;
   const canConfirm = ready && Object.values(checks).every(Boolean) && !pending;
-  const canStart = radio.connected && !radio.connectionError && radio.mode === 'RX' && phase === 'COMPLETE' && deployment.telemetry_seen;
-  const failure = getDeploymentFailure(deployment, error);
+  const canStart = timed ? startAvailable : radio.connected && !radio.connectionError && radio.mode === 'RX' && phase === 'COMPLETE' && deployment.telemetry_seen;
+  const failure = getDeploymentFailure(deployment, contractError ? {stage:'prepare', message:contractError} : error);
   const workflowStatus = getDeploymentProgress(deployment, closing);
   const operationActive = deployment && !terminal(phase) && phase !== 'READY';
   const canRetry = radio.connected && !radio.connectionError && radio.mode === 'RX' && phase === 'FAILED'
-    && !deployment.acknowledged && deployment.failure_code !== 'ROVER_REJECTED' && !pending && !closing;
+    && !deployment.acknowledged && deployment.failure_code !== 'ROVER_REJECTED' && !pending && !closing && !blocked && !contractError;
   return (
     <div role="presentation" style={{position:'fixed',inset:0,zIndex:9000,background:'rgba(7,22,15,.65)',display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
       <section className="mission-deployment-dialog" role="dialog" aria-modal="true" aria-labelledby="deployment-title" style={{background:'white',color:'#14251b',borderRadius:16,boxShadow:'0 20px 70px #0005'}}>
@@ -117,14 +133,16 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
         </div>
         <div className="mission-deployment-connection"><LoRaConnectionStatus connection={radio} failure={failure}/></div>
         {pill('Mission payload', <code style={{overflowWrap:'anywhere',whiteSpace:'normal'}}>{sequence}</code>)}
+        {timed && <p className="mission-controller-note">One timed leg only, staged by upload. ACK2 means queued to Mega UART; Mega acceptance and execution are operator unverified. A2.7 does not forward Mega MISSION_STATUS lines through LoRa. Use physical HOLD/DISARM for intervention.</p>}
+        {blocked && <p role="alert" className="mission-controller-note">Operator workflow interrupted. Keep HOLD/DISARM selected; close this guide and inspect before planning again.</p>}
         {workflowStatus && <p className={`mission-deployment-progress${operationActive ? ' mission-deployment-progress--active' : ''}`} role="status" aria-live="polite">{workflowStatus}</p>}
         {deployment?.attempt > 0 && <div className="mission-delivery-evidence" aria-label="Mission communication evidence">
           <span>Local packet: {deployment.packet_submitted ? 'Submitted' : 'Pending'}</span>
           <span>Ground station: {deployment.ground_submitted ? 'Accepted' : 'Unconfirmed'}</span>
           <span>Current radio packet: {deployment.radio_transmitted ? 'Transmitted' : 'Unconfirmed'}</span>
           <span>Rover ESP32: {deployment.acknowledged ? 'Acknowledged' : 'Unconfirmed'}</span>
-          <span>Mega storage: Unverified</span>
-          <span>Mission execution: Not verified by desktop</span>
+          <span>{timed ? 'Mega acceptance: Operator unverified' : 'Mega storage: Unverified'}</span>
+          <span>{timed ? 'Mission execution: Operator unverified' : 'Mission execution: Not verified by desktop'}</span>
         </div>}
         {(!deployment || ['PREPARING','SWITCH_TX','READY'].includes(phase)) && <>
           <h3 className="mission-deployment-step-title">Prepare the rover safely</h3>
@@ -138,7 +156,7 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
                   ['disarm', 'Set SA (CH5) to DISARM.', 'Disarm before uploading; secure the rover during bench testing.'],
                   ['rx', 'Set SD (CH8) to RX.', 'Set rover LoRa to receive the mission.'],
                 ].map(([key,title,body]) => <label key={key} className="mission-preparation-item">
-                  <input type="checkbox" checked={checks[key]} disabled={closing || pending || !['PREPARING','SWITCH_TX','READY'].includes(phase)} onChange={event => setChecks(previous => ({...previous,[key]:event.target.checked}))}/>
+                  <input type="checkbox" checked={checks[key]} disabled={closing || pending || blocked || Boolean(contractError) || !['PREPARING','SWITCH_TX','READY'].includes(phase)} onChange={event => setChecks(previous => ({...previous,[key]:event.target.checked}))}/>
                   <span><strong>{title}</strong><span className="mission-controller-detail">{body}</span></span>
                 </label>)}
               </fieldset>
@@ -148,7 +166,7 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
             </div>
           </div>
         </>}
-        {deployment?.acknowledged && pill('Rover radio ACK confirmed', 'The rover ESP32 acknowledged this mission ID and payload checksum. Duplicate retries are not forwarded again. Mega storage and execution are not independently verified.')}
+        {deployment?.acknowledged && pill('Rover radio ACK confirmed', timed ? 'ACK2 confirms this mission ID and checksum were queued to Mega UART by the rover ESP32. It does not confirm Mega acceptance, start, completion or arrival. Duplicate retries keep the same identity.' : 'The rover ESP32 acknowledged this mission ID and payload checksum. Duplicate retries are not forwarded again. Mega storage and execution are not independently verified.')}
         {['TRANSMITTING','WAIT_ACK','RETRYING','ACKNOWLEDGED','SWITCH_RX'].includes(phase) && <p className="mission-controller-detail">Keep SD (CH8) = RX, SA (CH5) = DISARM, and SB (CH6) = HOLD during upload. {deployment?.error ? 'The app is recovering desktop RX.' : 'The desktop stays in upload mode throughout the retry sequence.'}</p>}
         {(phase === 'RESTORE' || canStart) && <>
           <h3 style={{fontSize:16,marginTop:16}}>Restore telemetry and start when safe</h3>
@@ -160,9 +178,22 @@ export default function MissionDeploymentWizard({ sequence, onClose }) {
                 ? <><CheckCircle2 size={16} style={{verticalAlign:'middle'}}/> Backend received a fresh rover telemetry packet after desktop RX restoration.</>
                 : <span role="status">Waiting for a fresh rover telemetry packet. Keep SB (CH6) in HOLD and SA (CH5) DISARM.</span>)}
               {canStart && <>
-                {pill('3 · Set SA (CH5) to ARM.', 'When the rover is safe to start, arm it while keeping SB (CH6) in HOLD.')}
-                {pill('4 · Set SB (CH6) to SEMI_AUTO.', 'Select SEMI_AUTO deliberately and verify rover behavior. The radio ACK does not confirm Mega mission storage.')}
-                <button onClick={close} style={primary(false)}>Close guide</button>
+                {pill('3 · Set SA (CH5) to ARM.', timed ? 'With rover LoRa back in TX and fresh neutral RC sticks, safely arm while SB (CH6) stays in HOLD. The Mega must observe armed HOLD.' : 'When the rover is safe to start, arm it while keeping SB (CH6) in HOLD.')}
+                {pill('4 · Set SB (CH6) to SEMI_AUTO.', timed ? 'Deliberately move HOLD → SEMI_AUTO only after observed armed HOLD. This physical edge authorizes one short leg, which stops. Watch the rover; use HOLD/DISARM if needed.' : 'Select SEMI_AUTO deliberately and verify rover behavior. The radio ACK does not confirm Mega mission storage.')}
+                {timed ? <>
+                  <fieldset className="mission-preparation-checklist">
+                    <legend>Record physical start authorization</legend>
+                    {[
+                      ['freshNeutral', 'I verified fresh neutral RC sticks, safe surroundings and full probe clearance.'],
+                      ['armedHold', 'With rover LoRa back in TX, I safely armed and verified the rover remained in CH6 HOLD.'],
+                      ['holdToSemi', 'After armed HOLD, I deliberately selected HOLD → SEMI_AUTO for this one leg.'],
+                    ].map(([key,label], index) => <label key={key} className="mission-preparation-item">
+                      <input type="checkbox" checked={startChecks[key]} disabled={!canStart || (index > 0 && !startChecks[index === 1 ? 'freshNeutral' : 'armedHold'])} onChange={event => setStartChecks(previous => ({...previous, [key]:event.target.checked, ...(key === 'freshNeutral' && !event.target.checked ? {armedHold:false,holdToSemi:false} : {}), ...(key === 'armedHold' && !event.target.checked ? {holdToSemi:false} : {})}))}/>
+                      <span>{label}</span>
+                    </label>)}
+                  </fieldset>
+                  <button disabled={!canStart || !Object.values(startChecks).every(Boolean)} style={primary(!canStart || !Object.values(startChecks).every(Boolean))} onClick={() => { if (canStart && Object.values(startChecks).every(Boolean) && onAuthorizeStart?.(startChecks)) close(); }}>Record HOLD → SEMI_AUTO authorization</button>
+                </> : <button onClick={close} style={primary(false)}>Close guide</button>}
               </>}
               <p className="mission-controller-note">Controller switch positions remain operator-confirmed. Only radio mode, mission ACK, and telemetry use backend evidence.</p>
             </div>

@@ -537,7 +537,7 @@ export default function HeatmapMap({
 
     historicalLabelsGroupRef.current.clearLayers();
 
-    labeledPoints.forEach(({ lat, lng, label, isAnchor }) => {
+    labeledPoints.forEach(({ lat, lng, label, isAnchor, title }) => {
       if (
         !Number.isFinite(Number(lat)) ||
         !Number.isFinite(Number(lng))
@@ -568,9 +568,9 @@ export default function HeatmapMap({
       L.marker([lat, lng], {
         icon: markerIcon,
         zIndexOffset: 700,
-        title: isAnchor
+        title: title || (isAnchor
           ? `Anchor sample #${label}`
-          : `Historical sample #${label}`
+          : `Historical sample #${label}`)
       }).addTo(historicalLabelsGroupRef.current);
     });
   }, [labeledPoints]);

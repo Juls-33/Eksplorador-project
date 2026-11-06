@@ -35,7 +35,7 @@ const topics = [
   { id: 'start', label: 'Getting Started', summary: 'Prepare for your first operation.' },
   { id: 'controller', label: 'Controller Overview', summary: 'Know the switches, sticks and menu buttons.' },
   { id: 'manual', label: 'Manual Operation', summary: 'Drive and steer with the controller.' },
-  { id: 'mission', label: 'Automatic Mission Operation', summary: 'Send a mission, restore telemetry and start safely.' },
+  { id: 'mission', label: 'Supervised Mission Operation', summary: 'Confirm one leg, inspect arrival and sample manually.' },
   { id: 'actuator', label: 'Actuator Control', summary: 'Lower and raise the soil probe.' },
   { id: 'power', label: 'Battery and Power', summary: 'Connect, disconnect and remove the battery.' },
   { id: 'charging', label: 'Charging and Battery Safety', summary: 'Check the cells and review the charging setup.' },
@@ -180,40 +180,40 @@ function MissionOperation() {
   return (
     <>
       <h3>Semi-Automatic Mission Operation</h3>
-      <p>Follow this deployment sequence. Keep the rover stopped and disarmed while the mission is being sent.</p>
+      <p>Supervise one sampling pin at a time. Timed movement upload is disabled until the firmware command grammar and safety limits are supplied. Use physical RC HOLD/DISARM to stop the rover.</p>
       <div className="manual-flow" aria-label="Mission deployment sequence">
-        <span>Plan</span><ArrowRight aria-hidden="true" size={16} /><span>Prepare rover</span><ArrowRight aria-hidden="true" size={16} /><span>Send &amp; confirm</span><ArrowRight aria-hidden="true" size={16} /><span>Restore &amp; start</span>
+        <span>Confirm start</span><ArrowRight aria-hidden="true" size={16} /><span>Inspect arrival</span><ArrowRight aria-hidden="true" size={16} /><span>Sample manually</span><ArrowRight aria-hidden="true" size={16} /><span>Confirm retraction</span>
       </div>
       <div className="manual-phase-grid">
         <section className="manual-inset"><h3>1. Plan in the desktop app</h3><Steps items={[
           <>Open <strong>Field Map</strong>.</>,
           'Create or select a mission.',
-          'Review the generated waypoints and movement sequence.',
-          <>Press <strong>Send Mission</strong>.</>,
-          <>Follow the <strong>Mission Deployment Assistant</strong>.</>,
+          'Choose the next sampling pin in the Operator RC Movement Guide.',
+          'Use fresh GPS or select the rover’s estimated position on the existing map. An estimate is not measured GPS.',
+          'Enter and confirm the actual heading and verify the probe is fully retracted. GPS course is not stationary orientation.',
         ]} /></section>
-        <section className="manual-inset"><h3>2. Prepare the controller</h3><Steps start={6} items={[
+        <section className="manual-inset"><h3>2. Preview one bounded leg</h3><Steps start={6} items={[
           <>Set <strong>SB MIDDLE → HOLD</strong>.</>,
           <>Set <strong>SA UP → DISARM</strong>.</>,
-          <>Set <strong>SD → rover RX</strong> (green indicator ON).</>,
-          'Confirm the safety checklist in the assistant.',
+          'Enter measured forward speed, left and right turning rates, and a short maximum instruction duration in Movement calibration.',
+          'Review the local timing preview. Unknown calibration disables planning. Send Mission remains disabled pending firmware integration.',
         ]} /></section>
-        <section className="manual-inset"><h3>3. Let the desktop send</h3><Steps start={10} items={[
-          <>The desktop automatically switches <strong>its LoRa to TX</strong> and transmits the mission.</>,
-          <>Wait for a <strong>verified matching rover-radio acknowledgment (ACK)</strong>.</>,
-          <>The desktop returns to <strong>RX automatically</strong>.</>,
+        <section className="manual-inset"><h3>3. Move manually and inspect</h3><Steps start={10} items={[
+          'Confirm probe clearance before using manual RC repositioning. After moving, use HOLD/DISARM and visually verify that the rover has stopped.',
+          'Inspect arrival and confirm the current sampling location using fresh GPS or a new map estimate. Accept or reject it; acceptance is allowed outside five meters.',
+          'For a corrected leg, reconfirm both starting position and actual heading. Report any obstacle, RC loss or safety hold; continuation is blocked.',
         ]} /></section>
-        <section className="manual-inset"><h3>4. Restore telemetry, then start</h3><Steps start={13} items={[
-          <>Set the rover <strong>SD → TX</strong> (green indicator OFF).</>,
-          <>Wait for <strong>live rover telemetry</strong>.</>,
-          <>Once the system is ready and the surroundings are safe, set <strong>SA to ARM</strong> while SB stays in HOLD. Then set <strong>SB DOWN → SEMI_AUTO</strong>.</>,
-          <>Monitor movement. Be ready to switch back to <strong>HOLD or DISARM</strong>.</>,
+        <section className="manual-inset"><h3>4. Sample, retract and continue</h3><Steps start={13} items={[
+          'Keep the wheels stopped. Use the existing RC actuator controls to extend and retract the probe manually; never bypass IMU tilt protection.',
+          'With Logging on, wait for a valid RS485 soil sample to be saved. Without fresh GPS, measured coordinate fields remain empty; the map estimate stays in this session only.',
+          'Confirm sampling is finished and visually verify the probe is fully retracted before authorizing preparation of the next leg.',
+          'Repeat for the selected pins, then use Mark Finished, or cancel and stop with physical RC HOLD/DISARM.',
         ]} /></section>
       </div>
       <Notice title="Radio ACK ≠ Mega storage confirmation" caution>
         <p>A matching ACK confirms that the rover radio received this mission ID and payload checksum. It does not independently confirm that the Arduino Mega stored or executed the mission.</p>
       </Notice>
-      <p className="manual-muted">Navigation still needs outdoor calibration. Waypoint precision is not yet confirmed. If upload or telemetry fails, keep HOLD and DISARM selected and follow the assistant’s retry guidance.</p>
+      <p className="manual-muted">Execution unverified — operator inspection required. Neither ACK2 nor an estimated timer confirms movement completion. Reopening a page requires fresh operator confirmations; session estimates and pin confirmations are not database GPS measurements.</p>
     </>
   );
 }

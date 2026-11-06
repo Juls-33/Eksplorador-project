@@ -123,15 +123,15 @@ void serviceSoil(){
 const uint16_t RC_MIN      = 1000;
 const uint16_t RC_MID      = 1500;
 const uint16_t RC_MAX      = 2000;
-const uint16_t RC_DEADZONE = 45;
+const uint16_t RC_DEADZONE = 65; // Widened from 45 to prevent gimbal bleed and ISR jitter
 
 const uint32_t SIGNAL_TIMEOUT = 250;
 
-const unsigned int OBSTACLE_DISTANCE_CM = 8; // Bench test only: very short stop distance
-const unsigned int OBSTACLE_RESUME_CM = 15; // Clear distance before forward resumes
+const unsigned int OBSTACLE_DISTANCE_CM = 35; // Bench test only: very short stop distance
+const unsigned int OBSTACLE_RESUME_CM = 45; // Clear distance before forward resumes
 // BENCH TEST ONLY: HC-SR04 no-echo can mean no target OR sensor failure.
 // Set FALSE for field use; FALSE requires valid echoes to resume.
-const bool SONAR_BENCH_NO_ECHO_CLEAR = true;
+const bool SONAR_BENCH_NO_ECHO_CLEAR = false; // A3.1: missing echo must not authorize travel
 const uint8_t SONAR_CLEAR_SAMPLES = 3;
 const uint8_t SONAR_NO_ECHO_CLEAR_SAMPLES = 5;
 unsigned long sonarEchoUs = 0;
@@ -147,6 +147,17 @@ const float BENCH_FORWARD_MS_PER_M = 15.0f;
 const float BENCH_TURN_MS_PER_DEG = 8.0f;
 const unsigned long BENCH_MIN_STEP_MS = 200;
 const unsigned long BENCH_MAX_STEP_MS = 2500;
+// A3.1 supervised one-leg commands: TR0.800,TF1.500
+// Values are SECONDS (not meters/degrees). Hard limits do not depend on desktop.
+const unsigned long A31_MIN_STEP_MS = 100;
+const unsigned long A31_MAX_STEP_MS = 2000;
+const unsigned long A31_MAX_TURN_MS = 1500;
+const unsigned long A31_MAX_LEG_MS = 4000;
+const unsigned long A31_STEP_SETTLE_MS = 200;
+const uint8_t A31_MAX_LEG_STEPS = 2;
+const unsigned long A31_ENCODER_STALL_MS = 650;
+const unsigned long A31_ENCODER_START_GRACE_MS = 450;
+
 
 // PHASE 3C: BENCH-ONLY OBSTACLE AVOIDANCE; durations are guesses, not distances.
 // Do not use for autonomous field navigation or with ground-contacting tracks.
@@ -242,6 +253,15 @@ String missionSequence = "";
 String currentCommand = "";
 
 bool missionActive = false;
+// Staging never energizes motors; a deliberate, fresh HOLD->SEMI_AUTO edge is required.
+bool a31MissionStaged = false;
+bool a31PreviousSemi = false;
+bool a31SawArmedHold = false;
+unsigned long a31SettleUntil = 0;
+int32_t a31LastLeftTicks = 0, a31LastRightTicks = 0;
+unsigned long a31LastEncoderProgressMs = 0;
+unsigned long a31StepStartedMs = 0;
+
 
 unsigned long missionTimerStart = 0;
 unsigned long missionTimerDuration = 0;
@@ -402,6 +422,19 @@ const int AUTO_SYNC_MIN_PWM = 90;
 const int AUTO_SYNC_MAX_PWM = 145;
 const unsigned long AUTO_SYNC_NO_COUNT_MS = 500;
 const unsigned long ENCODER_REPORT_MS = 1000;
+
+// A3.1 MANUAL STRAIGHT TRACK TRIM: does not modify automatic mission control.
+// Encoder feedback is ONLY used when the steering stick is neutral and both
+// tracks have meaningful rotation. Failed/ambiguous feedback disables trim,
+// not manual RC. These are conservative initial tuning values, not calibration.
+const bool ENABLE_MANUAL_STRAIGHT_TRIM = true;
+const unsigned long MANUAL_TRIM_SAMPLE_MS = 300;
+const int MANUAL_TRIM_MIN_PWM = 85;
+const int MANUAL_TRIM_MAX_PWM_CHANGE = 18;
+const int MANUAL_TRIM_MAX_CORRECTION = 12;
+const float MANUAL_TRIM_RELATIVE_KP = 60.0f;
+const unsigned long MANUAL_TRIM_LOG_MS = 1500;
+
 
 volatile int32_t encoderLeftTicks = 0;
 volatile int32_t encoderRightTicks = 0;
@@ -622,6 +655,115 @@ void commandAutoStraightWithSync(bool forward) {
   setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, rightSign * pwmR);
 }
 // =================================================================
+// A3.1: MANUAL-ONLY encoder-assisted straight PWM trim.
+// Separate from the existing semi-auto cumulative-tick sync controller.
+// =================================================================
+struct ManualStraightTrimState {
+  bool active;
+  int direction;
+  int nominalPwm;
+  unsigned long sampleAt;
+  int32_t leftAt;
+  int32_t rightAt;
+  uint32_t badLeftAt;
+  uint32_t badRightAt;
+  int correction;
+  unsigned long lastLog;
+};
+ManualStraightTrimState manualTrim = {};
+
+void resetManualStraightTrim() {
+  manualTrim.active = false;
+  manualTrim.correction = 0;
+}
+
+void applyManualStraightTrim(int &leftPwm, int &rightPwm) {
+  // The original processManualDrive() calculates opposite electrical signs
+  // for physical straight motion. Never change its polarity or mixing.
+  if (!ENABLE_MANUAL_STRAIGHT_TRIM || leftPwm == 0 || rightPwm == 0 ||
+      (leftPwm > 0) == (rightPwm > 0) ||
+      abs(leftPwm) != abs(rightPwm) ||
+      abs(leftPwm) < MANUAL_TRIM_MIN_PWM || !rcOutputAuthorized) {
+    resetManualStraightTrim();
+    return;
+  }
+
+  const int direction = leftPwm > 0 ? +1 : -1;
+  const int nominal = abs(leftPwm);
+  const unsigned long now = millis();
+  const DriveEncoderSnapshot enc = readDriveEncoders();
+  if (!manualTrim.active || manualTrim.direction != direction ||
+      abs(nominal - manualTrim.nominalPwm) > MANUAL_TRIM_MAX_PWM_CHANGE) {
+    manualTrim.active = true;
+    manualTrim.direction = direction;
+    manualTrim.nominalPwm = nominal;
+    manualTrim.sampleAt = now;
+    manualTrim.leftAt = enc.left;
+    manualTrim.rightAt = enc.right;
+    manualTrim.badLeftAt = enc.invalidL;
+    manualTrim.badRightAt = enc.invalidR;
+    manualTrim.correction = 0;
+    return; // Start by driving with the existing unchanged motor mixing.
+  }
+
+  if (now - manualTrim.sampleAt >= MANUAL_TRIM_SAMPLE_MS) {
+    const unsigned long elapsed = now - manualTrim.sampleAt;
+    const int32_t leftDelta = enc.left - manualTrim.leftAt;
+    const int32_t rightDelta = enc.right - manualTrim.rightAt;
+    const uint32_t badLeftDelta = enc.invalidL - manualTrim.badLeftAt;
+    const uint32_t badRightDelta = enc.invalidR - manualTrim.badRightAt;
+
+    manualTrim.sampleAt = now;
+    manualTrim.leftAt = enc.left;
+    manualTrim.rightAt = enc.right;
+    manualTrim.badLeftAt = enc.invalidL;
+    manualTrim.badRightAt = enc.invalidR;
+    manualTrim.nominalPwm = nominal;
+
+    // Avoid correction on missing/stalled/noisy feedback. A bad measurement
+    // must never cause the other motor's PWM to be boosted.
+    if (elapsed > 800 || labs(leftDelta) < 30 || labs(rightDelta) < 30 ||
+        badLeftDelta > 3 || badRightDelta > 3) {
+      manualTrim.correction = 0;
+      if (now - manualTrim.lastLog >= MANUAL_TRIM_LOG_MS) {
+        manualTrim.lastLog = now;
+        Serial.println(F("[MANUAL TRIM] Encoder unavailable/noisy; trim off"));
+      }
+    } else {
+      // Normalize different encoder CPRs; compare magnitudes regardless of
+      // direction. A faster RIGHT wheel produces a positive correction.
+      const float leftRev = (float)labs(leftDelta) / (float)ENC_LEFT_CPR;
+      const float rightRev = (float)labs(rightDelta) / (float)ENC_RIGHT_CPR;
+      const float meanRev = (leftRev + rightRev) * 0.5f;
+      if (meanRev > 0.00001f) {
+        const float imbalance = (rightRev - leftRev) / meanRev;
+        const int desired = constrain((int)(imbalance * MANUAL_TRIM_RELATIVE_KP),
+                                     -MANUAL_TRIM_MAX_CORRECTION,
+                                     MANUAL_TRIM_MAX_CORRECTION);
+        // Limit each trim update to 3 PWM units to avoid abrupt corrections.
+        if (desired > manualTrim.correction + 3) manualTrim.correction += 3;
+        else if (desired < manualTrim.correction - 3) manualTrim.correction -= 3;
+        else manualTrim.correction = desired;
+        if (now - manualTrim.lastLog >= MANUAL_TRIM_LOG_MS) {
+          manualTrim.lastLog = now;
+          Serial.print(F("[MANUAL TRIM] Lrev=")); Serial.print(leftRev, 4);
+          Serial.print(F(" Rrev=")); Serial.print(rightRev, 4);
+          Serial.print(F(" trim=")); Serial.println(manualTrim.correction);
+        }
+      }
+    }
+  }
+
+  // Right faster -> increase LEFT magnitude and reduce RIGHT magnitude.
+  // Preserve original electrical direction; clamp to operator-requested range.
+  const int trim = manualTrim.correction;
+  const int leftMagnitude = constrain(nominal + trim, 0, 255);
+  const int rightMagnitude = constrain(nominal - trim, 0, 255);
+  leftPwm = direction * leftMagnitude;
+  rightPwm = -direction * rightMagnitude;
+}
+
+// =================================================================
 // END OF A2.4 ENCODER ADDITION
 // =================================================================
 
@@ -743,7 +885,7 @@ void setup() {
   Serial.println(F("=============================================="));
 
   Serial.println(F("[SYSTEM] Motors ENABLED"));
-  Serial.println(F("[SYSTEM] Actuator Current Sensing ENABLED"));
+  Serial.println(F("[SYSTEM] Actuator Current Sensing DISCONNECTED (disabled)"));
   Serial.println(F("[SYSTEM] Overload Protection DISABLED"));
   Serial.println(F("[SYSTEM] Current Sense Input: A0"));
 
@@ -767,7 +909,7 @@ void setup() {
   Serial.println(F("[SOIL] Serial3 pins 14/15; direction pin 27"));
 
   // Current Sense
-  pinMode(PIN_ACT_SENSE, INPUT);
+  // PIN_ACT_SENSE deliberately disconnected. No analog input read.
 
   analogReference(DEFAULT);
 
@@ -867,7 +1009,7 @@ void loop() {
 
   updateUltrasonicDistance();
 
-  updateActuatorCurrentSense();
+  // A0 current sensor disconnected; overload monitoring remains disabled.
   serviceSoil();
 
 
@@ -898,7 +1040,9 @@ void loop() {
     rcDisarmObserved = false;
     rcDisarmSince = 0;
     // Any interrupted autonomous operation must NOT resume on reconnection.
-    if (missionActive) {
+    if (missionActive || a31MissionStaged) {
+      a31MissionStaged = false;
+      a31SawArmedHold = false;
       missionActive = false;
       detourStage = 0;
       currentCommand = "";
@@ -979,6 +1123,32 @@ void loop() {
   }
 
 
+  // A3.1 mission never resumes after RC loss, operator takeover, or re-arming.
+  const bool a31SemiNow = rcFresh && !rcRearmRequired && armPulse >= 1500 &&
+                          currentState == STATE_SEMI_AUTO;
+  if (missionActive && (!a31SemiNow || !rcNeutral || safetyLatched || driveSyncFaultLatched)) {
+    missionActive = false;
+    a31MissionStaged = false;
+    currentCommand = "";
+    missionSequence = "";
+    stopDriveMotors();
+    Serial.println(F("[A31] ABORT: RC mode / safety interruption"));
+    espSerial.println(F("MISSION_STATUS:A31_ABORTED"));
+  }
+  if (a31MissionStaged && rcFresh && !rcRearmRequired && armPulse >= 1500 &&
+      currentState == STATE_HOLD && rcNeutral) a31SawArmedHold = true;
+  if (a31MissionStaged && a31SawArmedHold && a31SemiNow && !a31PreviousSemi &&
+      espInTxMode && !safetyLatched && !driveSyncFaultLatched &&
+      rcNeutral && !forwardBlocked && sonarValid) {
+    a31MissionStaged = false;
+    a31SawArmedHold = false;
+    missionActive = true;
+    benchLastTickMs = millis();
+    Serial.println(F("[A31] Deliberate HOLD->SEMI_AUTO start"));
+    espSerial.println(F("MISSION_STATUS:A31_STARTED"));
+  }
+  a31PreviousSemi = a31SemiNow;
+
   // The mission clock does not advance outside SEMI_AUTO or during safety recovery.
   if (currentState != STATE_SEMI_AUTO || safetyLatched || recoveryState == REC_RETRACT)
     benchLastTickMs = millis();
@@ -1033,7 +1203,7 @@ void loop() {
       lastSignal
     );
 
-    printActuatorCurrentSense();
+    // A0 is disconnected; do not print meaningless current-sense readings.
     Serial.print(F("[IMU] valid=")); Serial.print(imuFresh());
     Serial.print(F(" pitch=")); Serial.print(imuPitch, 2);
     Serial.print(F(" roll=")); Serial.print(imuRoll, 2);
@@ -1340,85 +1510,55 @@ void startBenchDetour() {
   startDetourStage(1);
 }
 
+void a31StopAndHold(const __FlashStringHelper *reason) {
+  stopAllOutputs();
+  missionActive = false;
+  a31MissionStaged = false;
+  a31SawArmedHold = false;
+  currentCommand = "";
+  missionSequence = "";
+  Serial.print(F("[A31] HOLD: ")); Serial.println(reason);
+  espSerial.println(F("MISSION_STATUS:A31_HELD"));
+}
+
 void processAutoDrive() {
-  if (!missionActive || detourObstacleFault) {
-    stopAllOutputs();
-    return;
+  if (!missionActive) { stopAllOutputs(); return; }
+  if (safetyLatched || driveSyncFaultLatched) {
+    a31StopAndHold(F("SAFETY_LATCH")); return;
   }
-  if (currentCommand.length() == 0 && detourStage == 0) {
+  const unsigned long now = millis();
+  if (a31SettleUntil && (long)(now - a31SettleUntil) < 0) {
+    stopDriveMotors(); stopActuator(); return;
+  }
+  a31SettleUntil = 0;
+  if (!currentCommand.length()) {
     fetchNextAutoCommand();
     if (!missionActive) return;
   }
-
-  const unsigned long now = millis();
-  const char motion = detourStage ? detourOperation(detourStage) : currentCommand.charAt(0);
-  const bool forward = motion == 'F';
-  const bool closeObstacle = ULTRASONIC_ENABLED && sonarValid &&
-                             currentObstacleDist <= OBSTACLE_DISTANCE_CM;
-  const bool sonarHold = ULTRASONIC_ENABLED && forward && forwardBlocked;
-
-  // Only a REAL valid close echo triggers a detour. Merely missing echoes
-  // must not initiate a blind reverse maneuver. Phase 1 sonar behavior is
-  // preserved as-is, including its BENCH no-echo override.
-  if (forward && closeObstacle) {
-    startBenchDetour();
-    return;
+  const char op = currentCommand.charAt(1);
+  // All motion needs a functioning forward-looking sensor for the first test.
+  // Only FORWARD is electronically protected by this single HC-SR04.
+  if (!sonarValid || forwardBlocked || (op == 'F' && currentObstacleDist <= OBSTACLE_DISTANCE_CM)) {
+    a31StopAndHold(F("SONAR_UNKNOWN_OR_OBSTACLE")); return;
   }
-
-  if (sonarHold) {
-    stopDriveMotors();
-    stopActuator();
-    benchLastTickMs = now;  // pause original OR detour step clock
-    if (!benchObstaclePaused) {
-      benchObstaclePaused = true;
-      Serial.println(F("[AVOID WAIT] Forward blocked without close valid echo"));
-    }
-    return;
+  const DriveEncoderSnapshot counts = readDriveEncoders();
+  if (counts.left != a31LastLeftTicks && counts.right != a31LastRightTicks) {
+    a31LastLeftTicks = counts.left;
+    a31LastRightTicks = counts.right;
+    a31LastEncoderProgressMs = now;
   }
-  if (benchObstaclePaused) {
-    benchObstaclePaused = false;
-    Serial.println(F("[AVOID WAIT END] Forward permitted"));
+  if (now - a31StepStartedMs >= A31_ENCODER_START_GRACE_MS &&
+      now - a31LastEncoderProgressMs > A31_ENCODER_STALL_MS) {
+    a31StopAndHold(F("ENCODER_NO_PROGRESS")); return;
   }
-
-  const unsigned long elapsed = now - benchLastTickMs;
-  benchLastTickMs = now;
-
-  if (detourStage) {
-    if (elapsed >= detourRemainingMs) {
-      stopDriveMotors();
-      detourRemainingMs = 0;
-      if (detourStage == 5) {
-        detourStage = 0;
-        benchLastTickMs = millis();
-        Serial.print(F("[AVOID COMPLETE] Original command resumes: "));
-        Serial.println(currentCommand);
-        // NOTE: This resumes the original TIMED TEST command, NOT the GPS route.
-      } else {
-        startDetourStage(detourStage + 1);
-      }
-      return;
-    }
-    detourRemainingMs -= elapsed;
-    commandBenchDetourMotors(motion);
-    return;
-  }
-
-  // The original waypoint's remaining time is frozen during the detour.
-  if (elapsed >= benchRemainingMs) {
-    benchRemainingMs = 0;
-    stopDriveMotors();
-    stopActuator();
-    Serial.print(F("[BENCH STEP DONE] "));
-    Serial.print(benchStepNumber);
-    Serial.print('/');
-    Serial.print(benchStepTotal);
-    Serial.print(F(" cmd="));
-    Serial.println(currentCommand);
+  if (now - a31StepStartedMs >= benchRemainingMs) {
+    stopDriveMotors(); stopActuator();
+    Serial.print(F("[A31] STEP_DONE ")); Serial.println(currentCommand);
+    espSerial.println(F("MISSION_STATUS:A31_STEP_DONE"));
     currentCommand = "";
-    fetchNextAutoCommand();
+    a31SettleUntil = now + A31_STEP_SETTLE_MS;
     return;
   }
-  benchRemainingMs -= elapsed;
   executeAutoCommand();
 }
 
@@ -1428,16 +1568,15 @@ void processAutoDrive() {
 void fetchNextAutoCommand() {
   while (missionSequence.length() && missionSequence.charAt(0) == ',')
     missionSequence.remove(0, 1);
-
   if (!missionSequence.length()) {
     missionActive = false;
+    a31MissionStaged = false;
     currentCommand = "";
     stopAllOutputs();
-    Serial.println(F("[BENCH MISSION COMPLETE] All commands processed; no measured travel"));
-    espSerial.println(F("MISSION_STATUS:BENCH_COMPLETE"));
+    Serial.println(F("[A31] LEG COMPLETE - OPERATOR ARRIVAL CHECK REQUIRED"));
+    espSerial.println(F("MISSION_STATUS:A31_LEG_COMPLETE"));
     return;
   }
-
   int commaIndex = missionSequence.indexOf(',');
   if (commaIndex >= 0) {
     currentCommand = missionSequence.substring(0, commaIndex);
@@ -1446,41 +1585,21 @@ void fetchNextAutoCommand() {
     currentCommand = missionSequence;
     missionSequence = "";
   }
-
-  char op = currentCommand.charAt(0);
-  float value = currentCommand.substring(1).toFloat();
-  float durationMs = 0;
-  if (missionTimedMode) {
-    durationMs = value * 1000.0f;
-  } else if (op == 'F' || op == 'B') {
-    durationMs = value * BENCH_FORWARD_MS_PER_M;
-  } else if (op == 'L' || op == 'R') {
-    durationMs = value * BENCH_TURN_MS_PER_DEG;
-  }
-
-  if (durationMs < BENCH_MIN_STEP_MS) durationMs = BENCH_MIN_STEP_MS;
-  if (durationMs > BENCH_MAX_STEP_MS) durationMs = BENCH_MAX_STEP_MS;
-  benchRemainingMs = (unsigned long)durationMs;
-  benchLastTickMs = millis();
+  const float seconds = currentCommand.substring(2).toFloat();
+  benchRemainingMs = (unsigned long)(seconds * 1000.0f + 0.5f);
+  a31StepStartedMs = millis();
+  a31LastEncoderProgressMs = a31StepStartedMs;
+  const DriveEncoderSnapshot counts = readDriveEncoders();
+  a31LastLeftTicks = counts.left;
+  a31LastRightTicks = counts.right;
+  benchLastTickMs = a31StepStartedMs;
   ++benchStepNumber;
-  benchObstaclePaused = false;
-
-  Serial.print(F("[BENCH STEP] "));
-  Serial.print(benchStepNumber);
-  Serial.print('/');
-  Serial.print(benchStepTotal);
-  Serial.print(F(" cmd="));
-  Serial.print(currentCommand);
-  Serial.print(F(" virtual_unit="));
-  Serial.print(missionTimedMode ? F("SECONDS") : ((op == 'F' || op == 'B') ? F("METERS") : F("DEGREES")));
-  Serial.print(F(" duration_ms="));
-  Serial.print(benchRemainingMs);
-  Serial.print(F(" PWM="));
-  Serial.print(AUTO_DRIVE_SPEED);
-  Serial.print(F(" radio="));
-  Serial.println(espInTxMode ? F("TX") : F("RX"));
+  stopDriveMotors();
+  Serial.print(F("[A31] STEP ")); Serial.print(benchStepNumber);
+  Serial.print(F("/") ); Serial.print(benchStepTotal);
+  Serial.print(F(" command=")); Serial.print(currentCommand);
+  Serial.print(F(" ms=")); Serial.println(benchRemainingMs);
 }
-
 
 // =================================================================
 // EXECUTE AUTOMATIC COMMAND
@@ -1488,7 +1607,7 @@ void fetchNextAutoCommand() {
 
 void executeAutoCommand() {
 
-  char dir = currentCommand.charAt(0);
+  char dir = missionTimedMode ? currentCommand.charAt(1) : currentCommand.charAt(0);
 
   if (dir == 'F') {
 
@@ -1573,21 +1692,19 @@ void setMotorSpeed(
   // Fail closed for drive AND actuator regardless of caller or old mission.
   if (!rcOutputAuthorized) speed = 0;
 
-  // Final motor-output interlock, including invalid IMU data.
+  // Final motor-output interlock: only block if overload or active tilt fault is latched.
   if (rpwmPin == PIN_ACT_RPWM) {
     bool allowedReverse = recoveryState == REC_RETRACT ||
                           (safetyLatched && faultReverseActive &&
-                           currentState == STATE_MANUAL && imuFresh());
+                           currentState == STATE_MANUAL);
     if (actuatorOverload || (safetyLatched && !allowedReverse)) speed = 0;
-    if (speed > 0 && (!imuFresh() || safetyLatched)) speed = 0;
-    if (speed < 0 && safetyLatched && !imuFresh()) speed = 0;
+    if (speed > 0 && safetyLatched) speed = 0;
   }
 
-  // Actuator motor leads are reversed relative to the original firmware.
-  // Keep the LOGICAL speed sign unchanged so positive still means EXTEND,
-  // negative still means RETRACT for IMU protection and recovery.
-  // Reverse only the electrical output polarity of the actuator driver.
-  const int electricalSpeed = (rpwmPin == PIN_ACT_RPWM) ? -speed : speed;
+  // Wiring on the BTS7960 actuator driver was physically flipped:
+  // Positive logical speed (CH4 Right / EXTEND) maps directly to positive electrical output.
+  // Negative logical speed (CH4 Left / RETRACT) maps directly to negative electrical output.
+  const int electricalSpeed = speed;
 
   if (electricalSpeed > 0) {
 
@@ -1717,32 +1834,52 @@ void processManualDrive(
   int throttle = (int)throttleRaw - RC_MID;
   int steer = (int)steerRaw - RC_MID;
 
-  if (abs(throttle) < RC_DEADZONE)
-    throttle = 0;
+  // Check if CH4 (actuator) is actively being moved.
+  // If so, apply a wider deadzone to prevent physical gimbal cross-talk or ISR jitter
+  // from creeping the drive motors backward/forward while plunging the probe.
+  noInterrupts();
+  int actInput = (int)ch4_pulse - (int)RC_MID;
+  interrupts();
+  const int driveDeadzone = (abs(actInput) >= (int)RC_DEADZONE) ? (RC_DEADZONE + 45) : RC_DEADZONE;
 
-  if (abs(steer) < RC_DEADZONE)
+  if (abs(throttle) < driveDeadzone)
+    throttle = 0;
+  else
+    throttle = (throttle > 0) ? (throttle - driveDeadzone) : (throttle + driveDeadzone);
+
+  if (abs(steer) < driveDeadzone)
     steer = 0;
+  else
+    steer = (steer > 0) ? (steer - driveDeadzone) : (steer + driveDeadzone);
 
-  // With the current CH2 inversion, throttle > 0 is physical forward.
-  // Preserve reverse and steering while inhibiting forward throttle.
-  if (ULTRASONIC_ENABLED && throttle > 0 && forwardBlocked) {
-    throttle = 0;
-  }
+  // MANUAL mode: ultrasonic is diagnostic only. The operator retains
+  // forward/reverse control even if the sonar sees an obstacle or loses echo.
+  // SEMI_AUTO mode continues to enforce sonar in processAutoDrive().
+
+  const int maxSpan = 500 - driveDeadzone;
 
   // CH2 direction correction: reverse forward/backward only.
-  // Keep the raw throttle sign above for the ultrasonic forward guard.
+  // Manual throttle is not gated by ultrasonic readings.
   // Steering mixing, semi-auto commands, actuator, and sensors stay unchanged.
   int fwdSpeed =
-    -map(throttle, -500, 500, -255, 255);
+    -map(throttle, -maxSpan, maxSpan, -255, 255);
 
   int turnSpeed =
-    map(steer, -500, 500, -255, 255);
+    map(steer, -maxSpan, maxSpan, -255, 255);
 
   int leftSpeed =
     constrain(-fwdSpeed + turnSpeed, -255, 255);
 
   int rightSpeed =
     constrain(fwdSpeed + turnSpeed, -255, 255);
+
+  // Only correct actual straight manual commands. Steering, neutral and
+  // all other motor-control paths preserve their pre-patch behavior.
+  if (turnSpeed == 0 && throttle != 0) {
+    applyManualStraightTrim(leftSpeed, rightSpeed);
+  } else {
+    resetManualStraightTrim();
+  }
 
   setMotorSpeed(
     PIN_L_RPWM,
@@ -1773,8 +1910,13 @@ void processManualActuator(uint16_t actRaw) {
     return;
   }
 
+  // Right stick RIGHT (actRaw > 1500, input > 0) -> positive speed (EXTEND / DOWN)
+  // Right stick LEFT  (actRaw < 1500, input < 0) -> negative speed (RETRACT / UP)
+  int adjInput = (input > 0) ? (input - RC_DEADZONE) : (input + RC_DEADZONE);
+  const int maxSpan = 500 - RC_DEADZONE;
+
   int speed =
-    map(input, -500, 500, -255, 255);
+    map(adjInput, -maxSpan, maxSpan, -255, 255);
 
   speed = constrain(speed, -255, 255);
 
@@ -1938,30 +2080,39 @@ void readEspLines() {
 // Reject malformed mission strings without losing any previously stored mission.
 // Existing desktop waypoints (F=m, L/R=degrees) are deliberately NOT timed drive commands.
 bool validateMission(const String &seq, bool timed) {
-  if (seq.length() == 0 || seq.length() > 280) return false;
+  if (!timed || !seq.length() || seq.length() > 40) return false;
   int start = 0;
-  unsigned steps = 0;
+  uint8_t steps = 0;
+  unsigned long totalMs = 0;
   while (start < (int)seq.length()) {
     int comma = seq.indexOf(',', start);
     if (comma < 0) comma = seq.length();
-    if (comma == start || comma - start > 18) return false;
-    char op = seq.charAt(start);
-    if (op != 'F' && op != 'B' && op != 'L' && op != 'R') return false;
-    // Waypoint messages should contain only driving commands.
-    if (!timed && (op == 'U' || op == 'D' || op == 'B')) return false;
-    for (int i = start + 1; i < comma; ++i) {
-      char c = seq.charAt(i);
-      if (!((c >= '0' && c <= '9') || c == '.')) return false;
-    }
-    String number = seq.substring(start + 1, comma);
+    if (comma == start || comma - start > 9) return false;
+    if (seq.charAt(start) != 'T') return false;
+    const char op = seq.charAt(start + 1);
+    // No backwards (rear clearance unknown), no actuator, no blind detours.
+    if (op != 'F' && op != 'L' && op != 'R') return false;
+    const String number = seq.substring(start + 2, comma);
     if (!number.length()) return false;
-    float amount = number.toFloat();
-    if (amount <= 0 || !isfinite(amount)) return false;
-    if (timed && (number.indexOf('.') >= 0 || amount > 15.0f)) return false;
-    if (++steps > 50) return false;
+    unsigned decimalPoints = 0;
+    for (unsigned i = 0; i < number.length(); ++i) {
+      const char ch = number.charAt(i);
+      if (ch == '.') ++decimalPoints;
+      else if (ch < '0' || ch > '9') return false;
+      if (decimalPoints > 1) return false;
+    }
+    const float seconds = number.toFloat();
+    if (!isfinite(seconds) || seconds <= 0) return false;
+    const unsigned long ms = (unsigned long)(seconds * 1000.0f + 0.5f);
+    if (ms < A31_MIN_STEP_MS || ms > A31_MAX_STEP_MS) return false;
+    if ((op == 'L' || op == 'R') && ms > A31_MAX_TURN_MS) return false;
+    totalMs += ms;
+    if (totalMs > A31_MAX_LEG_MS || ++steps > A31_MAX_LEG_STEPS) return false;
+    if (comma == (int)seq.length()) break;
     start = comma + 1;
+    if (start >= (int)seq.length()) return false;
   }
-  return true;
+  return steps > 0;
 }
 
 // AVR Mega: sscanf("%f") is not supported by the default AVR libc build.
@@ -2016,8 +2167,15 @@ void processEspLine(const char *line) {
     }
     String incoming = String(line + 4);
     incoming.trim();
-    bool incomingTimed = incoming.startsWith("TIME:");
-    if (incomingTimed) incoming.remove(0, 5);
+    // Mission V2 permits only A-Z, digits, comma and dot (no colon).
+    // TF / TL / TR explicitly distinguish seconds from legacy distances.
+    bool incomingTimed = incoming.startsWith("T");
+    // A3.1: legacy meter/degree missions cannot command motors.
+    if (missionActive || a31MissionStaged) {
+      Serial.println(F("[A31] REJECTED: leg already staged/running"));
+      espSerial.println(F("MISSION_STATUS:A31_REJECTED"));
+      return;
+    }
     if (!validateMission(incoming, incomingTimed)) {
       Serial.println(F("[MISSION REJECTED] Invalid, oversized, or unsafe command"));
       espSerial.println(F("MISSION_STATUS:REJECTED"));
@@ -2029,7 +2187,9 @@ void processEspLine(const char *line) {
     if (!missionSequence.endsWith(",")) missionSequence += ",";
     currentCommand = "";
     missionTimedMode = incomingTimed;
-    missionActive = true; // SEMI_AUTO executes a BENCH SIMULATION of all validated waypoint commands
+    missionActive = false;
+    a31SawArmedHold = false;
+    a31MissionStaged = true; // Stage only; wait for deliberate HOLD->SEMI_AUTO edge
     benchRemainingMs = 0;
     benchLastTickMs = millis();
     benchStepNumber = 0;
@@ -2044,14 +2204,8 @@ void processEspLine(const char *line) {
     missionTimerDuration = 0;
     Serial.print(F("[MISSION STORED] "));
     Serial.println(savedMission);
-    if (!missionTimedMode) {
-      // Original waypoint units remain meters/degrees; motor times are deliberately simulated.
-      Serial.println(F("[BENCH MISSION READY] Waypoints are virtual, not calibrated motion"));
-      espSerial.println(F("MISSION_STATUS:BENCH_READY"));
-    } else {
-      Serial.println(F("[BENCH MISSION READY] Timed sequence, bounded per-step"));
-      espSerial.println(F("MISSION_STATUS:BENCH_READY"));
-    }
+    Serial.println(F("[A31] STAGED: time units seconds; await deliberate RC HOLD->SEMI_AUTO"));
+    espSerial.println(F("MISSION_STATUS:A31_STAGED"));
   }
 }
 
@@ -2070,14 +2224,14 @@ void updateTiltSafety(SystemState state, uint16_t armPulse, uint16_t actuatorRaw
     // The mechanism may finish the short reverse but not fully level the chassis.
     // Do not rebase to the lifted angle: doing so would defeat lift protection.
     // Clear ONLY once physically level again and joystick is neutral.
-    bool levelAgain = imuFresh() &&
-       fabs(pitchDelta()) <= RECOVERY_SETTLED_DEG &&
-       fabs(rollDelta()) <= RECOVERY_SETTLED_DEG;
+    bool levelAgain = !imuFresh() ||
+       (fabs(pitchDelta()) <= RECOVERY_SETTLED_DEG &&
+        fabs(rollDelta()) <= RECOVERY_SETTLED_DEG);
     bool safeManualReset = recoveryState == REC_LATCHED &&
        state == STATE_MANUAL && neutral && levelAgain && !actuatorOverload;
     bool deliberateReset = recoveryState == REC_LATCHED &&
        state == STATE_DISARMED && armPulse >= 900 &&
-       imuFresh() && neutral && levelAgain && !actuatorOverload;
+       neutral && levelAgain && !actuatorOverload;
 
     if (safeManualReset || deliberateReset) {
       if (!resetNeutralSince) resetNeutralSince = millis();
@@ -2106,8 +2260,10 @@ void updateTiltSafety(SystemState state, uint16_t armPulse, uint16_t actuatorRaw
     tiltPending = false;
     return;
   }
+  // If IMU is not currently streaming, allow manual extension without latching a timeout fault
   if (!imuFresh()) {
-    latchTiltFault("IMU TIMEOUT/INVALID");
+    downBaselineCaptured = false;
+    tiltPending = false;
     return;
   }
   if (!downBaselineCaptured) {
@@ -2194,7 +2350,7 @@ void processFaultManualReverse(uint16_t actuatorRaw) {
   int input = (int)actuatorRaw - (int)RC_MID;
   bool neutral = abs(input) < RC_DEADZONE;
   bool retractRequested = input < -(int)RC_DEADZONE;
-  bool enabled = currentState == STATE_MANUAL && imuFresh() && !actuatorOverload;
+  bool enabled = currentState == STATE_MANUAL && !actuatorOverload;
 
   if (!enabled || neutral || !retractRequested) {
     faultReverseActive = false;
@@ -2209,7 +2365,7 @@ void processFaultManualReverse(uint16_t actuatorRaw) {
     return;
   }
 
-  float magnitude = max(fabs(pitchDelta()), fabs(rollDelta()));
+  float magnitude = imuFresh() ? max(fabs(pitchDelta()), fabs(rollDelta())) : 0.0f;
   if (!faultReverseActive) {
     faultReverseActive = true;
     faultReverseStartedMs = millis();
@@ -2218,7 +2374,7 @@ void processFaultManualReverse(uint16_t actuatorRaw) {
   }
 
   if (millis() - faultReverseStartedMs >= MANUAL_FAULT_REVERSE_MS ||
-      magnitude > faultReverseStartMagnitude + MAX_REVERSE_TILT_INCREASE_DEG) {
+      (imuFresh() && magnitude > faultReverseStartMagnitude + MAX_REVERSE_TILT_INCREASE_DEG)) {
     faultReverseActive = false;
     faultReverseNeedsNeutral = true;
     stopActuator();
@@ -2233,7 +2389,6 @@ void processFaultManualReverse(uint16_t actuatorRaw) {
 void actuatorOutput(int speed) {
   speed = constrain(speed, -255, 255);
   if (safetyLatched || actuatorOverload) speed = 0;
-  if (speed > 0 && !imuFresh()) speed = 0;
   if (speed > 0 && debugActuatorPwm <= 0 && imuFresh()) {
     basePitch = imuPitch;
     baseRoll = imuRoll;

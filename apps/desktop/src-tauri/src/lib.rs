@@ -13,6 +13,7 @@ use tauri::{Emitter, Manager, State};
 
 mod mission_deployment;
 mod mission_protocol;
+mod timed_mission;
 mod encoder_telemetry;
 mod serial_lines;
 static RADIO: OnceLock<Mutex<mission_deployment::Radio>> = OnceLock::new();
@@ -935,8 +936,14 @@ fn get_rx_board_connection() -> serde_json::Value {
 }
 
 #[tauri::command]
-fn prepare_mission_deployment(app: tauri::AppHandle, sequence: String) -> Result<mission_deployment::Deployment, String> {
-    update_radio(&app, |radio| radio.begin(sequence))
+fn prepare_mission_deployment(app: tauri::AppHandle, sequence: String, timed: Option<bool>) -> Result<mission_deployment::Deployment, String> {
+    update_radio(&app, |radio| {
+        if timed.unwrap_or(false) {
+            timed_mission::prepare(radio, sequence)
+        } else {
+            radio.begin(sequence)
+        }
+    })
 }
 
 #[tauri::command]

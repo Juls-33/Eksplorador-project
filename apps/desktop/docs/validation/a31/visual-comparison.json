@@ -1,0 +1,74 @@
+[
+  {
+    "width": 1440,
+    "height": 900,
+    "identicalBounds": [
+      "sidebar",
+      "header",
+      "directory",
+      "map"
+    ],
+    "detailsBounds": {
+      "x": 1044.171875,
+      "y": 136.234375,
+      "width": 356.8125
+    },
+    "detailsHeightBefore": 743.765625,
+    "detailsHeightAfter": 743.765625,
+    "inheritedLeafletHeight": 680.765625
+  },
+  {
+    "width": 1024,
+    "height": 768,
+    "identicalBounds": [
+      "sidebar",
+      "header",
+      "directory",
+      "map"
+    ],
+    "detailsBounds": {
+      "x": 264,
+      "y": 582.234375,
+      "width": 721
+    },
+    "detailsHeightBefore": 1693.5625,
+    "detailsHeightAfter": 2123.5625,
+    "inheritedLeafletHeight": 0
+  },
+  {
+    "width": 800,
+    "height": 900,
+    "identicalBounds": [
+      "sidebar",
+      "header",
+      "directory",
+      "map"
+    ],
+    "detailsBounds": {
+      "x": 264,
+      "y": 875.234375,
+      "width": 497
+    },
+    "detailsHeightBefore": 1759.5,
+    "detailsHeightAfter": 2220.5,
+    "inheritedLeafletHeight": 0
+  },
+  {
+    "width": 800,
+    "height": 600,
+    "identicalBounds": [
+      "sidebar",
+      "header",
+      "directory",
+      "map"
+    ],
+    "detailsBounds": {
+      "x": 264,
+      "y": 875.234375,
+      "width": 497
+    },
+    "detailsHeightBefore": 1759.5,
+    "detailsHeightAfter": 2220.5,
+    "inheritedLeafletHeight": 0
+  }
+]

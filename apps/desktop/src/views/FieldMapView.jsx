@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { appDate } from '../utils/time';
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useReducer, useCallback } from 'react';
 import HelpButton from '../components/ui/HelpButton';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -27,7 +27,12 @@ import LoRaConnectionStatus from '../components/LoRaConnectionStatus';
 import DrivetrainTelemetry from '../components/DrivetrainTelemetry';
 import { useLoRaConnection } from '../hooks/useLoRaConnection';
 import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
-import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
+import { firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
+import {
+  createMissionHoldStore, estimatedPosition, gpsPosition, hasSafetyHold, initialSupervisedMission, sampleMeasuredCoordinates,
+  supervisedMissionReducer, planMovementLeg,
+} from '../utils/supervisedMission';
+import { serializeTimedLeg } from '../utils/timedMission';
 import { MOISTURE_LAYER, PH_LAYER } from '../utils/layerBands';
 import {
   saveSoilSample,
@@ -51,6 +56,12 @@ import './FieldMapView.css';
 // --- Constants & Layer Configurations ---
 const DEFAULT_CENTER = [14.6095, 120.9895];
 const EMPTY = [];
+const missionHoldStore = createMissionHoldStore();
+const operatorActions = new Set([
+  'SELECT_PIN', 'CONFIRM_START', 'MANUAL_TAKEOVER', 'INSPECT', 'ACCEPT_ARRIVAL',
+  'REPLAN', 'CONFIRM_RETRACTED', 'AUTHORIZE_NEXT', 'REPORT_OPERATOR_FAULT',
+  'CONFIRM_OPERATOR_HAZARD', 'REVIEW_OPERATOR_REPORT', 'CANCEL',
+]);
 
 const STATUS_LABELS = {
   planned: 'Planned',
@@ -151,6 +162,7 @@ export default function FieldMapView({ onHelp }) {
   const receiverStatus = useLoRaConnection();
   const [deploymentSequence, setDeploymentSequence] = useState(null);
   const deploymentOpening = useRef(false);
+  const deploymentContext = useRef(null);
   const [fields, setFields] = useState([]);
   const [missions, setMissions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -168,9 +180,17 @@ export default function FieldMapView({ onHelp }) {
   const sampleCapturedForInsertionRef = useRef(false);
 
   // Live Rover Telemetry
-  const [roverPos, setRoverPos] = useState([14.6094, 120.9896]);
-  const [roverHeading, setRoverHeading] = useState(0);
-  const [manualReached, setManualReached] = useState([]); // pin indexes the operator ticked off by hand
+  const [roverPos, setRoverPos] = useState(null);
+  const [roverHeading, setRoverHeading] = useState(null);
+  const [supervision, dispatchSupervision] = useReducer(supervisedMissionReducer, undefined, initialSupervisedMission);
+  const supervisionRef = useRef(supervision);
+  supervisionRef.current = supervision;
+  const [positionCandidate, setPositionCandidate] = useState(null);
+  const [selectingPosition, setSelectingPosition] = useState(false);
+  const [sensorReceivedAt, setSensorReceivedAt] = useState(null);
+  const [positionNow, setPositionNow] = useState(() => Date.now());
+  const savingSampleRef = useRef(false);
+  const missionGeneration = useRef(0);
   const [showSamplePins, setShowSamplePins] = useState(false); // numbered pins for every recorded sample
 
   // Wizard: IDLE -> DRAWING_BOUNDARY -> (PLACING_PINS ->) launch.
@@ -234,11 +254,8 @@ export default function FieldMapView({ onHelp }) {
   const activeBoundary = wizardStep !== 'IDLE' ? tempBoundary : (viewField?.boundary || EMPTY);
   const displayedWaypoints = wizardStep !== 'IDLE' ? tempWaypoints : (currentSelected?.waypoints || EMPTY);
 
-  // Which pins count as reached. Derived from the mission's recorded samples —
-  // any pin, in any order (see utils/pinProgress.js) — plus any the operator
-  // ticked off by hand with "Reached". Reading the samples, instead of hooking
-  // the sensor listener, keeps navigation progress completely separate from
-  // recording: samples are saved wherever the rover is, near a pin or not.
+  // Pin completion requires a saved sample and explicit probe clearance.
+  // Historical sample proximity remains available to reports, not progression.
   const missionSamples = useMemo(
     () => liveSamples.filter((s) => currentSelected && String(s.mission_id) === String(currentSelected.id)),
     [liveSamples, currentSelected?.id]
@@ -265,25 +282,48 @@ export default function FieldMapView({ onHelp }) {
       })
       .filter(Boolean);
   }, [numberedSamples, showSamplePins, wizardStep]);
-  const { reached: autoReached, last: lastAutoReached } = useMemo(
-    () =>
-      wizardStep === 'IDLE'
-        ? computeReachedPins(missionSamples, displayedWaypoints)
-        : { reached: new Set(), last: null }, // draft pins have no recorded samples
-    [missionSamples, displayedWaypoints, wizardStep]
-  );
+  const mapLabeledPoints = useMemo(() => {
+    const estimate = positionCandidate?.source === 'OPERATOR_ESTIMATED' ? positionCandidate
+      : supervision.arrival?.source === 'OPERATOR_ESTIMATED' ? supervision.arrival : null;
+    return estimate && wizardStep === 'IDLE' ? [...samplePins, {
+      lat: estimate.coords[0], lng: estimate.coords[1], label: 'E', isAnchor: true,
+      title: 'Operator-estimated rover position (not GPS)',
+    }] : samplePins;
+  }, [samplePins, positionCandidate, supervision.arrival, wizardStep]);
   const reachedPinIdxs = useMemo(
-    () => new Set([...autoReached, ...manualReached]),
-    [autoReached, manualReached]
+    () => new Set(supervision.completed),
+    [supervision.completed]
   );
-  // The pin to head for: the first one not yet reached.
-  const currentWaypointIdx = firstPendingPin(displayedWaypoints.length, reachedPinIdxs);
+  const currentWaypointIdx = supervision.phase === 'COMPLETE' ? displayedWaypoints.length : supervision.pinIndex;
+  const freshGps = gpsPosition(latestSensorData, sensorReceivedAt, positionNow);
+  const supervisedActive = wizardStep === 'IDLE' && currentSelected?.status === 'in_progress';
 
-  // Hand-ticked pins are indexes into whichever pin list is on screen, so drop
-  // them when switching between a mission's pins and the draft pins.
   useEffect(() => {
-    setManualReached([]);
-  }, [wizardStep]);
+    missionGeneration.current += 1;
+    dispatchSupervision({ type: 'RESET', missionId: selectedMissionId, savedSafety: missionHoldStore.restore(selectedMissionId) });
+    setPositionCandidate(null);
+    setSelectingPosition(false);
+  }, [selectedMissionId, wizardStep]);
+
+  useEffect(() => {
+    if (supervision.missionId === selectedMissionId) missionHoldStore.remember(supervision);
+  }, [supervision, selectedMissionId]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setPositionNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (receiverStatus.hadConnection && (!receiverStatus.connected || receiverStatus.connectionError) &&
+        ['MANUAL', 'INSPECTION', 'SAMPLING', 'RETRACT', 'NEXT_LEG', 'UPLOADING', 'AWAITING_START', 'EXECUTION_UNVERIFIED'].includes(supervision.phase)) {
+      setPositionCandidate(null);
+      setSelectingPosition(false);
+      dispatchSupervision({ type: 'INTERRUPT', reason: receiverStatus.connectionError
+        ? `Desktop receiver status error: ${receiverStatus.connectionError}`
+        : `Desktop receiver disconnected${receiverStatus.port ? ` (${receiverStatus.port})` : ''} during an active operation. Execution is unverified.` });
+    }
+  }, [receiverStatus.hadConnection, receiverStatus.connected, receiverStatus.connectionError, supervision.phase]);
 
   // Frame the map on the field (or, for legacy fields with no boundary, on its samples).
   // Memoized so the map only re-fits when the selection changes, not on every render.
@@ -430,9 +470,9 @@ export default function FieldMapView({ onHelp }) {
   };
 
   const selectMission = (id) => {
+    if (id === selectedMissionId) return;
     setSelectedMissionId(id);
     setCompareToId(null);
-    setManualReached([]);
     sampleCapturedForInsertionRef.current = false;
     setMissionState('IDLE'); // never keep logging into a different mission by accident
     setWizardStep('IDLE');
@@ -453,17 +493,14 @@ export default function FieldMapView({ onHelp }) {
       if (data.error) return;
 
       // Always update latest real-time readings for the telemetry monitor card.
+      const receivedAt = Date.now();
       setLatestSensorData(data);
+      setSensorReceivedAt(receivedAt);
+      setPositionNow(receivedAt);
 
-      const lat = validNumber(data.lat);
-      const lng = validNumber(data.lng);
-
-      // Use live heading when the telemetry payload provides one. Different
-      // backends commonly expose this as heading, course, bearing, or gpsHeading.
-      // Keep the last known heading if no heading value is present in this packet.
-      const heading = validNumber(
-        data.heading ?? data.course ?? data.bearing ?? data.gpsHeading
-      );
+      // GPS course is not a stationary orientation measurement. A displayed
+      // heading is informational; route planning requires operator confirmation.
+      const heading = validNumber(data.heading);
 
       if (heading !== null) {
         // Normalize any negative or >360-degree value into the 0-359.999 range.
@@ -473,18 +510,8 @@ export default function FieldMapView({ onHelp }) {
       // Rover position is navigation state, not sample state. Keep the map and
       // navigation guide updated whenever valid GPS coordinates are available,
       // even if logging is paused or the soil probe is lifted.
-      const hasValidGps =
-        lat !== null &&
-        lng !== null &&
-        lat >= -90 &&
-        lat <= 90 &&
-        lng >= -180 &&
-        lng <= 180 &&
-        !(lat === 0 && lng === 0);
-
-      if (hasValidGps) {
-        setRoverPos([lat, lng]);
-      }
+      const measuredPosition = gpsPosition(data, receivedAt, receivedAt);
+      setRoverPos(measuredPosition?.coords ?? null);
 
       // Saving soil samples is separate from updating rover position.
       if (missionState !== 'IN_PROGRESS' || !currentSelected || currentSelected.status !== 'in_progress') return;
@@ -500,20 +527,18 @@ export default function FieldMapView({ onHelp }) {
         return;
       }
 
-      if (!hasValidGps || sampleCapturedForInsertionRef.current) return;
-
-      const currentCoord = [lat, lng];
-
-      if (activeBoundary.length >= 3 && !isPointInPolygon(currentCoord, activeBoundary)) {
-        return;
-      }
+      // Keep RS485 values, the existing save function and insertion deduplication.
+      // Only an operator-accepted arrival opens mission sampling, at any distance
+      // from the intended pin. No GPS is required to preserve a valid soil reading.
+      if (supervisionRef.current.phase !== 'SAMPLING' || hasSafetyHold(supervisionRef.current) ||
+          sampleCapturedForInsertionRef.current || savingSampleRef.current) return;
+      const generation = missionGeneration.current;
+      savingSampleRef.current = true;
 
       const newSample = {
         mission_id: String(currentSelected.id),
         plot: currentSelected.fieldName,
-        coords: currentCoord,
-        lat,
-        lng,
+        ...sampleMeasuredCoordinates(data, receivedAt, receivedAt),
         moisture: data.moisture,
         ph: data.ph,
         ec: data.ec,
@@ -525,6 +550,8 @@ export default function FieldMapView({ onHelp }) {
       };
 
       const saved = await saveSoilSample(newSample);
+      savingSampleRef.current = false;
+      if (generation !== missionGeneration.current) return;
       if (!saved) {
         setNotification({ type: 'error', message: 'A sample could not be saved to the database.' });
         return;
@@ -536,6 +563,7 @@ export default function FieldMapView({ onHelp }) {
       // Mark this insertion as captured only after the database save succeeds.
       // If saving fails, later telemetry from the same insertion may retry.
       sampleCapturedForInsertionRef.current = true;
+      dispatchSupervision({ type: 'SAMPLE_SAVED' });
     });
 
     return () => {
@@ -592,7 +620,10 @@ export default function FieldMapView({ onHelp }) {
   };
 
   const handleMapClick = (coords) => {
-    if (wizardStep === 'DRAWING_BOUNDARY') {
+    if (selectingPosition && wizardStep === 'IDLE') {
+      setPositionCandidate(estimatedPosition(coords));
+      setSelectingPosition(false);
+    } else if (wizardStep === 'DRAWING_BOUNDARY') {
       setTempBoundary((prev) => [...prev, coords]);
     } else if (wizardStep === 'PLACING_PINS') {
       if (tempBoundary.length >= 3 && !isPointInPolygon(coords, tempBoundary)) {
@@ -728,7 +759,6 @@ export default function FieldMapView({ onHelp }) {
     setCompareToId(null);
     setLiveSamples([]);
     sampleCapturedForInsertionRef.current = false;
-    setManualReached([]);
     resetWizard();
     setMissionState('IN_PROGRESS'); // Auto-start telemetry logging
     setNotification({ type: 'success', message: `Mission "${created.name}" launched!` });
@@ -743,6 +773,7 @@ export default function FieldMapView({ onHelp }) {
   }, [wizardStep]);
 
   const handleFinishMission = async (id) => {
+    if (supervisionRef.current.phase !== 'COMPLETE' || hasSafetyHold(supervisionRef.current)) return;
     const ok = await updateMissionStatus(id, 'completed');
     if (!ok) {
       setNotification({ type: 'error', message: 'The mission status could not be updated.' });
@@ -762,18 +793,34 @@ export default function FieldMapView({ onHelp }) {
       return;
     }
     setMissions((prev) => prev.map((m) => (m.id === id ? { ...m, status: 'in_progress' } : m)));
+    missionGeneration.current += 1;
+    dispatchSupervision({ type: 'RESET', missionId: id, savedSafety: missionHoldStore.restore(id) });
+    setPositionCandidate(null);
+    setSelectingPosition(false);
+    sampleCapturedForInsertionRef.current = false;
     setSelectedMissionId(id);
     setWizardStep('IDLE');
     setMissionState('IN_PROGRESS');
     setNotification({ type: 'success', message: 'Mission resumed — logging will continue for the remaining pins.' });
   };
 
-  const handleAdvanceWaypoint = () => {
-    // Marks the current target as reached by hand. This changes only the
-    // navigation progress. Rover position must come from live GPS telemetry
-    // and should never be faked by a waypoint click.
-    if (currentWaypointIdx >= displayedWaypoints.length) return;
-    setManualReached((prev) => (prev.includes(currentWaypointIdx) ? prev : [...prev, currentWaypointIdx]));
+  const handleSupervisionAction = (event) => {
+    if (!supervisedActive || !operatorActions.has(event.type)) return;
+    if (['MANUAL_TAKEOVER', 'INSPECT', 'REPLAN', 'AUTHORIZE_NEXT', 'REPORT_OPERATOR_FAULT', 'REVIEW_OPERATOR_REPORT', 'CANCEL'].includes(event.type)) {
+      setPositionCandidate(null);
+      setSelectingPosition(false);
+    }
+    dispatchSupervision({ ...event, now: Date.now() });
+  };
+
+  const handleCancelSupervisedMission = async () => {
+    // Physical stop is always an RC action; cancelling only closes this workflow.
+    handleSupervisionAction({ type: 'CANCEL' });
+    setMissionState('PAUSED');
+    const id = currentSelected.id;
+    const ok = await updateMissionStatus(id, 'cancelled');
+    if (ok) setMissions(previous => previous.map(mission => mission.id === id ? { ...mission, status: 'cancelled' } : mission));
+    else setNotification({ type: 'error', message: 'Workflow cancelled locally; database mission status could not be updated. Use physical RC HOLD/DISARM.' });
   };
 
   // ---------- Field management (rename / delete) ----------
@@ -835,22 +882,70 @@ export default function FieldMapView({ onHelp }) {
   const labelStyle = { fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' };
   const pointCount = wizardStep === 'DRAWING_BOUNDARY' ? tempBoundary.length : tempWaypoints.length;
 
-    const handleSendMission = async (sequence) => {
-      if (!sequence?.trim()) {
-        throw new Error('No movement sequence generated.');
-      }
+  const handleSendMission = async () => {
+    const state = supervisionRef.current;
+    if (!supervisedActive || state.phase !== 'READY' || hasSafetyHold(state) || !state.probeRetracted) throw new Error('Confirm a new start, heading and probe clearance before uploading a leg.');
+    if (!receiverStatus.connected || receiverStatus.connectionError) throw new Error('Connect the desktop receiver before uploading a timed leg.');
+    if (deploymentOpening.current || deploymentSequence !== null) return;
+    // Rebuild at the boundary from the confirmed origin and just the selected
+    // target. The caller cannot inject a full route or a legacy sequence.
+    const plan = planMovementLeg({ start: state.start, heading: state.heading, target: displayedWaypoints[state.pinIndex] });
+    if (plan.error) throw new Error(plan.error);
+    const sequence = serializeTimedLeg(plan.instructions);
+    deploymentContext.current = { missionId: state.missionId, generation: missionGeneration.current, sequence, deliveryPossible: false, authorizationRecorded: false };
+    deploymentOpening.current = true;
+    dispatchSupervision({ type: 'BEGIN_UPLOAD' });
+    setDeploymentSequence(sequence);
+  };
 
-      if (deploymentOpening.current || deploymentSequence !== null) return;
-      deploymentOpening.current = true;
-      setDeploymentSequence(sequence);
-    };
+  const handleDeploymentEvidence = useCallback(deployment => {
+    const context = deploymentContext.current;
+    if (!context || context.generation !== missionGeneration.current || context.missionId !== supervisionRef.current.missionId) return;
+    context.id = deployment.id;
+    // A partial serial write can fail before packet_submitted becomes true.
+    // Keep that uncertain outcome held rather than treating it as an unsent leg.
+    context.deliveryPossible ||= Boolean(deployment.packet_submitted || deployment.ground_submitted || deployment.radio_transmitted || deployment.acknowledged ||
+      ['TRANSMITTING', 'WAIT_ACK', 'RETRYING', 'ACKNOWLEDGED', 'RESTORE', 'COMPLETE'].includes(deployment.phase) ||
+      ['SERIAL_WRITE_FAILED', 'TX_COMPLETION_TIMEOUT', 'ACK_EXHAUSTED', 'TRANSMISSION_FAILED', 'USB_DISCONNECTED'].includes(deployment.failure_code));
+    const telemetryRestored = deployment.phase === 'COMPLETE' && deployment.acknowledged && deployment.telemetry_seen && deployment.rx_restored;
+    dispatchSupervision({ type: 'RADIO_EVIDENCE', transmitted: deployment.radio_transmitted, acknowledged: deployment.acknowledged, telemetryRestored });
+    if (telemetryRestored) dispatchSupervision({ type: 'UPLOAD_READY' });
+  }, []);
+
+  const handleAuthorizeTimedStart = confirmations => {
+    const context = deploymentContext.current;
+    const deployment = receiverStatus.deployment;
+    if (!context || context.generation !== missionGeneration.current || !receiverStatus.connected || receiverStatus.connectionError || receiverStatus.mode !== 'RX' ||
+        deployment?.id !== context.id || deployment.phase !== 'COMPLETE' || !deployment.acknowledged || !deployment.telemetry_seen || !deployment.rx_restored) return false;
+    const event = { type: 'AUTHORIZE_TIMED_START', ...confirmations };
+    if (supervisedMissionReducer(supervisionRef.current, event) === supervisionRef.current) return false;
+    context.authorizationRecorded = true;
+    setPositionCandidate(null);
+    setSelectingPosition(false);
+    dispatchSupervision(event);
+    return true; // A record of physical RC actions, never a serial start command.
+  };
+
+  const handleCloseDeployment = () => {
+    const context = deploymentContext.current;
+    if (context && context.generation === missionGeneration.current && !context.authorizationRecorded) {
+      dispatchSupervision({ type: 'UPLOAD_CLOSED', deliveryPossible: context.deliveryPossible });
+    }
+    deploymentContext.current = null;
+    deploymentOpening.current = false;
+    setDeploymentSequence(null);
+  };
 
   return (
     <div className="field-map-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
       {deploymentSequence !== null && (
         <MissionDeploymentWizard
           sequence={deploymentSequence}
-          onClose={() => { deploymentOpening.current = false; setDeploymentSequence(null); }}
+          timed
+          blocked={!supervisedActive || hasSafetyHold(supervision) || !['UPLOADING', 'AWAITING_START'].includes(supervision.phase)}
+          onDeploymentUpdate={handleDeploymentEvidence}
+          onAuthorizeStart={handleAuthorizeTimedStart}
+          onClose={handleCloseDeployment}
         />
       )}
 
@@ -1138,14 +1233,15 @@ export default function FieldMapView({ onHelp }) {
               boundary={activeBoundary}
               waypoints={displayedWaypoints}
               heatPoints={heatPointsForLayer}
-              labeledPoints={samplePins}
+              labeledPoints={mapLabeledPoints}
               focusPoints={focusPoints}
               roverPos={roverPos}
+              showRover={Boolean(freshGps)}
               onMapClick={handleMapClick}
               interactionMode={
                 wizardStep === 'DRAWING_BOUNDARY'
                   ? 'DRAW_BOUNDARY'
-                  : wizardStep === 'PLACING_PINS' && !pinDeleteMode
+                  : (wizardStep === 'PLACING_PINS' && !pinDeleteMode) || selectingPosition
                   ? 'SET_WAYPOINTS'
                   : 'NONE'
               }
@@ -1227,6 +1323,8 @@ export default function FieldMapView({ onHelp }) {
               {currentSelected?.status === 'in_progress' && (
                 <button
                   onClick={() => handleFinishMission(currentSelected.id)}
+                  disabled={supervision.phase !== 'COMPLETE' || hasSafetyHold(supervision)}
+                  title="Finish after every selected pin has a saved sample and confirmed probe retraction"
                   style={{ background: 'var(--accent-gold)', border: 'none', padding: '4px 8px', borderRadius: '4px', color: '#fff', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}
                 >
                   Mark Finished
@@ -1349,16 +1447,25 @@ export default function FieldMapView({ onHelp }) {
 
           <div style={{ flexShrink: 0 }}>
             <OperatorNavGuide
-              roverPos={roverPos}
+              key={`${selectedMissionId}-${wizardStep}`}
               roverHeading={roverHeading}
               waypoints={displayedWaypoints}
               currentWaypointIdx={currentWaypointIdx}
               reachedWaypointIdxs={[...reachedPinIdxs]}
-              onAdvanceWaypoint={handleAdvanceWaypoint}
               reachRadiusM={PIN_REACH_RADIUS_M}
-              lastAutoReached={lastAutoReached}
               onSendMission={handleSendMission}
               missionDeploymentPending={deploymentSequence !== null}
+              receiverReady={receiverStatus.connected && !receiverStatus.connectionError}
+              supervision={supervision}
+              active={supervisedActive}
+              freshGps={freshGps}
+              positionCandidate={positionCandidate}
+              selectingPosition={selectingPosition}
+              onUseGps={() => setPositionCandidate(gpsPosition(latestSensorData, sensorReceivedAt))}
+              onSelectPosition={() => setSelectingPosition(previous => !previous)}
+              onAction={handleSupervisionAction}
+              onCancel={handleCancelSupervisedMission}
+              onNextLeg={() => handleSupervisionAction({ type: 'AUTHORIZE_NEXT', authorized: true, index: firstPendingPin(displayedWaypoints.length, reachedPinIdxs), pinCount: displayedWaypoints.length })}
             />
           </div>
 
