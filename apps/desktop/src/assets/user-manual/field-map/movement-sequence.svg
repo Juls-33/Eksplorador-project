@@ -1,12 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 390" role="img" aria-labelledby="title desc">
-<title id="title">Onboard feedback waypoint navigation</title><desc id="desc">Send ordered coordinates without a GPS upload gate. Onboard calibrated encoders, gyro and fresh GPS update short bounded movement targets. Explicit GPS verification establishes waypoint evidence; uncertainty and obstacle limits hold the rover.</desc>
-<rect width="960" height="390" rx="20" fill="#f4f8f5"/><g font-family="system-ui,sans-serif" fill="#102819">
-<text x="30" y="44" font-size="25" font-weight="700">Send targets. Observe onboard feedback.</text>
-<text x="30" y="76" font-size="17">Schematic only - no physical accuracy or field validation claimed</text>
-<g fill="white" stroke="#c9dece" stroke-width="2"><rect x="30" y="108" width="270" height="110" rx="12"/><rect x="345" y="108" width="270" height="110" rx="12"/><rect x="660" y="108" width="270" height="110" rx="12"/></g>
-<g font-size="21" font-weight="700"><text x="50" y="144">1. Ordered coordinates</text><text x="365" y="144">2. Bounded movement</text><text x="680" y="144">3. Update and correct</text></g>
-<g font-size="17"><text x="50" y="176">N1 waypoint targets</text><text x="50" y="202">GPS not required to send</text><text x="365" y="176">Measured encoder + gyro</text><text x="365" y="202">RC edge + readiness gate</text><text x="680" y="176">Fresh GPS observations</text><text x="680" y="202">Explicit arrival evidence</text></g>
-<g stroke="#1f5132" stroke-width="3" fill="none"><path d="M308 160h28m-8-8 8 8-8 8"/><path d="M623 160h28m-8-8 8 8-8 8"/><path d="M795 230v24H480v-24"/></g>
-<text x="30" y="292" font-size="20" font-weight="700">Limits: time, travel, correction attempts and estimated uncertainty</text>
-<text x="30" y="330" font-size="18">Obstacle / unsafe localization: stop and hold; no automatic resume or detour</text>
-<text x="30" y="362" font-size="18">ACK2 and encoder segment completion never establish GPS arrival.</text></g></svg>
+  <title id="title">How the movement sequence is generated</title>
+  <desc id="desc">Schematic, not a measured route. The first leg starts from the app's current rover position and heading. Later legs connect pins in placement order. L and R are turns in degrees; F is forward travel in meters. Reached progress and saving a soil sample are separate.</desc>
+  <rect width="960" height="390" rx="20" fill="#f4f8f5"/>
+  <g font-family="system-ui, sans-serif" fill="#102819">
+    <text x="30" y="44" font-size="25" font-weight="700">Read the planned movement</text>
+    <text x="30" y="75" font-size="17" fill="#526070">Schematic only · no example distances or sensor readings</text>
+    <g fill="white" stroke="#c9dece" stroke-width="2"><rect x="30" y="108" width="300" height="96" rx="12"/><rect x="395" y="108" width="235" height="96" rx="12"/><rect x="695" y="108" width="235" height="96" rx="12"/></g>
+    <g font-size="21" font-weight="700" fill="#1f5132"><text x="50" y="146">Position + heading</text><text x="420" y="146">Pin 1</text><text x="720" y="146">Pin 2, then onward</text></g>
+    <g font-size="18"><text x="50" y="178">Check that telemetry is fresh.</text><text x="420" y="178">First planned target</text><text x="720" y="178">Placement order</text></g>
+    <g stroke="#1f5132" stroke-width="3" fill="none"><path d="M345 155h35m-8-8 8 8-8 8"/><path d="M645 155h35m-8-8 8 8-8 8"/></g>
+    <text x="30" y="252" font-size="22" font-weight="700">L / R → turn left / right in degrees</text>
+    <text x="30" y="288" font-size="22" font-weight="700">F → move forward in meters</text>
+    <text x="30" y="338" font-size="18" fill="#854b0c">A planned turn or distance is not a guarantee of arrival. Outdoor calibration is still needed.</text>
+  </g>
+</svg>

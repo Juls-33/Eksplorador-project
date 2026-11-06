@@ -23,12 +23,8 @@ import {
 import HeatmapMap from '../components/HeatmapMap';
 import OperatorNavGuide from '../components/OperatorNavGuide';
 import MissionDeploymentWizard from '../components/MissionDeploymentWizard';
-import MissionStatusReport from '../components/MissionStatusReport';
-import NavigationFeedback from '../components/NavigationFeedback';
-
-import { missionExperiment } from '../hooks/useMissionExperiment';
 import LoRaConnectionStatus from '../components/LoRaConnectionStatus';
-
+import DrivetrainTelemetry from '../components/DrivetrainTelemetry';
 import { useLoRaConnection } from '../hooks/useLoRaConnection';
 import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
 import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
@@ -172,18 +168,8 @@ export default function FieldMapView({ onHelp }) {
   const sampleCapturedForInsertionRef = useRef(false);
 
   // Live Rover Telemetry
-  const [roverPos, setRoverPos] = useState(null);
-  const [roverHeading, setRoverHeading] = useState(null);
-  const planningGps = receiverStatus.connected && !receiverStatus.connectionError
-    ? receiverStatus.planning_gps?.current ?? null : null;
-  const gpsExpiry = useRef(null);
-  useEffect(() => {
-    if (!receiverStatus.connected || receiverStatus.connectionError) {
-      setRoverPos(null); setRoverHeading(null);
-      clearTimeout(gpsExpiry.current);
-    }
-  }, [receiverStatus.connected, receiverStatus.connectionError]);
-  useEffect(() => () => clearTimeout(gpsExpiry.current), []);
+  const [roverPos, setRoverPos] = useState([14.6094, 120.9896]);
+  const [roverHeading, setRoverHeading] = useState(0);
   const [manualReached, setManualReached] = useState([]); // pin indexes the operator ticked off by hand
   const [showSamplePins, setShowSamplePins] = useState(false); // numbered pins for every recorded sample
 
@@ -498,13 +484,6 @@ export default function FieldMapView({ onHelp }) {
 
       if (hasValidGps) {
         setRoverPos([lat, lng]);
-        clearTimeout(gpsExpiry.current);
-        // DATA lacks calibrated accuracy/age metadata. This is only an RC
-        // planning display timeout; it cannot qualify autonomous localization.
-        gpsExpiry.current = setTimeout(() => { setRoverPos(null); setRoverHeading(null); }, 5000);
-      } else {
-        clearTimeout(gpsExpiry.current);
-        setRoverPos(null); setRoverHeading(null);
       }
 
       // Saving soil samples is separate from updating rover position.
@@ -856,25 +835,21 @@ export default function FieldMapView({ onHelp }) {
   const labelStyle = { fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' };
   const pointCount = wizardStep === 'DRAWING_BOUNDARY' ? tempBoundary.length : tempWaypoints.length;
 
-    const handleSendMission = async (plan) => {
-      if (!plan?.sequence?.trim()) {
+    const handleSendMission = async (sequence) => {
+      if (!sequence?.trim()) {
         throw new Error('No movement sequence generated.');
       }
 
       if (deploymentOpening.current || deploymentSequence !== null) return;
       deploymentOpening.current = true;
-      try {
-        const namedPlan={...plan,displayName:currentSelected?.name||'Draft waypoint mission',databaseMissionId:currentSelected?.id??null};
-        await missionExperiment.start(namedPlan);
-        setDeploymentSequence(namedPlan);
-      } catch (error) { deploymentOpening.current = false; throw error; }
+      setDeploymentSequence(sequence);
     };
 
   return (
     <div className="field-map-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
       {deploymentSequence !== null && (
         <MissionDeploymentWizard
-          plan={deploymentSequence}
+          sequence={deploymentSequence}
           onClose={() => { deploymentOpening.current = false; setDeploymentSequence(null); }}
         />
       )}
@@ -1305,7 +1280,7 @@ export default function FieldMapView({ onHelp }) {
               )}
             </div>
           </div>
-
+          <DrivetrainTelemetry />
           {/* Live Sensor Telemetry Monitor Card */}
           <div className="card" style={{ flexShrink: 0 }}>
             <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1373,13 +1348,9 @@ export default function FieldMapView({ onHelp }) {
           </div>
 
           <div style={{ flexShrink: 0 }}>
-            <MissionStatusReport deployment={receiverStatus.deployment} connected={receiverStatus.connected}/>
-            <NavigationFeedback waypoints={displayedWaypoints}/>
             <OperatorNavGuide
               roverPos={roverPos}
               roverHeading={roverHeading}
-              planningGps={planningGps}
-              radio={receiverStatus}
               waypoints={displayedWaypoints}
               currentWaypointIdx={currentWaypointIdx}
               reachedWaypointIdxs={[...reachedPinIdxs]}

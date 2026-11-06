@@ -7,8 +7,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <Preferences.h>
-#include "MissionProtocol.h"
-#include "WaypointProtocol.h"
+#include "../../shared/MissionProtocol.h"
 
 // ESP32 -> Mega Serial2:
 // TX33 -> Mega RX2/17
@@ -66,7 +65,7 @@ struct Soil {
   unsigned k = 0;
 } soil;
 
-char inLine[256];
+char inLine[160];
 uint8_t inLen = 0;
 bool discardLine = false;
 
@@ -77,35 +76,6 @@ String pendingMegaMission;
 size_t pendingMegaOffset = 0;
 String deferredImuLine;
 String deferredModeAck;
-String deferredNavLine;
-String deferredGyroLine;
-uint32_t a31GyroSendAt=0,a31GyroSequence=0,a31GpsSequence=0;
-String a31LastNav,a31LastCalibration;
-String a31Events[8];uint8_t a31EventHead=0,a31EventCount=0;uint32_t a31LastQueuedRevision=0;
-uint32_t a30LastGpsReport=0;
-
-// A2.9 last-known Mega execution state; repeated while rover radio is TX.
-// Not an ACK2 substitute: ACK2 still means UART queued, not accepted.
-String a29LastMegaStatus;
-unsigned long a29LastStatusRadio = 0;
-const uint32_t A29_STATUS_RADIO_MS = 2200;
-
-void serviceMissionStatusRadio() {
-  if (!loraReady || !txMode || !a29LastMegaStatus.length()) return;
-  const uint32_t now = millis();
-  if (!a31EventCount && a29LastStatusRadio && now - a29LastStatusRadio < A29_STATUS_RADIO_MS) return;
-  a29LastStatusRadio = now;
-  LoRa.idle();
-  if (LoRa.beginPacket()) {
-    LoRa.print(a31EventCount?a31Events[a31EventHead]:a29LastMegaStatus);
-    if (LoRa.endPacket() == 1) {
-      if(a31EventCount){a31Events[a31EventHead]="";a31EventHead=(a31EventHead+1)%8;--a31EventCount;}
-      Serial.print("[MEGA STATUS LoRa TX] ");
-      Serial.println(a29LastMegaStatus);
-    }
-  }
-  LoRa.receive();
-}
 
 void sendImuLine(const String& line) {
   if (pendingMegaMission.length()) deferredImuLine = line;
@@ -150,7 +120,7 @@ void initMissionJournal() {
 
 // UART handoff is serviced in small chunks so GPS, IMU, RC mode commands and
 // safety messages continue to be serviced during an upload. No execution command
-// is sent: the Mega receives RCV2:<missionId16>:<original sequence>.
+// is sent: the Mega still receives exactly RCV:<original sequence>.
 void serviceMissionForward() {
   if (pendingMegaMission.length() == 0) return;
   const size_t room = Serial2.availableForWrite();
@@ -167,8 +137,6 @@ void serviceMissionForward() {
   // after RCV, before flash/LoRa work; never insert IMU or mode ACKs inside RCV.
   if (deferredImuLine.length()) { Serial2.println(deferredImuLine); deferredImuLine = ""; }
   if (deferredModeAck.length()) { Serial2.println(deferredModeAck); deferredModeAck = ""; }
-  if (deferredNavLine.length()) { Serial2.println(deferredNavLine); deferredNavLine = ""; }
-  if (deferredGyroLine.length()) { Serial2.println(deferredGyroLine); deferredGyroLine = ""; }
   MissionProtocol::Frame frame;
   frame.id = queued.id;
   frame.checksum = queued.checksum;
@@ -188,8 +156,6 @@ void receiveMissionV2(const String& packet) {
     LoRa.receive();
     return;
   }
-  WaypointProtocol::Plan targets;
-  if (!WaypointProtocol::parse(frame.sequence,targets)) { sendMissionResponse("NACK2:",frame,"NAV_FORMAT_REQUIRED");return; }
   if (!missionJournalReady) {
     sendMissionResponse("NACK2:", frame, "JOURNAL_UNAVAILABLE");
     return;
@@ -209,15 +175,7 @@ void receiveMissionV2(const String& packet) {
   } else if (pendingMegaMission.length() != 0) {
     sendMissionResponse("NACK2:", frame, "PREVIOUS_HANDOFF_PENDING");
   } else if (persistMissionRecord(MissionProtocol::reserve(frame))) {
-    // Preserve the Mission V2 identifier for Mega-confirmed statuses.
-    // The first 16 bytes of the canonical key are the immutable mission ID.
-    char missionKey[26];
-    MissionProtocol::key(frame, missionKey, sizeof(missionKey));
-    pendingMegaMission = "RCV2:" + String(missionKey).substring(0,16) +
-                         ":" + String(frame.sequence) + "\n";
-    a29LastMegaStatus = ""; // Prevent old status appearing for a new mission.
-    a31EventHead=a31EventCount=0;a31LastQueuedRevision=0;a31LastNav="";
-    a29LastStatusRadio = 0;
+    pendingMegaMission = "RCV:" + String(frame.sequence) + "\n";
     pendingMegaOffset = 0;
     LoRa.receive();
   } else {
@@ -475,23 +433,6 @@ void processMegaLine(const char *s) {
     if (!parseSoil(s))
       Serial.println("[SOIL] rejected malformed data");
 
-  } else if (!strncmp(s, "NT1:", 4)) {
-    char forwarded[256];if(WaypointProtocol::relayTelemetry(s,forwarded,sizeof(forwarded)))a31LastNav=forwarded;
-  } else if (!strncmp(s, "NC1:", 4)) {
-    WaypointProtocol::CalibrationInfo cal;if(WaypointProtocol::calibration(s,cal))a31LastCalibration=s;
-  } else if (!strncmp(s, "MS:", 3)) {
-    WaypointProtocol::MissionStatus status;
-    if(!WaypointProtocol::status(s,status)){Serial.println("[MEGA MISSION STATE] invalid frame discarded");return;}
-    if(missionRecord.magic==MissionProtocol::JOURNAL_MAGIC){
-      MissionProtocol::Frame expected;expected.id=missionRecord.id;expected.checksum=missionRecord.checksum;
-      char key[26];MissionProtocol::key(expected,key,sizeof(key));if(strncmp(status.id,key,16))return;
-    }
-    a29LastMegaStatus=s;
-    if(status.revision>a31LastQueuedRevision){
-      a31LastQueuedRevision=status.revision;
-      if(a31EventCount==8){a31EventHead=(a31EventHead+1)%8;--a31EventCount;}
-      a31Events[(a31EventHead+a31EventCount)%8]=s;++a31EventCount;
-    }
   } else if (!strncmp(s, "MISSION_STATUS:", 15)) {
     Serial.print("[MEGA MISSION] ");
     Serial.println(s + 15);
@@ -534,43 +475,12 @@ void readMega() {
 
 // ================= GPS =================
 
-void serviceA30GpsToMega() {
-  if(millis()-a30LastGpsReport<1000)return;a30LastGpsReport=millis();
-  const bool fix=gps.location.isValid()&&gps.location.age()<=GPS_MAX_AGE;
-  const int32_t lat=fix?(int32_t)lround(gps.location.lat()*1000000.0):0;
-  const int32_t lon=fix?(int32_t)lround(gps.location.lng()*1000000.0):0;
-  const unsigned sats=fix&&gps.satellites.isValid()?gps.satellites.value():0;
-  const long rawHdop=gps.hdop.value();
-  const unsigned hdop=fix&&gps.hdop.isValid()&&rawHdop>0?(unsigned)(rawHdop>9999?9999:rawHdop):9999;
-  String line=String("NG1:")+String(a31GpsSequence)+","+(fix?"1":"0")+","+String(lat)+","+String(lon)+","+String(sats)+","+String(hdop)+","+String(fix?gps.location.age():999999UL);
-  if(pendingMegaMission.length())deferredNavLine=line;else Serial2.println(line);
-}
-void serviceA31GyroToMega(){
-  if(millis()-a31GyroSendAt<100)return;a31GyroSendAt=millis();
-  const bool valid=imuReady&&haveAngles&&millis()-lastIMU<200&&isfinite(gyroZ);
-  const String line=String("NI1:")+String(++a31GyroSequence)+","+(valid?"1":"0")+","+String(valid?gyroZ:0,3)+","+String(millis()-lastIMU);
-  if(pendingMegaMission.length())deferredGyroLine=line;else Serial2.println(line);
-}
-void serviceA31ExtraRadio(){
-  static uint32_t next=0;static uint8_t slot=0;
-  if((int32_t)(millis()-next)<0)return;next=millis()+600;
-  if(a31EventCount){serviceMissionStatusRadio();return;}
-  const uint8_t selected=slot++%5;
-  if(selected==0){serviceMissionStatusRadio();return;}
-  if(selected==1){serviceEncoderRadio();return;}
-  if(selected==2){serviceFusionRadio();return;}
-  const String& packet=selected==3?a31LastNav:a31LastCalibration;
-  if(!packet.length())return;
-  LoRa.idle();if(LoRa.beginPacket()){LoRa.print(packet);LoRa.endPacket();}LoRa.receive();
-}
-
 void readGPS() {
   uint16_t budget = 256;
 
   while (gpsUART.available() && budget--) {
     gps.encode((char)gpsUART.read());
   }
-  if(gps.location.isUpdated()){++a31GpsSequence;(void)gps.location.lat();(void)gps.location.lng();}
 }
 
 // ================= LORA TX / ACK =================
@@ -948,8 +858,6 @@ void setup() {
 void loop() {
   readGPS();
   serviceIMU();
-  serviceA31GyroToMega();
-  serviceA30GpsToMega();
   readMega();
   serviceMissionForward();
 
@@ -957,7 +865,8 @@ void loop() {
     if (txMode) {
       serviceTx();
       if (!awaitingAck) {
-        serviceA31ExtraRadio();
+        serviceEncoderRadio();
+        serviceFusionRadio();
       }
     } else {
       awaitingAck = false;

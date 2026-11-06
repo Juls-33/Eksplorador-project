@@ -1,8 +1,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <LoRa.h>
-#include "MissionProtocol.h"
-#include "NavigationReceiver.h"
+#include "../../shared/MissionProtocol.h"
 
 // =====================================================
 // RX_BOARD CONFIGURATION
@@ -483,16 +482,6 @@ void processFusionPacket(const String& incoming) {
   Serial.println(F(",\"positionSource\":\"GPS_ONLY\",\"navigationEnabled\":false}"));
 }
 
-
-// A2.9 explicit Mega mission acceptance/execution status.
-// Never infer mission success from ACK2 or the presence of DATA telemetry.
-void processMissionStatusPacket(const String& incoming) {
-  WaypointProtocol::MissionStatus report;
-  if(!WaypointProtocol::status(incoming.c_str(),report)){Serial.println(F("[MISSION STATUS ERROR] Malformed frame"));return;}
-  char json[256];
-  if(WaypointProtocol::statusJson(report,LoRa.packetRssi(),LoRa.packetSnr(),json,sizeof(json)))Serial.println(json);
-}
-
 // =====================================================
 // SETUP
 // =====================================================
@@ -568,11 +557,5 @@ void loop() {
     processEncoderPacket(incoming); // New additive encoder JSON.
   } else if (!txMode && incoming.startsWith("FUS:")) {
     processFusionPacket(incoming); // A2.7 status-only fusion observation.
-  } else if (!txMode && incoming.startsWith("NT1:")) {
-    processNavigationPacket(incoming);
-  } else if (!txMode && incoming.startsWith("NC1:")) {
-    processNavigationCalibration(incoming);
-  } else if (!txMode && incoming.startsWith("MS:")) {
-    processMissionStatusPacket(incoming); // A2.9 rover-confirmed state.
   }
 }

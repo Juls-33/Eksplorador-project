@@ -43,10 +43,8 @@ pub struct EncoderEvent {
 }
 
 pub enum Message {
-    MissionStatus(crate::mission_status::MissionStatus),
     Encoder(EncoderPacket),
     Fusion(Value),
-    Navigation(Value),
     Sensor(Value),
     Ignore,
 }
@@ -94,18 +92,6 @@ pub fn classify(line: &str) -> Message {
         });
         return Message::Ignore;
     }
-    if kind == Some("missionStatus") {
-        return crate::mission_status::MissionStatus::parse(json)
-            .map(Message::MissionStatus)
-            .unwrap_or(Message::Ignore);
-    }
-    if matches!(kind, Some("navigation") | Some("navigationCalibration")) {
-        return if transport.is_none() && navigation_json_valid(&json) {
-            Message::Navigation(json)
-        } else {
-            Message::Ignore
-        };
-    }
     if kind == Some("encoder") {
         trace("classified", || "encoder".into());
         return match serde_json::from_value::<EncoderPacket>(json) {
@@ -148,166 +134,6 @@ pub fn classify(line: &str) -> Message {
             "unknown_type_or_missing_sensor_sequence".into()
         });
         Message::Ignore
-    }
-}
-
-pub fn navigation_json_valid(json: &Value) -> bool {
-    let number = |key: &str, min: f64, max: f64| {
-        json.get(key)
-            .and_then(Value::as_f64)
-            .is_some_and(|n| n.is_finite() && n >= min && n <= max)
-    };
-    let flag = |key: &str| json.get(key).and_then(Value::as_bool).is_some();
-    let uint = |key: &str| {
-        json.get(key)
-            .and_then(Value::as_u64)
-            .is_some_and(|n| n <= u32::MAX as u64)
-    };
-    if json["protocol"] != "N1" {
-        return false;
-    }
-    if json["type"] == "navigationCalibration" {
-        return uint("revision")
-            && flag("valid")
-            && number("leftMetersPerRev", 0.0, 2.0)
-            && number("rightMetersPerRev", 0.0, 2.0)
-            && number("trackWidthM", 0.0, 3.0)
-            && number("gyroBiasDps", -10.0, 10.0)
-            && number("gyroScale", 0.0, 2.0)
-            && [-1, 0, 1]
-                .iter()
-                .any(|n| json["gyroClockwiseSign"].as_i64() == Some(*n))
-            && (json["valid"] != true
-                || (json["revision"].as_u64().unwrap_or(0) > 0
-                    && number("leftMetersPerRev", 0.02, 2.0)
-                    && number("rightMetersPerRev", 0.02, 2.0)
-                    && number("trackWidthM", 0.1, 3.0)
-                    && number("gyroScale", 0.5, 2.0)
-                    && json["gyroClockwiseSign"] != 0));
-    }
-    let word = |key: &str, max: usize| {
-        json[key].as_str().is_some_and(|s| {
-            !s.is_empty()
-                && s.len() <= max
-                && s.bytes()
-                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-        })
-    };
-    json["type"] == "navigation"
-        && ["megaVersion", "roverVersion", "receiverVersion"]
-            .iter()
-            .all(|k| {
-                json[*k]
-                    .as_u64()
-                    .is_some_and(|n| (30100..40000).contains(&n))
-            })
-        && json["missionId"].as_str().is_some_and(|s| {
-            s.len() == 16
-                && s.bytes()
-                    .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
-        })
-        && uint("navSeq")
-        && uint("bootId")
-        && word("state", 21)
-        && word("reason", 33)
-        && number("targetPin", 0.0, 10.0)
-        && json["targetPin"].as_u64().is_some()
-        && [
-            "calibrated",
-            "poseValid",
-            "headingValid",
-            "gpsValid",
-            "imuValid",
-            "rcAuthorized",
-            "staged",
-            "active",
-            "ready",
-        ]
-        .iter()
-        .all(|k| flag(k))
-        && number("gpsLat", -90.0, 90.0)
-        && number("gpsLng", -180.0, 180.0)
-        && number("estimatedLat", -90.0, 90.0)
-        && number("estimatedLng", -180.0, 180.0)
-        && number("positionUncertaintyM", 0.0, 1000.0)
-        && number("headingDeg", 0.0, 359.99)
-        && number("headingUncertaintyDeg", 0.0, 180.0)
-        && number("distanceRemainingM", 0.0, 10000.0)
-        && number("encoderTravelM", 0.0, 10000.0)
-        && uint("calibrationRevision")
-        && number("corrections", 0.0, 1000.0)
-        && json["corrections"].as_u64().is_some()
-        && number("gyroBiasDps", -100.0, 100.0)
-        && (json["ready"] != true
-            || (json["bootId"].as_u64().unwrap_or(0) > 0
-                && [
-                    "calibrated",
-                    "headingValid",
-                    "gpsValid",
-                    "imuValid",
-                    "staged",
-                ]
-                .iter()
-                .all(|k| json[*k] == true)))
-}
-
-#[cfg(test)]
-mod mission_routing_tests {
-    use super::*;
-    #[test]
-    fn n1_receiver_json_is_isolated_and_validated_without_touching_sensor_or_encoder_streams() {
-        let lines: Vec<_> = include_str!("../../tests/fixtures/n1-navigation.jsonl")
-            .lines()
-            .collect();
-        for line in &lines {
-            assert!(matches!(classify(line), Message::Navigation(_)));
-        }
-        let original: Value = serde_json::from_str(lines[0]).unwrap();
-        for (key, value) in [
-            ("gpsLat", serde_json::json!(91)),
-            ("headingDeg", serde_json::json!(360)),
-            ("calibrated", serde_json::json!(false)),
-            ("megaVersion", serde_json::json!(20009)),
-            ("positionUncertaintyM", serde_json::json!(-1)),
-            ("bootId", serde_json::json!(0)),
-        ] {
-            let mut json = original.clone();
-            json[key] = value;
-            assert!(
-                matches!(classify(&json.to_string()), Message::Ignore),
-                "accepted {key}"
-            );
-        }
-        for prefix in ["DATA:", "ENC:", "FUS:", "[RAW RX]: "] {
-            assert!(matches!(
-                classify(&format!("{prefix}{}", lines[0])),
-                Message::Ignore
-            ));
-        }
-    }
-    #[test]
-    fn mission_reports_never_route_to_sensor_fusion_or_encoder_data() {
-        let json = r#"{"type":"missionStatus","missionId":"0123456789ABCDEF","statusSeq":1,"state":"STAGED","step":0,"reason":"NAV_NOT_CALIBRATED","rssi":-42,"snr":8.6}"#;
-        assert!(matches!(classify(json), Message::MissionStatus(_)));
-        for prefix in ["DATA:", "ENC:", "FUS:", "[RAW RX]: "] {
-            assert!(matches!(
-                classify(&format!("{prefix}{json}")),
-                Message::Ignore
-            ));
-        }
-        let mut soil_lookalike: Value = serde_json::from_str(json).unwrap();
-        soil_lookalike["seq"] = 1.into();
-        soil_lookalike["soilValid"] = 1.into();
-        soil_lookalike["lat"] = 14.into();
-        soil_lookalike["lng"] = 120.into();
-        assert!(matches!(
-            classify(&soil_lookalike.to_string()),
-            Message::Ignore
-        ));
-        assert!(matches!(
-            classify(&json.replace("\"step\":0", "\"step\":-1")),
-            Message::Ignore
-        ));
     }
 }
 
@@ -487,9 +313,7 @@ mod tests {
                     assert_eq!(json.as_object().unwrap().len(), 19);
                 }
                 Message::Ignore => {}
-                Message::Navigation(_) | Message::Fusion(_) | Message::MissionStatus(_) => {
-                    panic!("legacy fixture unexpectedly contained a different stream")
-                }
+                Message::Fusion(_) => panic!("legacy fixture unexpectedly contained fusion"),
             }
         }
         assert_eq!((encoders, sensors), (5, 1));
@@ -660,7 +484,7 @@ mod tests {
                     assert!(event.get("encoderSeq").is_none());
                     assert!(event.get("leftTicks").is_none());
                 }
-                Message::Navigation(_) | Message::Ignore | Message::MissionStatus(_) => {}
+                Message::Ignore => {}
             }
         }
         assert_eq!(counts, (0, 2, 1));

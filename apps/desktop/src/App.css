@@ -566,9 +566,3 @@ button.nav-item { width: 100%; border: 0; background: transparent; text-align: l
 #field-map-header{
     border-style:solid;
 }
-
-.live-monitoring-workspace > .drivetrain-monitoring {
-  grid-column: 1 / -1;
-  width: 100%;
-  min-width: 0;
-}

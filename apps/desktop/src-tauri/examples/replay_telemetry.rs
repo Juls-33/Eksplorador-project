@@ -2,8 +2,6 @@
 //! stdout is NDJSON for tests; optional diagnostic traces are written to stderr.
 #[path = "../src/encoder_telemetry.rs"]
 mod encoder_telemetry;
-#[path = "../src/mission_status.rs"]
-mod mission_status;
 #[path = "../src/serial_lines.rs"]
 mod serial_lines;
 
@@ -34,15 +32,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let now = base + Duration::from_millis(elapsed_ms);
         let mut events = Vec::new();
         match encoder_telemetry::classify(&line) {
-            Message::Navigation(mut payload) => {
-                payload["receivedAtMs"] = (10000 + elapsed_ms).into();
-                events.push(serde_json::json!({"event":"navigation-data","payload":payload}));
-            }
-            // Live status is published by Radio as rx-board-connection, never
-            // as a sensor event. Radio correlation/recovery has its own tests.
-            Message::MissionStatus(payload) => {
-                events.push(serde_json::json!({"event":"mission-status","payload":payload}));
-            }
             Message::Encoder(packet) => {
                 stream.receive(packet, now, 10000 + elapsed_ms);
             }

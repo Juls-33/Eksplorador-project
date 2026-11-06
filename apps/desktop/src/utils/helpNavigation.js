@@ -7,7 +7,7 @@ export const initialNavigation = { activeTab: 'Dashboard', help: null };
 export function helpNavigationReducer(state, action) {
   switch (action.type) {
     case 'tab':
-      return getHelpRoute(action.tabId) || action.tabId === 'User Manual' || action.tabId === 'Developer Tools'
+      return getHelpRoute(action.tabId) || action.tabId === 'User Manual'
         ? { activeTab: action.tabId, help: null }
         : state;
     case 'help': {

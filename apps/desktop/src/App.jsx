@@ -15,7 +15,6 @@ import {
   Sprout,
   BarChart3,
   Settings,
-  Wrench,
   Droplets,
   CheckCircle2,
   AlertTriangle,
@@ -34,7 +33,6 @@ import {
 
 import HeatmapMap from './components/HeatmapMap';
 import FieldMapView from './views/FieldMapView';
-import DeveloperToolsView from './views/DeveloperToolsView';
 import CropAssessmentView from './views/CropAssessmentView';
 import ReportsView from './views/ReportsView';
 import TileManagerView from './views/TileManagerView';
@@ -980,7 +978,6 @@ export default function App() {
   }, []);
 
   const navItems = [
-    { id:'Developer Tools',label:'Developer Tools',icon:Wrench },
     {
       id: 'Dashboard',
       label: 'Live Monitoring',
@@ -1154,8 +1151,6 @@ export default function App() {
             rxBoardBusy={rxBoardBusy}
             setRxBoardBusy={setRxBoardBusy}
           />
-        ) : sourceTab === 'Developer Tools' ? (
-          <DeveloperToolsView/>
         ) : sourceTab === 'Crop Assessment' ? (
           <CropAssessmentView onHelp={openHelp} />
         ) : sourceTab === 'Reports' ? (
@@ -1442,7 +1437,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* <DrivetrainTelemetry expanded /> */}
+            <DrivetrainTelemetry expanded />
 
             <section className="workspace-grid live-monitoring-workspace">
               <div className="card map-card">
@@ -1882,7 +1877,6 @@ export default function App() {
                   </p>
                 </div>
               </div>
-              <DrivetrainTelemetry expanded />
             </section>
           </>
         )}
