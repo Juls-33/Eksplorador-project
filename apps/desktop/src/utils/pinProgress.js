@@ -1,4 +1,5 @@
-import { calculateDistanceMeters } from './geo';
+import { calculateDistanceMeters } from './geo.js';
+import { validCoordinates } from './supervisedMission.js';
 
 // A sample recorded within this many meters of a pin counts as having reached it.
 export const PIN_REACH_RADIUS_M = 5;
@@ -25,15 +26,17 @@ export function computeReachedPins(samples, pins, radiusM = PIN_REACH_RADIUS_M) 
   }
 
   for (const sample of samples) {
-    const lat = Number(sample.lat ?? sample.coords?.[0]);
-    const lng = Number(sample.lng ?? sample.coords?.[1]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    const lat = sample.lat ?? sample.coords?.[0];
+    const lng = sample.lng ?? sample.coords?.[1];
+    // SQL NULL, empty strings, 0/0 GPS placeholders, and estimates must
+    // never satisfy the automatic 5-meters-measured-arrival condition.
+    if (!validCoordinates([lat, lng])) continue;
 
     let bestIdx = -1;
     let bestDistance = Infinity;
     pins.forEach((pin, idx) => {
-      if (reached.has(idx)) return;
-      const distance = calculateDistanceMeters([lat, lng], pin);
+      if (reached.has(idx) || !validCoordinates(pin)) return;
+      const distance = calculateDistanceMeters([Number(lat), Number(lng)], pin);
       if (distance <= radiusM && distance < bestDistance) {
         bestDistance = distance;
         bestIdx = idx;

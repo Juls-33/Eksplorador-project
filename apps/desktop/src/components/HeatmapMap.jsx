@@ -41,6 +41,7 @@ export default function HeatmapMap({
   roverPos = [14.6095, 120.9895],
   gpsWarning = null,
   waypoints = [],
+  completedWaypointIdxs = [],
   waypointsDeletable = false,
   onWaypointDelete = null,
   boundary = [],
@@ -607,6 +608,7 @@ export default function HeatmapMap({
     }
 
     waypointLayerGroupRef.current.clearLayers();
+    const completedPins = new Set(completedWaypointIdxs);
 
     waypoints.forEach((pt, index) => {
       const pinIcon = waypointsDeletable
@@ -633,7 +635,7 @@ export default function HeatmapMap({
         : L.divIcon({
             className: 'custom-pin',
             html: `<div style="
-              background: #8A5A35;
+              background: ${completedPins.has(index) ? '#15803d' : '#8A5A35'};
               color: white;
               width: 22px;
               height: 22px;
@@ -645,7 +647,7 @@ export default function HeatmapMap({
               font-size: 11px;
               font-weight: bold;
               box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-            ">${index + 1}</div>`,
+            ">${completedPins.has(index) ? '✓' : index + 1}</div>`,
             iconSize: [22, 22]
           });
 
@@ -653,7 +655,7 @@ export default function HeatmapMap({
         icon: pinIcon,
         title: waypointsDeletable
           ? `Remove pin ${index + 1}`
-          : `Pin ${index + 1}`,
+          : `Pin ${index + 1}${completedPins.has(index) ? ' — completed by a GPS-measured soil sample within 5 meters' : ' — pending'}`,
         zIndexOffset: waypointsDeletable ? 800 : 0
       });
 
@@ -671,7 +673,7 @@ export default function HeatmapMap({
     });
 
     routePolylineRef.current.setLatLngs(waypoints);
-  }, [waypoints, waypointsDeletable]);
+  }, [waypoints, waypointsDeletable, completedWaypointIdxs]);
 
   // Place search ("jump to a landmark"). Submit-only on purpose — see
   // services/placeSearch.js for the geocoder usage policy this respects.

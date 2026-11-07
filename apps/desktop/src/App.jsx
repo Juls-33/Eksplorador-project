@@ -1437,8 +1437,6 @@ export default function App() {
               </div>
             </section>
 
-            <DrivetrainTelemetry expanded />
-
             <section className="workspace-grid live-monitoring-workspace">
               <div className="card map-card">
                 <div className="card-header">
@@ -1877,6 +1875,7 @@ export default function App() {
                   </p>
                 </div>
               </div>
+              <DrivetrainTelemetry expanded />
             </section>
           </>
         )}

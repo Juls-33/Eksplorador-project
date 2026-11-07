@@ -27,7 +27,7 @@ import LoRaConnectionStatus from '../components/LoRaConnectionStatus';
 import DrivetrainTelemetry from '../components/DrivetrainTelemetry';
 import { useLoRaConnection } from '../hooks/useLoRaConnection';
 import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
-import { firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
+import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
 import {
   createMissionHoldStore, estimatedPosition, gpsPosition, hasSafetyHold, initialSupervisedMission, sampleMeasuredCoordinates,
   supervisedMissionReducer, planMovementLeg,
@@ -254,8 +254,9 @@ export default function FieldMapView({ onHelp }) {
   const activeBoundary = wizardStep !== 'IDLE' ? tempBoundary : (viewField?.boundary || EMPTY);
   const displayedWaypoints = wizardStep !== 'IDLE' ? tempWaypoints : (currentSelected?.waypoints || EMPTY);
 
-  // Pin completion requires a saved sample and explicit probe clearance.
-  // Historical sample proximity remains available to reports, not progression.
+  // Mission progress is based on saved, measured soil samples within 5 meters
+  // of each pin, regardless of whether the rover was driven manually or by
+  // supervised timed movement. Physical movement confirmation stays separate.
   const missionSamples = useMemo(
     () => liveSamples.filter((s) => currentSelected && String(s.mission_id) === String(currentSelected.id)),
     [liveSamples, currentSelected?.id]
@@ -290,11 +291,17 @@ export default function FieldMapView({ onHelp }) {
       title: 'Operator-estimated rover position (not GPS)',
     }] : samplePins;
   }, [samplePins, positionCandidate, supervision.arrival, wizardStep]);
-  const reachedPinIdxs = useMemo(
-    () => new Set(supervision.completed),
-    [supervision.completed]
+  const reachedPinProgress = useMemo(
+    () => computeReachedPins(missionSamples, displayedWaypoints, PIN_REACH_RADIUS_M),
+    [missionSamples, displayedWaypoints]
   );
-  const currentWaypointIdx = supervision.phase === 'COMPLETE' ? displayedWaypoints.length : supervision.pinIndex;
+  const reachedPinIdxs = reachedPinProgress.reached;
+  const reachedPinList = useMemo(() => [...reachedPinIdxs], [reachedPinIdxs]);
+  const allPinsSampled = displayedWaypoints.length > 0 && reachedPinIdxs.size === displayedWaypoints.length;
+  // Keep the supervised movement planner's operator-selected target intact.
+  // Location-based completion is independent of this optional movement guide.
+  const currentWaypointIdx = supervision.phase === 'COMPLETE'
+    ? displayedWaypoints.length : supervision.pinIndex;
   const freshGps = gpsPosition(latestSensorData, sensorReceivedAt, positionNow);
   const supervisedActive = wizardStep === 'IDLE' && currentSelected?.status === 'in_progress';
 
@@ -527,11 +534,12 @@ export default function FieldMapView({ onHelp }) {
         return;
       }
 
-      // Keep RS485 values, the existing save function and insertion deduplication.
-      // Only an operator-accepted arrival opens mission sampling, at any distance
-      // from the intended pin. No GPS is required to preserve a valid soil reading.
-      if (supervisionRef.current.phase !== 'SAMPLING' || hasSafetyHold(supervisionRef.current) ||
-          sampleCapturedForInsertionRef.current || savingSampleRef.current) return;
+      // Recording depends on the selected ACTIVE mission, logging being ON,
+      // and a fresh valid probe insertion — NOT on the movement guide's phase.
+      // Manual driving, arbitrary sampling points, and timed legs are equal.
+      // Invalid GPS still saves a non-geotagged sample; it cannot populate
+      // the spatial heatmap or complete a pin until GPS is measured.
+      if (sampleCapturedForInsertionRef.current || savingSampleRef.current) return;
       const generation = missionGeneration.current;
       savingSampleRef.current = true;
 
@@ -563,7 +571,11 @@ export default function FieldMapView({ onHelp }) {
       // Mark this insertion as captured only after the database save succeeds.
       // If saving fails, later telemetry from the same insertion may retry.
       sampleCapturedForInsertionRef.current = true;
-      dispatchSupervision({ type: 'SAMPLE_SAVED' });
+      // Preserve optional supervised sampling/retraction prompts, without
+      // accidentally advancing them for an unrelated manual soil insertion.
+      if (supervisionRef.current.phase === 'SAMPLING') {
+        dispatchSupervision({ type: 'SAMPLE_SAVED' });
+      }
     });
 
     return () => {
@@ -773,7 +785,9 @@ export default function FieldMapView({ onHelp }) {
   }, [wizardStep]);
 
   const handleFinishMission = async (id) => {
-    if (supervisionRef.current.phase !== 'COMPLETE' || hasSafetyHold(supervisionRef.current)) return;
+    // Manual sampling can complete a mission without entering supervised mode.
+    // Only saved GPS-measured samples within 5 m of all planned pins count.
+    if (!allPinsSampled) return;
     const ok = await updateMissionStatus(id, 'completed');
     if (!ok) {
       setNotification({ type: 'error', message: 'The mission status could not be updated.' });
@@ -1232,6 +1246,7 @@ export default function FieldMapView({ onHelp }) {
               zoom={18}
               boundary={activeBoundary}
               waypoints={displayedWaypoints}
+              completedWaypointIdxs={reachedPinList}
               heatPoints={heatPointsForLayer}
               labeledPoints={mapLabeledPoints}
               focusPoints={focusPoints}
@@ -1323,8 +1338,10 @@ export default function FieldMapView({ onHelp }) {
               {currentSelected?.status === 'in_progress' && (
                 <button
                   onClick={() => handleFinishMission(currentSelected.id)}
-                  disabled={supervision.phase !== 'COMPLETE' || hasSafetyHold(supervision)}
-                  title="Finish after every selected pin has a saved sample and confirmed probe retraction"
+                  disabled={!allPinsSampled}
+                  title={allPinsSampled
+                    ? 'Finish mission: all planned pins have a saved GPS-measured sample within 5 meters'
+                    : 'Each planned pin requires a saved GPS-measured soil sample within 5 meters'}
                   style={{ background: 'var(--accent-gold)', border: 'none', padding: '4px 8px', borderRadius: '4px', color: '#fff', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}
                 >
                   Mark Finished
@@ -1333,7 +1350,7 @@ export default function FieldMapView({ onHelp }) {
               {currentSelected?.status === 'completed' && (
                 <button
                   onClick={() => handleResumeMission(currentSelected.id)}
-                  title={currentSelected.sampleCount < (currentSelected.waypoints?.length || 0) ? 'Not every pin was sampled — pick up where you left off' : 'Reopen this mission for more logging'}
+                  title="Reopen this mission for further soil logging and spatial sampling"
                   style={{ background: 'var(--primary-green)', border: 'none', padding: '4px 8px', borderRadius: '4px', color: '#fff', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
                   <RotateCcw size={12} /> Resume Mission
@@ -1346,6 +1363,10 @@ export default function FieldMapView({ onHelp }) {
                   <p style={{ color: 'var(--text-dark)', marginBottom: '8px' }}>
                     <strong>{currentSelected.name}</strong> on {currentSelected.fieldName} · {STATUS_LABELS[currentSelected.status]} · {currentSelected.date}
                     {hasBoundary(viewField) && <> · {calculatePolygonArea(viewField.boundary)} m²</>}
+                  </p>
+                  <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    GPS-verified pins: <strong>{reachedPinIdxs.size}/{displayedWaypoints.length}</strong> within {PIN_REACH_RADIUS_M} m ·
+                    Soil records: <strong>{missionSamples.length}</strong>. Manual RC sampling counts toward the same mission.
                   </p>
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
@@ -1451,7 +1472,7 @@ export default function FieldMapView({ onHelp }) {
               roverHeading={roverHeading}
               waypoints={displayedWaypoints}
               currentWaypointIdx={currentWaypointIdx}
-              reachedWaypointIdxs={[...reachedPinIdxs]}
+              reachedWaypointIdxs={reachedPinList}
               reachRadiusM={PIN_REACH_RADIUS_M}
               onSendMission={handleSendMission}
               missionDeploymentPending={deploymentSequence !== null}
