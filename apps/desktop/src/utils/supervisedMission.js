@@ -75,6 +75,22 @@ export function planMovementLeg({ start, heading, target, now = Date.now() }) {
   return { instructions, distanceM, bearing, partial, totalS: instructions.reduce((sum, instruction) => sum + instruction.durationS, 0) };
 }
 
+// A3.2: operator physically aligns the rover toward the selected point B.
+// No electronic heading measurement, pivot token, or multi-pin movement is implied.
+// The Mega currently permits at most 2 seconds of forward motion per leg.
+export function planOperatorAlignedStraightLeg({ start, target, now = Date.now() }) {
+  if (!validPosition(start, now) || !validCoordinates(target)) return { error: 'Confirm a fresh GPS fix or an operator-selected map starting position.' };
+  if (!Number.isFinite(MOVEMENT_PROFILE.forwardMps) || MOVEMENT_PROFILE.forwardMps <= 0) return { error: 'Invalid forward-speed profile.' };
+  const distanceM = calculateDistance(start.coords, target);
+  const bearing = calculateBearing(start.coords, target);
+  const estimatedTotalS = distanceM / MOVEMENT_PROFILE.forwardMps;
+  if (distanceM < 0.01) return { error: 'The rover is already at the selected target coordinate. Inspect and sample instead of sending movement.' };
+  const durationS = Math.floor(Math.min(estimatedTotalS, TIMED_LIMITS.maxStepS) * 1000) / 1000;
+  if (durationS < TIMED_LIMITS.minStepS) return { error: 'Target is too close for the minimum safe timed command. Use manual RC.' };
+  return { instructions: [{ action: 'Forward', durationS }], distanceM, bearing, estimatedTotalS,
+    partial: durationS < estimatedTotalS, totalS: durationS, estimatedLegM: durationS * MOVEMENT_PROFILE.forwardMps };
+}
+
 export const hasSafetyHold = state => Boolean(state?.operatorReport || state?.firmwareFault);
 const safetyHold = state => state.firmwareFault || state.operatorReport;
 const invalidateNavigation = state => ({

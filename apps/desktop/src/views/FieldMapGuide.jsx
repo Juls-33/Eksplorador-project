@@ -6,15 +6,16 @@ import directory from '../assets/user-manual/field-map/mission-directory.png';
 import mapControls from '../assets/user-manual/field-map/map-controls.png';
 import legend from '../assets/user-manual/field-map/layer-legend.png';
 import handoff from '../assets/user-manual/field-map/mission-handoff.svg';
+import movement from '../assets/user-manual/field-map/movement-sequence.svg';
 
 const topics = [
   { id: 'fields', label: 'Fields and Missions', summary: 'Choose a saved mission or prepare a new one.' },
   { id: 'map', label: 'Find Your Way on the Map', summary: 'Pan, zoom, search and return to the rover marker.' },
   { id: 'pins', label: 'Plan Your Waypoints', summary: 'Place the route in order and check every pin.' },
-  { id: 'sequence', label: 'Read the Movement Sequence', summary: 'Understand the route before sending it.' },
+  { id: 'sequence', label: 'Plan One A → B Leg', summary: 'Select one pin, choose GPS or manual Point A, then align manually.' },
   { id: 'send', label: 'Send a Mission', summary: 'Use the Mission Deployment Assistant to upload safely.' },
   { id: 'status', label: 'Communication and ACKs', summary: 'Know what each confirmation actually proves.' },
-  { id: 'start', label: 'Restore Telemetry and Start', summary: 'Wait for fresh data before selecting SEMI_AUTO.' },
+  { id: 'start', label: 'Restore Telemetry and Supervise the Test', summary: 'Restore telemetry, arm deliberately and supervise one short forward leg.' },
   { id: 'samples', label: 'Heatmaps and Sample Records', summary: 'Read saved measurements and understand logging.' },
   { id: 'help', label: 'Troubleshooting', summary: 'Check common problems while keeping the rover stopped.' },
 ];
@@ -53,7 +54,7 @@ function MapNavigation({ Steps, Notice, instructionalGuide }) {
       <>For saved map areas, use <strong>Jump to downloaded map…</strong> when the list is available.</>,
       <>Dragging, choosing a search result or jumping to an area turns off automatic following. Use <strong>Follow Rover</strong> to center on the rover marker again.</>,
     ]} />
-    <Notice title="Check the source of the position" caution><p>The guide distinguishes fresh <strong>GPS_MEASURED</strong> coordinates from an <strong>OPERATOR_ESTIMATED</strong> map position. An E marker is an estimate, not a satellite fix. Confirm the actual rover heading separately; GPS course is not stationary orientation.</p></Notice>
+    <Notice title="Check the source of the position" caution><p>A marker or IMU Yaw value alone does not prove that GPS or heading is live. Field Map can show an initial or last known position. Confirm fresh rover telemetry before relying on the route.</p></Notice>
     <AnimatedDisclosure className="manual-details" title={"Internet and offline maps"}><p>Place search needs internet. Saved tiles can display offline, but only for covered areas and zoom levels. Use <strong>Offline Maps</strong> to prepare coverage. The current map is limited to the supported region from Nueva Ecija to Batangas; it is not a worldwide search view.</p></AnimatedDisclosure>
     <AnimatedDisclosure className="manual-details" title={"See the full Field Map screen"}>{instructionalGuide(overview, 'Actual Field Map showing the mission directory, saved boundary, numbered waypoints, legend and right-hand information cards', 'Real app capture with a saved mission and no connected receiver. Readings are blank. The marker, heading and calculated distances are not confirmation of a live rover position. Scroll the right column to see more cards.')}</AnimatedDisclosure>
   </>;
@@ -61,11 +62,11 @@ function MapNavigation({ Steps, Notice, instructionalGuide }) {
 
 function Waypoints({ Steps, Notice }) {
   return <>
-    <p>Waypoints are the numbered places you want the rover to visit. Place them in the order you want to travel.</p>
+    <p>Pins mark potential soil-sampling destinations. The A → B planner sends movement toward only one selected pin at a time; it does not upload the full pin order.</p>
     <Steps items={[
       <>After mission setup, confirm the saved boundary or draw and choose <strong>Save Boundary &amp; Place Pins</strong>.</>,
       <>Click <strong>inside the field boundary</strong> to add each pin. The map links the pins in placement order.</>,
-      <>Review the full route, including turns and obstacles. The boundary keeps pins inside the field; it does not check every route segment for hazards or keep a line inside an irregular boundary.</>,
+      <>Review each pin for hazards and accessibility. The boundary keeps pins inside the field; it does not guarantee a clear straight path from the rover to any pin.</>,
       <>Use <strong>Undo Pin</strong> for the last pin. For a specific pin, choose <strong>Remove a Pin</strong>, click that pin, then choose <strong>Done Removing</strong> before adding more.</>,
       <>Use <strong>Clear Pins</strong> to restart the draft. At least one pin is needed to <strong>Launch Mission</strong>.</>,
     ]} />
@@ -75,34 +76,30 @@ function Waypoints({ Steps, Notice }) {
   </>;
 }
 
-function MovementSequence({ Steps, Notice, instructionalGuide }) {
-  return <>
-    <Steps items={[
-      <>Find the <strong>Operator RC Movement Guide</strong> in the right column. Scroll that column if needed.</>,
-      'Choose one next sampling pin. Use fresh GPS or Select position on map, then confirm the actual heading and probe clearance.',
-      <>Open <strong>Movement calibration</strong>. Enter measured forward speed, left/right turning rates and a short maximum duration per instruction, then confirm them.</>,
-      <>Read <strong>Generated Movement Sequence · local timing preview</strong>. A leg contains at most one pivot and one forward instruction. If a turn reaches the duration bound, no forward instruction follows. A partial leg requires another inspection and position/heading confirmation.</>,
-    ]} />
-    <Notice title="Planned movement is not confirmed arrival" caution><p>Outdoor navigation and heading calibration are still needed. Map distances, turn instructions and <strong>IN RANGE</strong> indicators do not guarantee actual arrival or safe movement.</p></Notice>
-    <AnimatedDisclosure className="manual-details" title={"How is a pin completed?"}><p>Visually inspect and accept arrival, including outside five meters if appropriate. Confirm the current location after stopping; intended pin coordinates stay separate. Reject arrival to prepare a corrected leg, or use manual RC repositioning and reconfirm position and heading.</p><p>A pin completes only after a valid soil sample is saved and you confirm sampling is finished and the probe is fully retracted. Authorize preparation of the next leg separately. No proximity, ACK or estimated timer advances a pin.</p></AnimatedDisclosure>
-  </>;
+function MovementSequence({Steps,Notice}){
+ return <>
+  <p><strong>Point A</strong> is the rover's current GPS location or an operator-estimated position selected on the Field Map. <strong>Point B</strong> is one saved sampling pin.</p>
+  <Steps items={[
+   'Select a saved mission, click Plan Point A → B, and choose the destination pin.',
+   'If fresh verified GPS is available, choose Use live GPS. Without a fix, choose Select on map and click the approximate rover position; the pop-up reopens after selection.',
+   'Read the bearing shown in the planner and PHYSICALLY turn the rover using manual RC so it points toward Point B. Confirm the alignment, probe clearance and safe path.',
+   'Review the single forward command (TF duration). This is a timed short leg, not GPS waypoint navigation.',
+   'Continue to the existing LoRa deployment instructions. A new leg requires the rover to be stopped and the starting position/alignment reconfirmed.',
+  ]}/>
+  <Notice title="Important movement limit" caution><p>The currently supported Mega permits at most <strong>2 seconds per forward command</strong>. At the measured field estimate of 0.25 m/s, that is about 0.5 m. Longer distances need separate supervised legs. Actual movement and arrival are not verified by GPS automatically.</p></Notice>
+ </>;
 }
 
-function Sending({ Steps, Notice, instructionalGuide }) {
-  return <>
-    <Notice title="Timed movement upload is disabled" caution><p>The firmware developer must supply the timed-command grammar and safety limits before Send Mission can be enabled. The local timing preview is never sent as a legacy payload. The deployment steps below document the preserved Mission V2 transport for later integration.</p></Notice>
-    {instructionalGuide(handoff, 'Mission deployment process diagram separating saving the plan, preparing HOLD DISARM and rover RX, matching the radio ACK and restoring telemetry', 'Process diagram based on the current Mission Deployment Assistant. It does not show a live connection, acknowledgment or successful mission.')}
-    <Steps items={[
-      <>Review the saved mission and movement sequence. Click <strong>Send Mission</strong> in the Operator RC Movement Guide.</>,
-      <>Follow the <strong>Mission Deployment Assistant</strong>. If it is waiting for the desktop receiver, check the USB/COM connection.</>,
-      <>Set <strong>SB MIDDLE → HOLD</strong> and confirm the motors have stopped. Set <strong>SA UP → DISARM</strong>.</>,
-      <>Set <strong>SD → rover RX</strong> (configured green indicator ON), so the rover can receive the mission.</>,
-      <>The assistant prepares <strong>desktop LoRa TX</strong> automatically. Check all three operator confirmations, then press <strong>Confirm rover ready · Send mission</strong> when available.</>,
-      <>Keep <strong>HOLD, DISARM and rover RX</strong> during transmission and automatic retries. Wait for the matching rover-radio ACK and desktop RX restoration.</>,
-    ]} />
-    <Notice title="The checklist is your confirmation" caution><p>The app does not electronically verify controller switch positions. Check the physical rover and surroundings. Opening the assistant alone does not mean the mission has been delivered.</p></Notice>
-    <AnimatedDisclosure className="manual-details" title={"Cancel or close the assistant"}><p>Cancel stops unsent work and asks the desktop to restore RX. Wait for recovery to finish or report a failure. A radio packet already sent cannot be recalled. Keep HOLD and DISARM selected.</p></AnimatedDisclosure>
-  </>;
+function Sending({Steps,Notice}){
+ return <>
+  <Steps items={[
+   'Prepare the rover with CH6 HOLD and CH5 DISARM. Physically align the rover and confirm the probe is retracted.',
+   <>Click <strong>Plan Point A → B</strong>, choose the pin, set Point A from GPS or the map, complete the operator checks, and click <strong>Continue to LoRa Upload Instructions</strong>.</>,
+   'Switch rover CH8 to RX. The desktop LoRa prepares TX, sends the bounded TF command using Mission V2, then restores RX.',
+   'Look for ACK2 and desktop RX restoration. Switch rover CH8 to TX to restore feedback. ACK2 is not proof that Mega accepted/executed movement.',
+  ]}/>
+  <Notice title="A sent command cannot be recalled" caution><p>Closing cancels only unsent upload work. Use the physical RC HOLD/DISARM to stop the rover. Operator visual verification is required after movement.</p></Notice>
+ </>;
 }
 
 const evidence = [
@@ -110,9 +107,9 @@ const evidence = [
   ['Local packet: Submitted', 'The desktop submitted a command locally; rover receipt is not yet confirmed.'],
   ['Ground station: Accepted', 'The ground station accepted the command; this is still not a rover ACK.'],
   ['Current radio packet: Transmitted', 'The local radio reported transmission; it does not prove rover receipt.'],
-  ['Rover radio ACK confirmed', 'The rover ESP32 acknowledged the matching mission ID and payload checksum.'],
-  ['Mega storage: Unverified', 'The desktop has no independent confirmation that the Mega stored the mission.'],
-  ['Mission execution: Not verified by desktop', 'Radio delivery is not proof that the rover executed the route.'],
+  ['Rover acknowledged delivery', 'ACK2 confirms the matching mission ID and checksum were queued for UART delivery.'],
+  ['Mega stage/execute', 'The A3.1 timed-command workflow requires operator observation; ACK2 does not establish Mega acceptance or movement.'],
+  ['Upload recovery: Complete', 'RX and telemetry recovery finished. This does not mean the mission completed.'],
 ];
 
 function Communication({ Steps, Notice }) {
@@ -124,23 +121,23 @@ function Communication({ Steps, Notice }) {
     ]} />
     <div className="manual-table-wrap" role="region" aria-label="Meaning of mission communication evidence" tabIndex={0}><table className="manual-table"><caption>What the assistant’s labels mean</caption><thead><tr><th scope="col">Label</th><th scope="col">What it confirms</th></tr></thead><tbody>{evidence.map(([label, meaning]) => <tr key={label}><th scope="row">{label}</th><td>{meaning}</td></tr>)}</tbody></table></div>
     <Notice title="Rover-radio ACK is not Mega storage confirmation" caution><p>A matching ACK confirms radio receipt of this payload. It does not independently confirm Mega storage, mission execution or waypoint arrival. The labels above are explanations, not current hardware statuses.</p></Notice>
-    <AnimatedDisclosure className="manual-details" title={"When an upload fails"}><p>Keep <strong>HOLD and DISARM</strong>. An upload without a confirmed ACK may still have reached the rover. If <strong>Retry Mission — reconfirm safety</strong> is offered, check the physical setup and repeat the checklist. The retry retains the same mission ID. Retry can remain unavailable until the desktop is connected and back in RX, or when a rejection needs operator recovery.</p></AnimatedDisclosure>
+    <AnimatedDisclosure className="manual-details" title={"When an upload fails"}><p>Keep <strong>HOLD and DISARM</strong>. An upload without a confirmed ACK may still have reached the rover. If Retry upload is offered, check the physical setup first. The retry retains the same mission ID. Retry can remain unavailable until the desktop is connected and back in RX, or when a rejection needs operator recovery.</p></AnimatedDisclosure>
   </>;
 }
 
-function RestoreAndStart({ Steps, Notice }) {
-  return <>
-    <Notice title="Current supervised workflow" caution><p>Timed upload and powered movement authorization are disabled. Use the operator guide for manual RC repositioning, stopped-rover inspection, arrival acceptance, manual sampling and probe retraction. The steps below are the existing deployment reference, not authorization to start an unverified timed mission.</p></Notice>
-    <div className="manual-control-pair"><div className="manual-inset"><h3>During upload</h3><p>SB: HOLD · SA: DISARM</p><p>Rover SD: RX · desktop: TX</p></div><div className="manual-inset"><h3>After desktop RX returns</h3><p>SB: HOLD · SA: DISARM</p><p>Rover SD: TX · desktop: RX</p></div></div>
-    <Steps items={[
-      <>Wait until the assistant confirms <strong>desktop RX</strong> and shows <strong>Restore telemetry and start when safe</strong>.</>,
-      <>Set <strong>SD → rover TX</strong> (configured green indicator OFF). The desktop changes its own radio; it does not change this rover switch.</>,
-      <>Keep <strong>SB in HOLD</strong> and <strong>SA DISARMED</strong> until the assistant receives a fresh rover telemetry packet after desktop RX restoration.</>,
-      <>Review the restored data and check the actual surroundings. If the rover is ready and it is safe to proceed, set <strong>SA DOWN → ARM</strong> while SB stays in HOLD.</>,
-      <>Deliberately set <strong>SB DOWN → SEMI_AUTO</strong>. Watch the rover and be ready to return to <strong>HOLD or DISARM</strong>.</>,
-    ]} />
-    <Notice title="Logging controls do not stop the rover" caution><p><strong>Pause Logging</strong>, <strong>Mark Finished</strong> and closing a desktop page are not rover stop commands. Use the physical controller’s HOLD or DISARM and check that movement has stopped. Telemetry restoration alone does not verify calibration or safe execution.</p></Notice>
-  </>;
+function RestoreAndStart({Steps,Notice}){
+ return <>
+  <Steps items={[
+   'After the desktop receiver returns to RX, switch the rover CH8 back to TX and confirm telemetry has resumed.',
+   'With the rover stationary, aligned toward the destination, and the probe clear, arm CH5 while keeping CH6 in HOLD.',
+   'Deliberately change CH6 from HOLD to SEMI_AUTO to authorize the single short forward leg.',
+   'Keep physical RC HOLD/DISARM available throughout movement. Sonar and other Mega safety/encoder conditions still apply.',
+   'Watch the rover stop. Inspect the actual location rather than treating a radio ACK or timed stop as confirmed arrival.',
+   'For the next leg, plan again from a new confirmed GPS position or map estimate and physically realign toward the destination.',
+  ]}/>
+  <Notice title="Operator-supervised timed control" caution><p>Automatic GPS correction, multi-pin autonomous navigation and automatic probe deployment are not part of this A → B workflow. A map-picked Point A is an operator estimate, not a measured GPS sample or geotag.</p></Notice>
+  <p>Use physical RC HOLD/DISARM to stop. Closing the app or logging a soil sample cannot stop the rover.</p>
+ </>;
 }
 
 function Heatmaps({ Steps, Notice, instructionalGuide }) {
@@ -155,8 +152,8 @@ function Heatmaps({ Steps, Notice, instructionalGuide }) {
     ]} />
     <section className="manual-inset"><h3>Record new samples</h3><Steps items={[
       <>Use an <strong>Active</strong> mission and turn logging on. A newly launched mission starts logging; a selected saved active mission needs <strong>Start Logging</strong>. Use <strong>Resume</strong> after Pause Logging.</>,
-      'Accept arrival in the operator guide, then extend the probe manually. Logging saves one valid RS485 sample per insertion after a successful save, even away from the intended pin.',
-      'Fresh satellite coordinates are saved when available. Without GPS, measured coordinates stay empty and estimates stay in the session only. Samples with no measured location do not create heatmap points. Retract manually and confirm probe clearance before continuing.',
+      'Recording needs valid GPS coordinates, a probe-engaged report and a location inside the saved boundary. One insertion produces one saved sample after a successful save.',
+      'Lift the probe before the next insertion. A sample does not have to be near a waypoint to be recorded inside the field.',
     ]} /></section>
     <Notice title="Read the saved values too"><p>No colored area can mean no suitable samples or no value for that layer. Overall Soil Health and NPK Ratio are summaries calculated by the app. Heatmap colors are estimates, not proof of soil-test accuracy or a crop recommendation.</p></Notice>
     <AnimatedDisclosure className="manual-details" title={"Finish, resume and compare"}><p><strong>Mark Finished</strong> updates the saved mission status and ends its logging state. <strong>Resume Mission</strong> reopens a finished mission for logging; it does not resume rover motion or resend the route. <strong>Change Since Earlier Mission</strong> compares available earlier records on the same field. Samples remain saved when you switch missions; select the intended mission before starting logging again.</p></AnimatedDisclosure>
@@ -168,12 +165,12 @@ const problems = [
   ['A pin is rejected or clicking removes pins', 'Place pins inside the boundary. If removal mode is on, choose Done Removing before adding pins. Boundary drawing and pin placement are separate steps.'],
   ['The map is blank or the place is not found', 'Check internet for search, enter at least 3 characters and press Go. Offline maps need saved coverage at the current zoom. The supported map region is Nueva Ecija to Batangas.'],
   ['The map keeps returning to the marker', 'Drag the map to stop following. Selecting a search result or a downloaded area also stops following. Use Follow Rover only when you want to center on the marker.'],
-  ['Send Mission is unavailable', 'Timed movement upload is intentionally disabled pending firmware command grammar and safety limits. You can preview a calibrated bounded leg and use manual RC repositioning with operator inspection.'],
+  ['Point A → B upload is unavailable', 'Select a target pin, choose a fresh FUS GPS or map-estimated Point A, confirm physical alignment, probe retraction and clear path. An origin too close to the target cannot generate the minimum 0.100-second timed command.'],
   ['The assistant is waiting or no ACK arrives', 'Keep HOLD and DISARM. Check the desktop receiver USB/COM connection, rover power and SD in rover RX. Read retry/error details. No ACK does not prove the rover received nothing.'],
   ['RX recovery fails or telemetry does not return', 'Keep HOLD and DISARM. Follow the assistant’s recovery message. Only after desktop RX is confirmed, return SD to rover TX and wait for fresh telemetry. Do not start on an old marker or reading.'],
-  ['The rover rejects the mission or requests a protocol update', 'Do not arm or bypass the error. Keep HOLD and DISARM, note the exact message and ask the project team to check compatibility.'],
-  ['There are no new samples or heatmap colors', 'Check Active status, Logging, accepted arrival, the RS485 probe-valid report and database errors. No GPS is required to save soil values, but unlocated samples cannot color the heatmap. Lift the probe before another insertion.'],
-  ['A pin is not completed yet', 'Inspect and accept arrival, wait for a saved sample, and confirm sampling finished and full probe retraction. Distance and ACK2 cannot complete the pin. Session pin confirmations require reconfirmation after reopening the page.'],
+  ['The rover rejects the mission or requests a protocol update', 'Keep HOLD/DISARM. TF timed commands need the newer Rover_A2_7 forwarding firmware and A3.1 Mega; the old rollback N1 waypoint firmware rejects them.'],
+  ['There are no new samples or heatmap colors', 'Check the selected mission, Active status, logging state, fresh GPS, probe report and saved boundary. Check database errors. Lift the probe before another insertion. Choose a layer with recorded values.'],
+  ['A pin says reached, but there is no matching sample', 'Reached can be marked by hand and does not create a record. Review Mission Samples separately. The progress matching radius does not certify GPS accuracy or physical arrival.'],
 ];
 
 function Troubleshooting({ Notice }) {
@@ -201,7 +198,7 @@ export default function FieldMapGuide({ Steps, Notice, instructionalGuide }) {
       <p className="manual-eyebrow">FIELD MAP GUIDE</p>
       <label className="manual-topic-select">Field Map topic<select value={topicIndex} aria-controls="field-manual-topic" onChange={event => setTopicIndex(Number(event.target.value))}>{topics.map((item, index) => <option key={item.id} value={index}>{String.fromCharCode(65 + index)}. {item.label}</option>)}</select></label>
       {topics.map((item, index) => <button type="button" key={item.id} aria-current={index === topicIndex ? 'step' : undefined} aria-controls="field-manual-topic" onClick={() => setTopicIndex(index)}><span className="manual-topic-letter">{String.fromCharCode(65 + index)}</span><span>{item.label}</span>{index === topicIndex && <ChevronRight size={16} aria-hidden="true" />}</button>)}
-      <div className="manual-topic-note"><ShieldCheck size={18} aria-hidden="true" /><span>Plan → review → upload → restore telemetry → start safely.</span></div>
+      <div className="manual-topic-note"><ShieldCheck size={18} aria-hidden="true" /><span>Plan → review → upload → restore telemetry → verify staging.</span></div>
     </nav>
     <article className="manual-article" id="field-manual-topic" aria-labelledby="field-manual-heading">
       <header className="manual-article-header"><p className="manual-eyebrow">FIELD MAP · {String(topicIndex + 1).padStart(2, '0')} / 09</p><h2 id="field-manual-heading" tabIndex={-1} ref={headingRef}>{topic.label}</h2><p>{topic.summary}</p></header>

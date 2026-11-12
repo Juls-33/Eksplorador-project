@@ -39,9 +39,10 @@ export default function HeatmapMap({
   focusPoints = [],
   labeledPoints = [],
   roverPos = [14.6095, 120.9895],
+  planningStartPos = null,
+  planningTargetPos = null,
   gpsWarning = null,
   waypoints = [],
-  completedWaypointIdxs = [],
   waypointsDeletable = false,
   onWaypointDelete = null,
   boundary = [],
@@ -63,6 +64,7 @@ export default function HeatmapMap({
   const roverMarkerRef = useRef(null);
   const waypointLayerGroupRef = useRef(null);
   const routePolylineRef = useRef(null);
+  const planningLayerRef = useRef(null);
   const boundaryPolygonRef = useRef(null);
   const boundaryPointsGroupRef = useRef(null);
   const historicalLabelsGroupRef = useRef(null);
@@ -216,7 +218,8 @@ export default function HeatmapMap({
     if (mapContainerRef.current) {
       mapContainerRef.current.style.cursor =
         interactionMode === 'DRAW_BOUNDARY' ||
-        interactionMode === 'SET_WAYPOINTS'
+        interactionMode === 'SET_WAYPOINTS' ||
+        interactionMode === 'SELECT_ROVER_START'
           ? 'crosshair'
           : '';
     }
@@ -538,7 +541,7 @@ export default function HeatmapMap({
 
     historicalLabelsGroupRef.current.clearLayers();
 
-    labeledPoints.forEach(({ lat, lng, label, isAnchor, title }) => {
+    labeledPoints.forEach(({ lat, lng, label, isAnchor }) => {
       if (
         !Number.isFinite(Number(lat)) ||
         !Number.isFinite(Number(lng))
@@ -569,9 +572,9 @@ export default function HeatmapMap({
       L.marker([lat, lng], {
         icon: markerIcon,
         zIndexOffset: 700,
-        title: title || (isAnchor
+        title: isAnchor
           ? `Anchor sample #${label}`
-          : `Historical sample #${label}`)
+          : `Historical sample #${label}`
       }).addTo(historicalLabelsGroupRef.current);
     });
   }, [labeledPoints]);
@@ -598,6 +601,28 @@ export default function HeatmapMap({
     }
   }, [roverPos, showRover]);
 
+  // Planning overlays are distinct from live GPS, saved pins and soil samples.
+  // When a point is manually estimated, the orange marker is NOT a GPS fix.
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (planningLayerRef.current) map.removeLayer(planningLayerRef.current);
+    const layer = L.layerGroup();
+    if (hasMapPosition(planningStartPos)) {
+      L.circleMarker(planningStartPos, {
+        radius: 9, color: '#b45309', weight: 3, fillColor: '#fef3c7', fillOpacity: 0.85
+      }).bindTooltip('Point A · planning estimate or selected origin').addTo(layer);
+      if (hasMapPosition(planningTargetPos)) {
+        L.polyline([planningStartPos, planningTargetPos], {
+          color: '#166534', weight: 3, dashArray: '9, 6', opacity: 0.85
+        }).addTo(layer);
+      }
+    }
+    layer.addTo(map);
+    planningLayerRef.current = layer;
+    return () => { if (map.hasLayer(layer)) map.removeLayer(layer); if (planningLayerRef.current === layer) planningLayerRef.current = null; };
+  }, [planningStartPos?.[0], planningStartPos?.[1], planningTargetPos?.[0], planningTargetPos?.[1]]);
+
   // Render mission waypoints and preserve individual pin deletion.
   useEffect(() => {
     if (
@@ -608,7 +633,6 @@ export default function HeatmapMap({
     }
 
     waypointLayerGroupRef.current.clearLayers();
-    const completedPins = new Set(completedWaypointIdxs);
 
     waypoints.forEach((pt, index) => {
       const pinIcon = waypointsDeletable
@@ -635,7 +659,7 @@ export default function HeatmapMap({
         : L.divIcon({
             className: 'custom-pin',
             html: `<div style="
-              background: ${completedPins.has(index) ? '#15803d' : '#8A5A35'};
+              background: #8A5A35;
               color: white;
               width: 22px;
               height: 22px;
@@ -647,7 +671,7 @@ export default function HeatmapMap({
               font-size: 11px;
               font-weight: bold;
               box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-            ">${completedPins.has(index) ? '✓' : index + 1}</div>`,
+            ">${index + 1}</div>`,
             iconSize: [22, 22]
           });
 
@@ -655,7 +679,7 @@ export default function HeatmapMap({
         icon: pinIcon,
         title: waypointsDeletable
           ? `Remove pin ${index + 1}`
-          : `Pin ${index + 1}${completedPins.has(index) ? ' — completed by a GPS-measured soil sample within 5 meters' : ' — pending'}`,
+          : `Pin ${index + 1}`,
         zIndexOffset: waypointsDeletable ? 800 : 0
       });
 
@@ -673,7 +697,7 @@ export default function HeatmapMap({
     });
 
     routePolylineRef.current.setLatLngs(waypoints);
-  }, [waypoints, waypointsDeletable, completedWaypointIdxs]);
+  }, [waypoints, waypointsDeletable]);
 
   // Place search ("jump to a landmark"). Submit-only on purpose — see
   // services/placeSearch.js for the geocoder usage policy this respects.

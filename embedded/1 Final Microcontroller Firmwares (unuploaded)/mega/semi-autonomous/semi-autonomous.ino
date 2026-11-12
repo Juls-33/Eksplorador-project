@@ -56,7 +56,7 @@ const uint8_t PIN_TRIG = 11;
 const uint8_t PIN_ECHO = 12;
 
 // Original soil probe Modbus via Mega Serial3; ESP32 no longer owns RS485 UART.
-const uint8_t RS485_DIR=27; // joined DE and /RE on RS485 module
+const uint8_t RS485_DIR=29; // joined DE and /RE on RS485 module
 const unsigned long SOIL_POLL_MS=2000;
 const unsigned long SOIL_TIMEOUT_MS=300;
 const uint8_t SOIL_REQUEST[]={0x01,0x03,0x00,0x00,0x00,0x08,0x44,0x0C};
