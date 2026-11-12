@@ -465,12 +465,13 @@ export async function saveSoilSample(sample) {
          nitrogen,
          phosphorus,
          potassium,
-         overall
+         overall,
+         location_source
        )
        VALUES (
          $1, $2, $3, $4,
          $5, $6, $7, $8,
-         $9, $10, $11, $12
+         $9, $10, $11, $12, $13
        )`,
       [
         sample.mission_id ?? null,
@@ -484,7 +485,8 @@ export async function saveSoilSample(sample) {
         sample.n,
         sample.p,
         sample.k,
-        sample.overall ?? 50
+        sample.overall ?? 50,
+        sample.location_source ?? (sample.lat != null && sample.lng != null ? 'GPS' : 'UNLOCATED')
       ]
     );
 

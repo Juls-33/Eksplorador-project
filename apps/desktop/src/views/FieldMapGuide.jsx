@@ -16,7 +16,7 @@ const topics = [
   { id: 'send', label: 'Send a Mission', summary: 'Use the Mission Deployment Assistant to upload safely.' },
   { id: 'status', label: 'Communication and ACKs', summary: 'Know what each confirmation actually proves.' },
   { id: 'start', label: 'Restore Telemetry and Supervise the Test', summary: 'Restore telemetry, arm deliberately and supervise one short forward leg.' },
-  { id: 'samples', label: 'Heatmaps and Sample Records', summary: 'Read saved measurements and understand logging.' },
+  { id: 'samples', label: 'Heatmaps and Sample Records', summary: 'Review saved data, GPS and operator-estimated soil locations.' },
   { id: 'help', label: 'Troubleshooting', summary: 'Check common problems while keeping the rover stopped.' },
 ];
 
@@ -152,10 +152,12 @@ function Heatmaps({ Steps, Notice, instructionalGuide }) {
     ]} />
     <section className="manual-inset"><h3>Record new samples</h3><Steps items={[
       <>Use an <strong>Active</strong> mission and turn logging on. A newly launched mission starts logging; a selected saved active mission needs <strong>Start Logging</strong>. Use <strong>Resume</strong> after Pause Logging.</>,
-      'Recording needs valid GPS coordinates, a probe-engaged report and a location inside the saved boundary. One insertion produces one saved sample after a successful save.',
-      'Lift the probe before the next insertion. A sample does not have to be near a waypoint to be recorded inside the field.',
+      <>When GPS has no fix and logging is active, turn <strong>Manual location ON</strong>. Choose <strong>Click on map</strong> and click inside the field, or select an existing <strong>mission pin</strong>. The amber marker is an operator estimate, not a GPS measurement.</>,
+      <>With a manual location chosen, insert the probe and wait for a valid soil reading. One probe insertion saves one sample. A fresh GPS coordinate always takes priority over the manual fallback.</>,
+      <>The <strong>Location</strong> column labels samples as GPS, Manual map, Manual pin, or Unlocated. If there is no GPS and no manual location, the soil values can still be saved with no coordinates. When manual mode is ON but a location has not been chosen, the app waits until you pick one or lift the probe.</>,
+      'Lift the probe before the next insertion. Each manually selected location is consumed after one sample; choose the next sampling position explicitly.',
     ]} /></section>
-    <Notice title="Read the saved values too"><p>No colored area can mean no suitable samples or no value for that layer. Overall Soil Health and NPK Ratio are summaries calculated by the app. Heatmap colors are estimates, not proof of soil-test accuracy or a crop recommendation.</p></Notice>
+    <Notice title="Read the saved values too"><p>Operator-estimated positions are shown in amber and stored with location provenance; they are not GPS-verified coordinates. Unlocated samples contribute to data summaries but not the spatial heatmap. Overall Soil Health and NPK Ratio are app-calculated summaries; heatmap colors are interpolated estimates, not proof of laboratory accuracy.</p></Notice>
     <AnimatedDisclosure className="manual-details" title={"Finish, resume and compare"}><p><strong>Mark Finished</strong> updates the saved mission status and ends its logging state. <strong>Resume Mission</strong> reopens a finished mission for logging; it does not resume rover motion or resend the route. <strong>Change Since Earlier Mission</strong> compares available earlier records on the same field. Samples remain saved when you switch missions; select the intended mission before starting logging again.</p></AnimatedDisclosure>
   </>;
 }

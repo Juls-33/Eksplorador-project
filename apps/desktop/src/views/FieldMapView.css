@@ -19,3 +19,46 @@
   .field-map-layout > .card:first-child { max-height: 240px; }
   .field-map-layout > .card:nth-child(2) > .card-header { flex-wrap: wrap; gap: 8px; }
 }
+
+
+/* A3.5: compact sample-geotag picker. This overlays the Field Map only
+   while logging is enabled and the operator requests manual geotagging. */
+.manual-sample-location-panel {
+  position: absolute;
+  z-index: 1050;
+  top: 12px;
+  right: 12px;
+  width: min(345px, calc(100% - 24px));
+  padding: 12px;
+  border: 1px solid #d97706;
+  border-radius: 10px;
+  background: rgba(255, 251, 235, 0.98);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.14);
+  color: #78350f;
+  font-size: 0.78rem;
+  display: grid;
+  gap: 8px;
+}
+.manual-sample-location-panel p { margin: 0; line-height: 1.4; }
+.manual-sample-location-panel small { color: #92400e; line-height: 1.35; }
+.manual-sample-location-panel__heading { display:flex; align-items:center; gap:6px; font-weight:800; font-size:0.88rem; }
+.manual-sample-location-panel__actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.manual-sample-location-panel__actions > button,
+.manual-sample-location-panel__actions > select {
+  border: 1px solid #d97706;
+  border-radius: 6px;
+  background: #fff;
+  color: #78350f;
+  font-size: 0.75rem;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.manual-sample-location-panel__actions > select { flex:1; min-width:130px; max-width:100%; }
+.manual-sample-location-panel__selected {
+  display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+  padding:6px 8px; border-radius:6px; background:#ffedd5;
+}
+.manual-sample-location-panel__selected span { overflow-wrap:anywhere; }
+.manual-sample-location-panel__selected button { border:0; background:transparent; cursor:pointer; color:#9a3412; padding:2px; display:flex; }
+.manual-sample-location-panel__pick { font-weight:700; color:#9a3412; }
+.manual-sample-location-panel__waiting { font-weight:600; color:#92400e; }

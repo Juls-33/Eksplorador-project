@@ -33,6 +33,7 @@ import LoRaConnectionStatus from '../components/LoRaConnectionStatus';
 import { useLoRaConnection } from '../hooks/useLoRaConnection';
 import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
 import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
+import { resolveSoilSampleLocation, isInsideSamplingField, SOIL_LOCATION_SOURCE } from '../utils/manualSampleGeotag';
 import { MOISTURE_LAYER, PH_LAYER } from '../utils/layerBands';
 import {
   saveSoilSample,
@@ -176,6 +177,15 @@ export default function FieldMapView({ onHelp }) {
   // Prevent continuous telemetry from saving the same probe insertion repeatedly.
   // A new sample becomes eligible only after the probe is lifted and inserted again.
   const sampleCapturedForInsertionRef = useRef(false);
+  const sampleSaveInFlightRef = useRef(false);
+  const probeInsertedRef = useRef(false);
+  const insertionGenerationRef = useRef(0);
+  const pendingNoGpsSampleRef = useRef(null);
+  // Soil sample location is separate from the A→B navigation estimate.
+  // Only an explicit operator choice may serve as the manual sample geotag.
+  const [manualSoilLocationEnabled, setManualSoilLocationEnabled] = useState(false);
+  const [manualSoilLocationPicking, setManualSoilLocationPicking] = useState(false);
+  const [manualSoilLocation, setManualSoilLocation] = useState(null);
 
   // Live Rover Telemetry
   const [roverPos, setRoverPos] = useState(null);
@@ -281,7 +291,9 @@ export default function FieldMapView({ onHelp }) {
       .map(({ sample, number }) => {
         const lat = validNumber(sample.lat ?? sample.coords?.[0]);
         const lng = validNumber(sample.lng ?? sample.coords?.[1]);
-        return lat === null || lng === null ? null : { lat, lng, label: number };
+        return lat === null || lng === null ? null : {
+          lat, lng, label: number, locationSource: sample.location_source ?? null
+        };
       })
       .filter(Boolean);
   }, [numberedSamples, showSamplePins, wizardStep]);
@@ -454,6 +466,13 @@ export default function FieldMapView({ onHelp }) {
     setPointToPointPicking(false);
     setPointToPointManualStart(null);
     setPointToPointOriginPreference(null);
+    setManualSoilLocationEnabled(false);
+    setManualSoilLocationPicking(false);
+    setManualSoilLocation(null);
+    pendingNoGpsSampleRef.current = null;
+    probeInsertedRef.current = false;
+    insertionGenerationRef.current += 1;
+    // A prior SQLite write may still be finishing; keep the in-flight guard.
     setSelectedMissionId(id);
     setCompareToId(null);
     setManualReached([]);
@@ -522,57 +541,111 @@ export default function FieldMapView({ onHelp }) {
 
       const isProbeInserted = data.soilValid === 1;
 
-      // Treat one physical probe insertion as one sampling action. While the
-      // probe remains in the soil, incoming telemetry may update continuously,
-      // but it must not create duplicate database records. Lifting the probe
-      // arms the next insertion so the same waypoint can be sampled again.
-      if (!isProbeInserted) {
-        sampleCapturedForInsertionRef.current = false;
-        return;
-      }
-
-      if (!hasValidGps || sampleCapturedForInsertionRef.current) return;
-
-      const currentCoord = [lat, lng];
-
-      if (activeBoundary.length >= 3 && !isPointInPolygon(currentCoord, activeBoundary)) {
-        return;
-      }
-
-      const newSample = {
-        mission_id: String(currentSelected.id),
-        plot: currentSelected.fieldName,
-        coords: currentCoord,
-        lat,
-        lng,
-        moisture: data.moisture,
-        ph: data.ph,
-        ec: data.ec,
-        n: data.nitrogen,
-        p: data.phosphorus,
-        k: data.potassium,
-        overall: Math.round((data.moisture + data.ph * 10) / 2),
-        timestamp: new Date().toISOString()
+      // Preserve one record per physical probe insertion, including if the
+      // operator must choose a location after soil readings have started.
+      // In-progress saves are serialized to avoid duplicate telemetry records.
+      const saveInsertion = async (packet, location, generation) => {
+        if (sampleCapturedForInsertionRef.current || sampleSaveInFlightRef.current) return;
+        sampleSaveInFlightRef.current = true;
+        const coord = location.coords;
+        const newSample = {
+          mission_id: String(currentSelected.id),
+          plot: currentSelected.fieldName,
+          coords: coord ?? [null, null],
+          lat: coord?.[0] ?? null,
+          lng: coord?.[1] ?? null,
+          location_source: location.source,
+          moisture: packet.moisture,
+          ph: packet.ph,
+          ec: packet.ec,
+          n: packet.nitrogen,
+          p: packet.phosphorus,
+          k: packet.potassium,
+          overall: Math.round((packet.moisture + packet.ph * 10) / 2),
+          timestamp: new Date().toISOString()
+        };
+        try {
+          const saved = await saveSoilSample(newSample);
+          if (!saved) {
+            setNotification({ type: 'error', message: 'A soil sample could not be saved to SQLite.' });
+            return;
+          }
+          setLiveSamples(prev => [...prev, newSample]);
+          setFieldSamples(prev => [...prev, newSample]);
+          setMissions(prev => prev.map(m => m.id === currentSelected.id ? { ...m, sampleCount: m.sampleCount + 1 } : m));
+          if (insertionGenerationRef.current === generation) {
+            sampleCapturedForInsertionRef.current = true;
+          }
+          if (insertionGenerationRef.current === generation) pendingNoGpsSampleRef.current = null;
+          if (location.source === SOIL_LOCATION_SOURCE.GPS && manualSoilLocation) {
+            // Never silently reuse a previous operator estimate after a GPS fix.
+            setManualSoilLocation(null);
+          }
+          if (location.source === SOIL_LOCATION_SOURCE.OPERATOR_MAP ||
+              location.source === SOIL_LOCATION_SOURCE.MISSION_PIN) {
+            // One deliberate map/pin choice belongs to one insertion ONLY.
+            setManualSoilLocation(null);
+            setNotification({ type: 'success', message: 'Soil sample saved with an operator-estimated location (not a GPS fix).' });
+          } else if (location.source === SOIL_LOCATION_SOURCE.UNLOCATED) {
+            setNotification({ type: 'info', message: 'Soil values saved without coordinates. Choose a manual location before the next insertion if GPS is unavailable.' });
+          }
+        } finally {
+          sampleSaveInFlightRef.current = false;
+        }
       };
 
-      const saved = await saveSoilSample(newSample);
-      if (!saved) {
-        setNotification({ type: 'error', message: 'A sample could not be saved to the database.' });
+      if (!isProbeInserted) {
+        if (probeInsertedRef.current) {
+          // If an operator never chose a location, keep the real soil values
+          // instead of discarding the whole insertion when the probe is lifted.
+          const pending = pendingNoGpsSampleRef.current;
+          if (pending && !sampleCapturedForInsertionRef.current) {
+            // Honor a location the operator picked while readings were already
+            // incoming, even if the next telemetry packet is probe-lifted.
+            const fallbackLocation = resolveSoilSampleLocation({
+              gpsCoords: null,
+              manualEnabled: manualSoilLocationEnabled,
+              manualSelection: manualSoilLocation,
+              boundary: activeBoundary
+            });
+            void saveInsertion(pending, fallbackLocation, insertionGenerationRef.current);
+          }
+          probeInsertedRef.current = false;
+          insertionGenerationRef.current += 1;
+          sampleCapturedForInsertionRef.current = false;
+          pendingNoGpsSampleRef.current = null;
+        }
         return;
       }
+      if (!probeInsertedRef.current) {
+        probeInsertedRef.current = true;
+        insertionGenerationRef.current += 1;
+        sampleCapturedForInsertionRef.current = false;
+      }
+      if (sampleCapturedForInsertionRef.current || sampleSaveInFlightRef.current) return;
 
-      setLiveSamples((prev) => [...prev, newSample]);
-      setFieldSamples((prev) => [...prev, newSample]); // keep the field-wide average current while logging
-      setMissions((prev) => prev.map((m) => (m.id === currentSelected.id ? { ...m, sampleCount: m.sampleCount + 1 } : m)));
-      // Mark this insertion as captured only after the database save succeeds.
-      // If saving fails, later telemetry from the same insertion may retry.
-      sampleCapturedForInsertionRef.current = true;
+      const location = resolveSoilSampleLocation({
+        gpsCoords: hasValidGps ? [lat, lng] : null,
+        manualEnabled: manualSoilLocationEnabled,
+        manualSelection: manualSoilLocation,
+        boundary: activeBoundary
+      });
+      // A true GPS position outside the saved field remains rejected, as in
+      // the original app. The operator cannot bypass the boundary by clicking.
+      if (location.outsideField) return;
+      if (!hasValidGps && manualSoilLocationEnabled && !manualSoilLocation) {
+        // Wait for a deliberate location pick; incoming readings remain cached.
+        // If the probe is lifted first, save without coordinates (above).
+        pendingNoGpsSampleRef.current = data;
+        return;
+      }
+      void saveInsertion(data, location, insertionGenerationRef.current);
     });
 
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [missionState, currentSelected, activeBoundary]);
+  }, [missionState, currentSelected, activeBoundary, manualSoilLocationEnabled, manualSoilLocation]);
 
   // ---------- Wizard helpers ----------
   const resetWizard = () => {
@@ -623,6 +696,16 @@ export default function FieldMapView({ onHelp }) {
   };
 
   const handleMapClick = (coords) => {
+    if (manualSoilLocationPicking && wizardStep === 'IDLE' && missionState === 'IN_PROGRESS') {
+      if (!isInsideSamplingField(coords, activeBoundary)) {
+        setNotification({ type: 'error', message: 'Choose a location inside the saved field boundary.' });
+        return;
+      }
+      setManualSoilLocation({ coords, source: SOIL_LOCATION_SOURCE.OPERATOR_MAP });
+      setManualSoilLocationPicking(false);
+      setNotification({ type: 'info', message: 'Manual sample location selected. This is an operator estimate, not a GPS measurement.' });
+      return;
+    }
     if (pointToPointPicking && wizardStep === 'IDLE') {
       const estimated = operatorMapStart(coords);
       if (!estimated) {
@@ -794,6 +877,9 @@ export default function FieldMapView({ onHelp }) {
     }
     setMissions((prev) => prev.map((m) => (m.id === id ? { ...m, status: 'completed' } : m)));
     setMissionState('FINISHED');
+    setManualSoilLocationEnabled(false);
+    setManualSoilLocationPicking(false);
+    setManualSoilLocation(null);
     setNotification({ type: 'success', message: 'Mission completed and findings logged.' });
   };
 
@@ -814,6 +900,7 @@ export default function FieldMapView({ onHelp }) {
 
   const openPointToPoint = () => {
     if (wizardStep !== 'IDLE' || !displayedWaypoints.length) return;
+    setManualSoilLocationPicking(false);
     setPointToPointPinIndex(currentWaypointIdx < displayedWaypoints.length ? currentWaypointIdx : 0);
     setPointToPointOriginPreference(null);
     setPointToPointPicking(false);
@@ -1164,7 +1251,7 @@ export default function FieldMapView({ onHelp }) {
                     <button
                       className="badge"
                       style={{ background: '#eab308', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-                      onClick={() => setMissionState('PAUSED')}
+                      onClick={() => { setMissionState('PAUSED'); setManualSoilLocationPicking(false); setManualSoilLocation(null); }}
                     >
                       <span className="pulse-dot" style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#fff' }} />
                       <Pause size={12} /> Pause Logging
@@ -1178,6 +1265,25 @@ export default function FieldMapView({ onHelp }) {
                       onClick={() => setMissionState('IN_PROGRESS')}
                     >
                       <RotateCcw size={12} /> Resume
+                    </button>
+                  )}
+                  {missionState === 'IN_PROGRESS' && (
+                    <button
+                      type="button"
+                      className="badge"
+                      aria-pressed={manualSoilLocationEnabled}
+                      title="When GPS has no fix, choose a soil sample location on the map or from a mission pin"
+                      onClick={() => {
+                        setManualSoilLocationEnabled(previous => !previous);
+                        setManualSoilLocationPicking(false);
+                        setManualSoilLocation(null);
+                      }}
+                      style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px',
+                        color: manualSoilLocationEnabled ? '#fff' : '#92400e',
+                        background: manualSoilLocationEnabled ? '#b45309' : '#fef3c7',
+                        border: '1px solid #d97706' }}
+                    >
+                      <MapPin size={12} /> {roverPos ? 'GPS ready · ' : 'No GPS · '}Manual location {manualSoilLocationEnabled ? 'ON' : 'OFF'}
                     </button>
                   )}
                 </div>
@@ -1210,6 +1316,49 @@ export default function FieldMapView({ onHelp }) {
           </div>
 
           <div style={{ flex: 1, position: 'relative' }}>
+            {missionState === 'IN_PROGRESS' && manualSoilLocationEnabled && wizardStep === 'IDLE' && (
+              <div className="manual-sample-location-panel" role="region" aria-label="Manual soil sample location">
+                <div className="manual-sample-location-panel__heading"><MapPin size={16} /> Manual soil geotag</div>
+                {roverPos ? (
+                  <p>GPS coordinates are available. Live GPS takes priority over any manual estimate.</p>
+                ) : (
+                  <p>No GPS position. Assign the <strong>next soil insertion</strong> a map coordinate or existing mission pin.</p>
+                )}
+                <div className="manual-sample-location-panel__actions">
+                  <button type="button" className="badge" aria-pressed={manualSoilLocationPicking}
+                    onClick={() => { setManualSoilLocationPicking(previous => !previous); setPointToPointPicking(false); }}>
+                    <MapPin size={13} /> {manualSoilLocationPicking ? 'Cancel map pick' : 'Click on map'}
+                  </button>
+                  {displayedWaypoints.length > 0 && (
+                    <select aria-label="Choose a mission pin as soil sample location" defaultValue=""
+                      onChange={(event) => {
+                        const index = Number(event.target.value);
+                        if (!Number.isInteger(index) || !displayedWaypoints[index]) return;
+                        const coords = displayedWaypoints[index];
+                        if (!isInsideSamplingField(coords, activeBoundary)) {
+                          setNotification({ type: 'error', message: 'That pin is outside the saved field boundary.' });
+                          return;
+                        }
+                        setManualSoilLocation({ coords: [...coords], source: SOIL_LOCATION_SOURCE.MISSION_PIN, pinIndex: index });
+                        setManualSoilLocationPicking(false);
+                        event.target.value = '';
+                      }}>
+                      <option value="" disabled>Use an existing mission pin…</option>
+                      {displayedWaypoints.map((_, index) => <option value={index} key={index}>Pin {index + 1}</option>)}
+                    </select>
+                  )}
+                </div>
+                {manualSoilLocationPicking && <div className="manual-sample-location-panel__pick">Click within the field boundary to place the sample marker.</div>}
+                {manualSoilLocation ? (
+                  <div className="manual-sample-location-panel__selected">
+                    <strong>{manualSoilLocation.source === SOIL_LOCATION_SOURCE.MISSION_PIN ? `Pin ${manualSoilLocation.pinIndex + 1}` : 'Map estimate'} selected</strong>
+                    <span>{manualSoilLocation.coords.map(n => Number(n).toFixed(6)).join(', ')}</span>
+                    <button type="button" onClick={() => setManualSoilLocation(null)} aria-label="Clear manual soil sample location"><X size={14} /></button>
+                  </div>
+                ) : <p className="manual-sample-location-panel__waiting">{latestSensorData.soilValid === 1 && !roverPos ? 'Probe engaged: awaiting manual coordinate; do not lift until chosen.' : 'No manual sample location selected yet.'}</p>}
+                <small>Operator-estimated coordinates are labeled separately in the database. GPS/RC navigation is not overridden.</small>
+              </div>
+            )}
             <HeatmapMap
               center={DEFAULT_CENTER}
               zoom={18}
@@ -1221,8 +1370,10 @@ export default function FieldMapView({ onHelp }) {
               roverPos={roverPos}
               planningStartPos={(pointToPointOpen || pointToPointPicking) && pointToPointOriginPreference === 'MANUAL' ? pointToPointManualStart?.coords ?? null : null}
               planningTargetPos={displayedWaypoints[pointToPointPinIndex] ?? null}
+              manualSamplePos={missionState === 'IN_PROGRESS' && manualSoilLocationEnabled ? manualSoilLocation?.coords ?? null : null}
               onMapClick={handleMapClick}
               interactionMode={
+                manualSoilLocationPicking && missionState === 'IN_PROGRESS' && wizardStep === 'IDLE' ? 'SELECT_SAMPLE_LOCATION' :
                 pointToPointPicking && wizardStep === 'IDLE' ? 'SELECT_ROVER_START' :
                 wizardStep === 'DRAWING_BOUNDARY'
                   ? 'DRAW_BOUNDARY'
@@ -1625,7 +1776,7 @@ export default function FieldMapView({ onHelp }) {
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
                     <thead>
                       <tr style={{ textAlign: 'left', color: 'var(--text-muted)', position: 'sticky', top: 0, background: '#fff' }}>
-                        {['#', 'Time', 'Moist', 'pH', 'EC', 'N', 'P', 'K'].map((h) => (
+                        {['#', 'Time', 'Location', 'Moist', 'pH', 'EC', 'N', 'P', 'K'].map((h) => (
                           <th key={h} style={{ padding: '6px 6px 6px 0', fontWeight: 600 }}>{h}</th>
                         ))}
                       </tr>
@@ -1653,6 +1804,12 @@ export default function FieldMapView({ onHelp }) {
                             </span>
                           </td>
                           <td style={{ padding: '4px 6px 4px 0' }}>{String(s.timestamp || '').replace('T', ' ').slice(5, 16)}</td>
+                          <td style={{ padding: '4px 6px 4px 0' }}>
+                            <span title={s.location_source === 'OPERATOR_MAP' ? 'Operator selected on the map' : s.location_source === 'MISSION_PIN' ? 'Operator selected an existing mission pin' : s.location_source === 'UNLOCATED' ? 'GPS unavailable and no manual location assigned' : 'Measured GPS or historical sample'}
+                              style={{ color: ['OPERATOR_MAP', 'MISSION_PIN'].includes(s.location_source) ? '#b45309' : 'var(--text-muted)', fontWeight: ['OPERATOR_MAP', 'MISSION_PIN'].includes(s.location_source) ? 700 : 400 }}>
+                              {s.location_source === 'OPERATOR_MAP' ? 'Manual map' : s.location_source === 'MISSION_PIN' ? 'Manual pin' : s.location_source === 'UNLOCATED' ? 'Unlocated' : s.location_source === 'GPS' ? 'GPS' : 'Legacy'}
+                            </span>
+                          </td>
                           <td style={{ padding: '4px 6px 4px 0' }}>{fmt(s.moisture, 1)}</td>
                           <td style={{ padding: '4px 6px 4px 0' }}>{fmt(s.ph, 2)}</td>
                           <td style={{ padding: '4px 6px 4px 0' }}>{fmt(s.ec, 2)}</td>
