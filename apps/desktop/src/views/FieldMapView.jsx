@@ -1267,25 +1267,6 @@ export default function FieldMapView({ onHelp }) {
                       <RotateCcw size={12} /> Resume
                     </button>
                   )}
-                  {missionState === 'IN_PROGRESS' && (
-                    <button
-                      type="button"
-                      className="badge"
-                      aria-pressed={manualSoilLocationEnabled}
-                      title="When GPS has no fix, choose a soil sample location on the map or from a mission pin"
-                      onClick={() => {
-                        setManualSoilLocationEnabled(previous => !previous);
-                        setManualSoilLocationPicking(false);
-                        setManualSoilLocation(null);
-                      }}
-                      style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px',
-                        color: manualSoilLocationEnabled ? '#fff' : '#92400e',
-                        background: manualSoilLocationEnabled ? '#b45309' : '#fef3c7',
-                        border: '1px solid #d97706' }}
-                    >
-                      <MapPin size={12} /> {roverPos ? 'GPS ready · ' : 'No GPS · '}Manual location {manualSoilLocationEnabled ? 'ON' : 'OFF'}
-                    </button>
-                  )}
                 </div>
               )}
 
@@ -1315,10 +1296,37 @@ export default function FieldMapView({ onHelp }) {
             </div>
           </div>
 
-          <div style={{ flex: 1, position: 'relative' }}>
-            {missionState === 'IN_PROGRESS' && manualSoilLocationEnabled && wizardStep === 'IDLE' && (
-              <div className="manual-sample-location-panel" role="region" aria-label="Manual soil sample location">
-                <div className="manual-sample-location-panel__heading"><MapPin size={16} /> Manual soil geotag</div>
+          {/* Keep manual geotagging *outside* Leaflet's map overlay. The map's
+              offline-coverage selector is positioned top-right at z-index 1000;
+              overlay controls here would compete with it and obscure clicks. */}
+          {missionState === 'IN_PROGRESS' && wizardStep === 'IDLE' && (
+            <div className="manual-sample-location-toolbar" role="region" aria-label="Soil sample location controls">
+              <div className="manual-sample-location-toolbar__header">
+                <div className="manual-sample-location-toolbar__label">
+                  <MapPin size={16} aria-hidden="true" />
+                  <div>
+                    <strong>Soil sample location</strong>
+                    <span>{roverPos ? 'GPS fix available · GPS will be used' : 'GPS unavailable · assign a location if needed'}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="manual-sample-location-toolbar__toggle"
+                  aria-pressed={manualSoilLocationEnabled}
+                  aria-expanded={manualSoilLocationEnabled}
+                  aria-controls="manual-soil-geotag-controls"
+                  title="When GPS has no fix, select a map location or mission pin for the next soil sample"
+                  onClick={() => {
+                    setManualSoilLocationEnabled(previous => !previous);
+                    setManualSoilLocationPicking(false);
+                    setManualSoilLocation(null);
+                  }}
+                >
+                  <MapPin size={13} /> Manual geotag: {manualSoilLocationEnabled ? 'ON' : 'OFF'}
+                </button>
+              </div>
+              {manualSoilLocationEnabled && (
+                <div id="manual-soil-geotag-controls" className="manual-sample-location-panel" role="group" aria-label="Manual soil geotag selectionDJASDHASJDHJASDHJASDAJHSDHAJSDJAHSDJHAHASDJ">
                 {roverPos ? (
                   <p>GPS coordinates are available. Live GPS takes priority over any manual estimate.</p>
                 ) : (
@@ -1357,8 +1365,11 @@ export default function FieldMapView({ onHelp }) {
                   </div>
                 ) : <p className="manual-sample-location-panel__waiting">{latestSensorData.soilValid === 1 && !roverPos ? 'Probe engaged: awaiting manual coordinate; do not lift until chosen.' : 'No manual sample location selected yet.'}</p>}
                 <small>Operator-estimated coordinates are labeled separately in the database. GPS/RC navigation is not overridden.</small>
-              </div>
-            )}
+                </div>
+              )}
+            </div>
+          )}
+          <div style={{ flex: 1, position: 'relative', minHeight: '340px' }}>
             <HeatmapMap
               center={DEFAULT_CENTER}
               zoom={18}
