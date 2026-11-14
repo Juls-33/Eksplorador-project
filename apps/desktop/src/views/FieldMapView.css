@@ -19,3 +19,100 @@
   .field-map-layout > .card:first-child { max-height: 240px; }
   .field-map-layout > .card:nth-child(2) > .card-header { flex-wrap: wrap; gap: 8px; }
 }
+
+
+/* A3.5.1: geotag controls live in their own strip between the header and
+   the map. Never overlay Leaflet's top-right downloaded-map control. */
+.manual-sample-location-toolbar {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 8px;
+  padding: 9px 12px;
+  border-top: 1px solid #fde68a;
+  border-bottom: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #78350f;
+}
+.manual-sample-location-toolbar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.manual-sample-location-toolbar__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.manual-sample-location-toolbar__label strong {
+  display: block;
+  font-size: 0.81rem;
+  line-height: 1.3;
+}
+.manual-sample-location-toolbar__label span {
+  display: block;
+  color: #92400e;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+.manual-sample-location-toolbar__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  border: 1px solid #d97706;
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 0.78rem;
+  font-weight: 750;
+  background: #fef3c7;
+  color: #92400e;
+  cursor: pointer;
+}
+.manual-sample-location-toolbar__toggle[aria-pressed="true"] {
+  color: #fff;
+  background: #b45309;
+}
+.manual-sample-location-toolbar__toggle:focus-visible,
+.manual-sample-location-panel button:focus-visible,
+.manual-sample-location-panel select:focus-visible {
+  outline: 2px solid #92400e;
+  outline-offset: 2px;
+}
+.manual-sample-location-panel {
+  position: static;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  background: #fff;
+  color: #78350f;
+  font-size: 0.77rem;
+  display: grid;
+  gap: 7px;
+}
+.manual-sample-location-panel p { margin: 0; line-height: 1.4; }
+.manual-sample-location-panel small { color: #92400e; line-height: 1.35; }
+.manual-sample-location-panel__actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.manual-sample-location-panel__actions > button,
+.manual-sample-location-panel__actions > select {
+  border: 1px solid #d97706;
+  border-radius: 6px;
+  background: #fff;
+  color: #78350f;
+  font-size: 0.75rem;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.manual-sample-location-panel__actions > select { flex:1; min-width:130px; max-width:100%; }
+.manual-sample-location-panel__selected {
+  display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+  padding:6px 8px; border-radius:6px; background:#ffedd5;
+}
+.manual-sample-location-panel__selected span { overflow-wrap:anywhere; }
+.manual-sample-location-panel__selected button { border:0; background:transparent; cursor:pointer; color:#9a3412; padding:2px; display:flex; }
+.manual-sample-location-panel__pick { font-weight:700; color:#9a3412; }
+.manual-sample-location-panel__waiting { font-weight:600; color:#92400e; }

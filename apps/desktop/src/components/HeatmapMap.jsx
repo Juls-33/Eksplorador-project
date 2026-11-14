@@ -41,6 +41,7 @@ export default function HeatmapMap({
   roverPos = [14.6095, 120.9895],
   planningStartPos = null,
   planningTargetPos = null,
+  manualSamplePos = null,
   gpsWarning = null,
   waypoints = [],
   waypointsDeletable = false,
@@ -65,6 +66,7 @@ export default function HeatmapMap({
   const waypointLayerGroupRef = useRef(null);
   const routePolylineRef = useRef(null);
   const planningLayerRef = useRef(null);
+  const manualSampleLayerRef = useRef(null);
   const boundaryPolygonRef = useRef(null);
   const boundaryPointsGroupRef = useRef(null);
   const historicalLabelsGroupRef = useRef(null);
@@ -219,7 +221,8 @@ export default function HeatmapMap({
       mapContainerRef.current.style.cursor =
         interactionMode === 'DRAW_BOUNDARY' ||
         interactionMode === 'SET_WAYPOINTS' ||
-        interactionMode === 'SELECT_ROVER_START'
+        interactionMode === 'SELECT_ROVER_START' ||
+        interactionMode === 'SELECT_SAMPLE_LOCATION'
           ? 'crosshair'
           : '';
     }
@@ -541,7 +544,7 @@ export default function HeatmapMap({
 
     historicalLabelsGroupRef.current.clearLayers();
 
-    labeledPoints.forEach(({ lat, lng, label, isAnchor }) => {
+    labeledPoints.forEach(({ lat, lng, label, isAnchor, locationSource }) => {
       if (
         !Number.isFinite(Number(lat)) ||
         !Number.isFinite(Number(lng))
@@ -558,7 +561,7 @@ export default function HeatmapMap({
           display: flex;
           align-items: center;
           justify-content: center;
-          background: ${isAnchor ? '#D99A2B' : '#1F5132'};
+          background: ${isAnchor || ['OPERATOR_MAP', 'MISSION_PIN'].includes(locationSource) ? '#D99A2B' : '#1F5132'};
           color: #fff;
           border: 2px solid #fff;
           box-shadow: 0 2px 7px rgba(0, 0, 0, 0.35);
@@ -572,9 +575,9 @@ export default function HeatmapMap({
       L.marker([lat, lng], {
         icon: markerIcon,
         zIndexOffset: 700,
-        title: isAnchor
-          ? `Anchor sample #${label}`
-          : `Historical sample #${label}`
+        title: ['OPERATOR_MAP', 'MISSION_PIN'].includes(locationSource)
+          ? `Operator-estimated sample #${label} (not GPS)`
+          : isAnchor ? `Anchor sample #${label}` : `Historical sample #${label}`
       }).addTo(historicalLabelsGroupRef.current);
     });
   }, [labeledPoints]);
@@ -622,6 +625,27 @@ export default function HeatmapMap({
     planningLayerRef.current = layer;
     return () => { if (map.hasLayer(layer)) map.removeLayer(layer); if (planningLayerRef.current === layer) planningLayerRef.current = null; };
   }, [planningStartPos?.[0], planningStartPos?.[1], planningTargetPos?.[0], planningTargetPos?.[1]]);
+
+  // Operator-selected soil sampling location: a separate amber marker,
+  // never the rover's actual GPS marker or the movement-planning origin.
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (manualSampleLayerRef.current) map.removeLayer(manualSampleLayerRef.current);
+    const layer = L.layerGroup();
+    if (hasMapPosition(manualSamplePos)) {
+      L.circleMarker(manualSamplePos, {
+        radius: 10, color: '#b45309', weight: 3,
+        fillColor: '#fef3c7', fillOpacity: 0.92
+      }).bindTooltip('Manual soil sample geotag · operator estimate, NOT GPS').addTo(layer);
+    }
+    layer.addTo(map);
+    manualSampleLayerRef.current = layer;
+    return () => {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+      if (manualSampleLayerRef.current === layer) manualSampleLayerRef.current = null;
+    };
+  }, [manualSamplePos?.[0], manualSamplePos?.[1]]);
 
   // Render mission waypoints and preserve individual pin deletion.
   useEffect(() => {
