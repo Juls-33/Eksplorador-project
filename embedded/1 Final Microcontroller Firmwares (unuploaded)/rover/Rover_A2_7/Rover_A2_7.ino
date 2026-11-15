@@ -385,6 +385,23 @@ const uint32_t ENCODER_RADIO_MS = 2000;
 uint32_t lastEncoderRadio = 0;
 uint32_t encoderRadioSeq = 0;
 
+// ================= BATTERY UART =================
+
+struct BatteryTelemetry {
+  float voltage = 0;
+  int percentage = 0;
+  int16_t rawADC = 0;
+  float measuredVoltage = 0;
+  uint32_t receivedAt = 0;
+  bool received = false;
+} batteryTelemetry;
+
+const uint32_t BATTERY_FRESH_MS = 5000;
+const uint32_t BATTERY_RADIO_MS = 2000;
+
+uint32_t lastBatteryRadio = 0;
+uint32_t batteryRadioSeq = 0;
+
 bool parseEncoderLine(const char* line) {
   if (strncmp(line, "ENC:", 4) != 0) return false;
   long left, right;
@@ -409,6 +426,44 @@ bool parseEncoderLine(const char* line) {
 
 // ================= MEGA UART =================
 
+bool parseBatteryLine(const char* line) {
+  if (strncmp(line, "BATT:", 5) != 0) return false;
+
+  float voltage, measuredVoltage;
+  int percentage, rawADC;
+  int end = 0;
+
+  int matched = sscanf(
+    line + 5,
+    "%f,%d,%d,%f%n",
+    &voltage,
+    &percentage,
+    &rawADC,
+    &measuredVoltage,
+    &end
+  );
+
+  if (matched != 4 ||
+      line[5 + end] != '\0' ||
+      !isfinite(voltage) ||
+      voltage <= 0 || voltage > 20 ||
+      percentage < 0 || percentage > 100 ||
+      rawADC < 0 || rawADC > 32767 ||
+      !isfinite(measuredVoltage) ||
+      measuredVoltage < 0 || measuredVoltage > 5) {
+    return false;
+  }
+
+  batteryTelemetry.voltage = voltage;
+  batteryTelemetry.percentage = percentage;
+  batteryTelemetry.rawADC = (int16_t)rawADC;
+  batteryTelemetry.measuredVoltage = measuredVoltage;
+  batteryTelemetry.receivedAt = millis();
+  batteryTelemetry.received = true;
+
+  return true;
+}
+
 void processMegaLine(const char *s) {
   if (!strcmp(s, "SET_MODE:RX")) {
     txMode = false;
@@ -429,17 +484,30 @@ void processMegaLine(const char *s) {
   } else if (!strncmp(s, "ENC:", 4)) {
     if (!parseEncoderLine(s)) Serial.println("[ENC] rejected invalid UART frame");
 
-  } else if (!strncmp(s, "SOIL:", 5)) {
-    if (!parseSoil(s))
-      Serial.println("[SOIL] rejected malformed data");
+    } else if (!strncmp(s, "BATT:", 5)) {
+      if (!parseBatteryLine(s)) {
+        Serial.println("[BATT] rejected malformed UART frame");
+      } else {
+        Serial.printf(
+          "[BATT UART] %.2f V | %d%% | RAW=%d | A0=%.4f V\n",
+          batteryTelemetry.voltage,
+          batteryTelemetry.percentage,
+          batteryTelemetry.rawADC,
+          batteryTelemetry.measuredVoltage
+        );
+      }
 
-  } else if (!strncmp(s, "MISSION_STATUS:", 15)) {
-    Serial.print("[MEGA MISSION] ");
-    Serial.println(s + 15);
-  } else if (!strncmp(s, "FAULT:", 6)) {
-    Serial.print("[MEGA SAFETY] ");
-    Serial.println(s);
-  }
+    } else if (!strncmp(s, "SOIL:", 5)) {
+      if (!parseSoil(s))
+        Serial.println("[SOIL] rejected malformed data");
+
+    } else if (!strncmp(s, "MISSION_STATUS:", 15)) {
+      Serial.print("[MEGA MISSION] ");
+      Serial.println(s + 15);
+    } else if (!strncmp(s, "FAULT:", 6)) {
+      Serial.print("[MEGA SAFETY] ");
+      Serial.println(s);
+    }
 }
 
 void readMega() {
@@ -671,6 +739,67 @@ void serviceEncoderRadio() {
   LoRa.receive();
 }
 
+// ================= BATTERY LORA TELEMETRY =================
+
+void serviceBatteryRadio() {
+  const uint32_t now = millis();
+
+  if (!batteryTelemetry.received ||
+      now - batteryTelemetry.receivedAt > BATTERY_FRESH_MS)
+    return;
+
+  if (now - lastBatteryRadio < BATTERY_RADIO_MS)
+    return;
+
+  // Never interrupt the main DATA packet and its ACK handling.
+  if (awaitingAck || now - lastTelemetry >= TELEMETRY_MS)
+    return;
+
+  const uint32_t age = now - batteryTelemetry.receivedAt;
+
+  char packet[96];
+
+  const unsigned long nextSeq =
+    (unsigned long)(batteryRadioSeq + 1);
+
+  int written = snprintf(
+  packet,
+  sizeof(packet),
+  "BATT:%lu,%.2f,%d,%d,%.4f,%lu",
+  nextSeq,
+  batteryTelemetry.voltage,
+  batteryTelemetry.percentage,
+  batteryTelemetry.rawADC,
+  batteryTelemetry.measuredVoltage,
+  (unsigned long)age
+);
+
+  if (written <= 0 || written >= (int)sizeof(packet))
+    return;
+
+  LoRa.idle();
+
+  if (LoRa.beginPacket()) {
+    LoRa.print(packet);
+
+    if (LoRa.endPacket() == 1) {
+      batteryRadioSeq++;
+      lastBatteryRadio = millis();
+
+      Serial.printf(
+        "[BATT LoRa TX] %.2f V | %d%% | RAW=%d | A0=%.4f V | age=%lums\n",
+        batteryTelemetry.voltage,
+        batteryTelemetry.percentage,
+        batteryTelemetry.rawADC,
+        batteryTelemetry.measuredVoltage,
+        (unsigned long)age
+      );
+    }
+  }
+
+  LoRa.receive();
+}
+
 // ================= A2.7 SENSOR FUSION OBSERVER =================
 // Diagnostic-only: NEVER writes motor commands, mission controls, or Mega UART.
 // GPS fixes are the ONLY source of latitude/longitude in this release.
@@ -864,10 +993,16 @@ void loop() {
   if (loraReady) {
     if (txMode) {
       serviceTx();
+
       if (!awaitingAck) {
         serviceEncoderRadio();
-        serviceFusionRadio();
+
+        if (!awaitingAck) {
+          serviceBatteryRadio();
+          serviceFusionRadio();
+        }
       }
+
     } else {
       awaitingAck = false;
       serviceRx();

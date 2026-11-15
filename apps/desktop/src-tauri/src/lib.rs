@@ -1252,6 +1252,17 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                                             }
                                         }
                                     }
+                                                                        encoder_telemetry::Message::Battery(json) => {
+                                        encoder_telemetry::trace("battery_emitted", || {
+                                            json.to_string()
+                                        });
+
+                                        if let Err(error) = app_handle.emit("sensor-data", json) {
+                                            encoder_telemetry::trace("rejected", || {
+                                                format!("battery_event_emit_failed: {error}")
+                                            });
+                                        }
+                                    }
                                     encoder_telemetry::Message::Sensor(json) => {
                                         if mission_deployment::is_rover_telemetry(&json) {
                                             update_radio(&app_handle, |radio| radio.telemetry());

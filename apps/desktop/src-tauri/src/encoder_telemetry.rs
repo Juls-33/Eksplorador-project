@@ -46,6 +46,7 @@ pub enum Message {
     Encoder(EncoderPacket),
     Fusion(Value),
     Sensor(Value),
+    Battery(Value),
     Ignore,
 }
 
@@ -120,6 +121,11 @@ pub fn classify(line: &str) -> Message {
             "fusion (isolated from encoder and sensor state)".into()
         });
         return Message::Fusion(json);
+    }
+
+    if kind == Some("battery") {
+    trace("classified", || "battery".into());
+    return Message::Battery(json);
     }
     // Keep the legacy untyped sensor/error pipeline. Unknown typed packets and
     // unrelated JSON must not overwrite GPS, probe state, or live sensor cards.
