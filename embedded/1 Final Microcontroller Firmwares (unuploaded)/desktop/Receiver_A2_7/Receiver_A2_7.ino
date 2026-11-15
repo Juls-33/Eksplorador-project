@@ -483,6 +483,53 @@ void processFusionPacket(const String& incoming) {
 }
 
 // =====================================================
+// BATTERY TELEMETRY
+// BATT:seq,voltage,percentage,rawADC,measuredVoltage,ageMs
+// =====================================================
+
+
+void processBatteryPacket(const String& incoming) {
+  unsigned long seq, ageMs;
+  float voltage, measuredVoltage;
+  int percentage, rawADC;
+  int end = 0;
+
+  const int n = sscanf(
+    incoming.c_str(),
+    "BATT:%lu,%f,%d,%d,%f,%lu%n",
+    &seq,
+    &voltage,
+    &percentage,
+    &rawADC,
+    &measuredVoltage,
+    &ageMs,
+    &end
+  );
+
+  if (n != 6 ||
+      end != incoming.length() ||
+      !isfinite(voltage) ||
+      voltage <= 0 || voltage > 20 ||
+      percentage < 0 || percentage > 100 ||
+      rawADC < 0 || rawADC > 32767 ||
+      !isfinite(measuredVoltage) ||
+      measuredVoltage < 0 || measuredVoltage > 5) {
+    Serial.println(F("[BATT RX ERROR] Malformed packet"));
+    return;
+  }
+
+  Serial.print(F("{\"type\":\"battery\",\"voltage\":"));
+  Serial.print(voltage, 2);
+  Serial.print(F(",\"percentage\":"));
+  Serial.print(percentage);
+  Serial.print(F(",\"rawADC\":"));
+  Serial.print(rawADC);
+  Serial.print(F(",\"a0Voltage\":"));
+  Serial.print(measuredVoltage, 4);
+  Serial.println(F("}"));
+}
+
+// =====================================================
 // SETUP
 // =====================================================
 
@@ -557,5 +604,8 @@ void loop() {
     processEncoderPacket(incoming); // New additive encoder JSON.
   } else if (!txMode && incoming.startsWith("FUS:")) {
     processFusionPacket(incoming); // A2.7 status-only fusion observation.
+  }
+    else if (!txMode && incoming.startsWith("BATT:")) {
+    processBatteryPacket(incoming);
   }
 }

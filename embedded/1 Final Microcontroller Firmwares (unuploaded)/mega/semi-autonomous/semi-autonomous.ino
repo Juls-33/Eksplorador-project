@@ -3,6 +3,35 @@
 #include <stdlib.h>
 #include <math.h>
 #include <avr/interrupt.h>  // A8-A11 quadrature encoder pin-change interrupts
+#include <SoftwareWire.h>
+#include "ADS1X15.h"
+
+using namespace ADS1X15;
+
+SoftwareWire wire(22, 23);
+ADS1115<SoftwareWire> ads(wire);
+
+const float voltageTable[] = {
+  4.20, 4.10, 4.00, 3.90, 3.85,
+  3.80, 3.75, 3.70, 3.60, 3.30
+};
+
+const float percentTable[] = {
+  100, 90, 80, 65, 46,
+  36, 26, 16, 8, 0
+};
+
+float smoothedPercent = -1.0;
+
+const float SMOOTHING_FACTOR = 0.10;
+const float CALIBRATION_FACTOR = 1.0370;
+const float DIVIDER_RATIO = 5.54545;
+
+float batteryVoltage = 0.0;
+float cellVoltage = 0.0;
+float batteryPercent = 0.0;
+int batteryPercentInt = 0;
+
 // =================================================================
 // ARDUINO MEGA 2560 - ROVER FIRMWARE
 // WITH BTS7960 ACTUATOR CURRENT-SENSE MONITORING
@@ -75,6 +104,7 @@ uint16_t soilCRC(const uint8_t *data, size_t len){
  for(size_t j=0;j<len;j++){crc^=data[j];for(uint8_t k=0;k<8;k++)crc=(crc&1)?(crc>>1)^0xA001:crc>>1;}
  return crc;
 }
+
 void startSoilPoll(){
  if(soilWaiting || millis()-soilLastPoll<SOIL_POLL_MS)return;
  soilLastPoll=millis();
@@ -308,7 +338,7 @@ const unsigned long RESET_NEUTRAL_MS = 700;
 // TIMED RETRACTION CANNOT RETURN TO AN EXACT POSITION.
 // Leave FALSE until you verify positive PWM is DOWN and negative is UP,
 // and confirm that reverse motion is safe in your mechanical assembly.
-const bool ENABLE_BOUNDED_RETRACTION = true;
+const bool ENABLE_BOUNDED_RETRACTION = false;
 const int RETRACT_PWM = 90;
 const unsigned long MANUAL_RETRACT_MS = 150;
 const unsigned long AUTO_RETRACT_MS = 350;
@@ -867,6 +897,102 @@ void isrCh8() {
   }
 }
 
+//battery measurement
+
+void batterymeasure() {
+  static unsigned long lastBatteryRead = 0;
+
+  if (millis() - lastBatteryRead < 1000) return;
+  lastBatteryRead = millis();
+
+  // Read ADS1115
+  int16_t raw = ads.readADCSingleEnded(0);
+  float measuredVoltage = ads.computeVolts(raw);
+
+  // Calculate total 4S battery voltage
+  batteryVoltage =
+    measuredVoltage * DIVIDER_RATIO * CALIBRATION_FACTOR;
+
+    Serial.print("[ADC DEBUG] Raw: ");
+Serial.print(raw);
+
+Serial.print(" | A0: ");
+Serial.print(measuredVoltage, 4);
+
+Serial.print(" V | Battery: ");
+Serial.println(batteryVoltage, 2);
+
+  // Calculate average cell voltage
+  cellVoltage = batteryVoltage / 4.0;
+
+  // Calculate battery percentage
+  batteryPercent = 0;
+
+  for (int i = 0; i < 9; i++) {
+    float voltageHigh = voltageTable[i];
+    float voltageLow = voltageTable[i + 1];
+
+    float percentHigh = percentTable[i];
+    float percentLow = percentTable[i + 1];
+
+    if (cellVoltage <= voltageHigh &&
+        cellVoltage >= voltageLow) {
+
+      batteryPercent = percentLow +
+        ((cellVoltage - voltageLow) /
+        (voltageHigh - voltageLow)) *
+        (percentHigh - percentLow);
+
+      break;
+    }
+  }
+
+  batteryPercent = constrain(batteryPercent, 0.0, 100.0);
+
+  if (cellVoltage >= voltageTable[0]) {
+    batteryPercent = 100;
+  }
+  else if (cellVoltage <= voltageTable[9]) {
+    batteryPercent = 0;
+  }
+
+  // Smooth battery percentage
+  if (smoothedPercent < 0) {
+    smoothedPercent = batteryPercent;
+  }
+  else {
+    smoothedPercent =
+      (SMOOTHING_FACTOR * batteryPercent) +
+      ((1.0 - SMOOTHING_FACTOR) * smoothedPercent);
+  }
+
+  batteryPercentInt = (int)round(smoothedPercent);
+
+  // Display results on USB Serial Monitor
+  Serial.print(F("Battery Voltage: "));
+  Serial.print(batteryVoltage, 2);
+  Serial.print(F(" V | Cell Voltage: "));
+  Serial.print(cellVoltage, 3);
+  Serial.print(F(" V | Battery Percentage: "));
+  Serial.print(batteryPercentInt);
+  Serial.println(F("%"));
+
+  // Send battery telemetry to ESP32
+  // espSerial.print(F("BATT:"));
+  // espSerial.print(batteryVoltage, 2);
+  // espSerial.print(',');
+  // espSerial.println(batteryPercentInt);
+
+  espSerial.print(F("BATT:"));
+  espSerial.print(batteryVoltage, 2);
+  espSerial.print(',');
+  espSerial.print(batteryPercentInt);
+  espSerial.print(',');
+  espSerial.print(raw);
+  espSerial.print(',');
+  espSerial.println(measuredVoltage, 4);
+}
+
 
 // =================================================================
 // SETUP
@@ -875,6 +1001,8 @@ void isrCh8() {
 void setup() {
 
   Serial.begin(115200);
+  wire.begin();
+  ads.begin(0x48);
   espSerial.begin(9600);
 
   while (!Serial && millis() < 2000);
@@ -906,7 +1034,7 @@ void setup() {
   digitalWrite(PIN_TRIG, LOW);
 
   pinMode(RS485_DIR,OUTPUT);digitalWrite(RS485_DIR,LOW);Serial3.begin(9600);
-  Serial.println(F("[SOIL] Serial3 pins 14/15; direction pin 27"));
+  Serial.println(F("[SOIL] Serial3 pins 14/15; direction pin 29"));
 
   // Current Sense
   // PIN_ACT_SENSE deliberately disconnected. No analog input read.
@@ -1012,6 +1140,7 @@ void loop() {
   // A0 current sensor disconnected; overload monitoring remains disabled.
   serviceSoil();
 
+  batterymeasure();
 
   // ---------------- ESP32 + IMU COMMANDS ----------------
   readEspLines();
@@ -1243,7 +1372,6 @@ void loop() {
   }
   serviceEncoderTelemetry();
 
-  delay(10);
 }
 
 

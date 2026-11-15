@@ -28,7 +28,8 @@ import {
   Upload,
   GitMerge,
   HardDrive,
-  BookOpen
+  BookOpen,
+  BatteryCharging,
 } from 'lucide-react';
 
 import HeatmapMap from './components/HeatmapMap';
@@ -518,6 +519,7 @@ export default function App() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [liveData, setLiveData] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [batteryData, setBatteryData] = useState(null);
 
   const lastPacketTime = useRef(null);
 
@@ -784,6 +786,27 @@ export default function App() {
           'Receiver reported an error:',
           data.error
         );
+        return;
+      }
+
+            // Handle battery telemetry separately
+      if (data.type === 'battery') {
+        const voltage = Number(data.voltage);
+        const percentage = Number(data.percentage);
+
+        if (
+          Number.isFinite(voltage) &&
+          Number.isFinite(percentage) &&
+          voltage > 0 &&
+          percentage >= 0 &&
+          percentage <= 100
+        ) {
+          setBatteryData({
+            voltage,
+            percentage
+          });
+        }
+
         return;
       }
 
@@ -1433,6 +1456,38 @@ export default function App() {
                   {soilOk
                     ? 'Balanced'
                     : 'No valid reading'}
+                </div>
+              </div>
+
+                            <div className="kpi-card">
+                <div className="kpi-header">
+                  <div
+                    className="kpi-icon-wrap"
+                    style={{
+                      borderColor: '#16A34A',
+                      color: '#16A34A'
+                    }}
+                  >
+                    <BatteryCharging size={18} />
+                  </div>
+
+                  <span className="kpi-title">
+                    Battery Monitoring
+                  </span>
+                </div>
+
+                <div className="kpi-value">
+                  {batteryData
+                    ? `${batteryData.percentage}%`
+                    : '--'}
+                </div>
+
+                <div className="kpi-status">
+                  <span>
+                    {batteryData
+                      ? `${batteryData.voltage.toFixed(2)} V`
+                      : 'Awaiting battery telemetry'}
+                  </span>
                 </div>
               </div>
             </section>
