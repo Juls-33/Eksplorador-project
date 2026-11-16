@@ -12,19 +12,21 @@ SoftwareWire wire(22, 23);
 ADS1115<SoftwareWire> ads(wire);
 
 const float voltageTable[] = {
-  4.20, 4.10, 4.00, 3.90, 3.85,
-  3.80, 3.75, 3.70, 3.60, 3.30
+  4.20, 4.15, 4.11, 4.08, 4.02, 3.98, 3.95, 3.91, 3.87, 3.85, 3.84,
+  3.82, 3.80, 3.79, 3.77, 3.75, 3.73, 3.71, 3.69, 3.61, 3.27
 };
 
 const float percentTable[] = {
-  100, 90, 80, 65, 46,
-  36, 26, 16, 8, 0
+  100, 95, 90, 85, 80, 75, 70, 65, 60, 55, 50,
+  45, 40, 35, 30, 25, 20, 15, 10, 5, 0
 };
+
+const int TABLE_SIZE = sizeof(voltageTable) / sizeof(voltageTable[0]);
 
 float smoothedPercent = -1.0;
 
-const float SMOOTHING_FACTOR = 0.10;
-const float CALIBRATION_FACTOR = 1.0370;
+const float SMOOTHING_FACTOR = 0.50;
+const float CALIBRATION_FACTOR = 1.0370; // 1.0471
 const float DIVIDER_RATIO = 5.54545;
 
 float batteryVoltage = 0.0;
@@ -928,7 +930,7 @@ Serial.println(batteryVoltage, 2);
   // Calculate battery percentage
   batteryPercent = 0;
 
-  for (int i = 0; i < 9; i++) {
+  for (int i = 0; i < TABLE_SIZE - 1; i++) {
     float voltageHigh = voltageTable[i];
     float voltageLow = voltageTable[i + 1];
 
@@ -952,7 +954,7 @@ Serial.println(batteryVoltage, 2);
   if (cellVoltage >= voltageTable[0]) {
     batteryPercent = 100;
   }
-  else if (cellVoltage <= voltageTable[9]) {
+  else if (cellVoltage <= voltageTable[TABLE_SIZE - 1]) {
     batteryPercent = 0;
   }
 
