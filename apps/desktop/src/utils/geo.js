@@ -95,11 +95,31 @@ export function calculateDistance(coord1, coord2) {
 }
 
 /**
+ * Consolidate repeated readings recorded at effectively the same map location.
+ * Such duplicates must not receive more spatial voting power than one sampling site.
+ */
+export function consolidateHeatPoints(points, mergeRadiusM = 0.75) {
+  const clusters = [];
+  for (const item of points || []) {
+    if (!Array.isArray(item) || item.length < 3 || !item.every(Number.isFinite)) continue;
+    const [lat, lng, value] = item;
+    let cluster = clusters.find(c => calculateDistanceMeters([c.lat, c.lng], [lat, lng]) <= mergeRadiusM);
+    if (!cluster) {
+      cluster = { lat, lng, sum: 0, count: 0 };
+      clusters.push(cluster);
+    }
+    cluster.sum += value;
+    cluster.count += 1;
+  }
+  return clusters.map(c => [c.lat, c.lng, c.sum / c.count]);
+}
+
+/**
  * IDW Spatial Interpolation for Continuous Field Coverage
- * @param {Array} samplePoints Array of [lat, lng, intensity]
+ * @param {Array} samplePoints Array of [lat, lng, measured value]
  * @param {Array} boundaryPolygon Array of [lat, lng]
  * @param {Object} options Configuration options
- * @returns {Array} Array of dense interpolated points [lat, lng, intensity]
+ * @returns {Array} Array of interpolated points [lat, lng, measured value]
  */
 export function generateIDWHeatmapGrid(
   samplePoints,
@@ -107,11 +127,13 @@ export function generateIDWHeatmapGrid(
   {
     gridResolution = 28,      // Density of interpolation mesh
     power = 2.0,              // Distance decay exponent (Shepard's method)
-    maxInfluenceRadiusM = 45  // Maximum sensor prediction radius in meters
+    maxInfluenceRadiusM = 45, // Maximum sensor prediction radius in meters
+    minNeighbors = 1        // At least 2 sites recommended for spatial claims
   } = {}
 ) {
-  if (!samplePoints || samplePoints.length === 0) return [];
-  if (!boundaryPolygon || boundaryPolygon.length < 3) return samplePoints;
+  const uniquePoints = consolidateHeatPoints(samplePoints);
+  if (!uniquePoints.length) return [];
+  if (!boundaryPolygon || boundaryPolygon.length < 3) return uniquePoints;
 
   // 1. Calculate Bounding Box of the Field Polygon
   let minLat = Infinity, maxLat = -Infinity;
@@ -140,11 +162,12 @@ export function generateIDWHeatmapGrid(
 
       let totalWeight = 0;
       let weightedSum = 0;
+      let neighbors = 0;
       let minDistance = Infinity;
       let exactMatch = null;
 
-      for (let i = 0; i < samplePoints.length; i++) {
-        const [sLat, sLng, intensity] = samplePoints[i];
+      for (let i = 0; i < uniquePoints.length; i++) {
+        const [sLat, sLng, intensity] = uniquePoints[i];
         const dist = calculateDistanceMeters(candidatePoint, [sLat, sLng]);
 
         if (dist < minDistance) minDistance = dist;
@@ -160,25 +183,22 @@ export function generateIDWHeatmapGrid(
           const weight = 1 / Math.pow(dist, power);
           totalWeight += weight;
           weightedSum += weight * intensity;
+          neighbors += 1;
         }
       }
 
       if (exactMatch !== null) {
         interpolatedGrid.push([lat, lng, exactMatch]);
-      } else if (totalWeight > 0) {
-        let predictedIntensity = weightedSum / totalWeight;
+      } else if (totalWeight > 0 && neighbors >= minNeighbors) {
+        const predictedIntensity = weightedSum / totalWeight;
 
-        // Smooth radial edge decay when approaching max influence distance
-        if (minDistance > maxInfluenceRadiusM * 0.7) {
-          const falloff = 1 - (minDistance - maxInfluenceRadiusM * 0.7) / (maxInfluenceRadiusM * 0.3);
-          predictedIntensity *= Math.max(0.2, falloff);
-        }
-
+        // Do not fabricate low moisture at the edge of an unsampled region.
         interpolatedGrid.push([lat, lng, predictedIntensity]);
       }
     }
   }
 
-  // Include original sampled points to preserve raw peaks
-  return [...interpolatedGrid, ...samplePoints];
+  // A weighted mean cannot exceed its observed input range.
+  // Include one representative point per site, not every duplicate packet.
+  return [...interpolatedGrid, ...uniquePoints];
 }

@@ -47,7 +47,8 @@ import { useEncoderTelemetrySource } from './hooks/useEncoderTelemetry';
 import DrivetrainTelemetry from './components/DrivetrainTelemetry';
 import { useDownloadPercent } from './hooks/useDownloadJob';
 import { calculateDistanceMeters } from './utils/geo';
-import { MOISTURE_LAYER, PH_LAYER } from './utils/layerBands';
+import { FIELD_HEAT_LAYERS, relativeColorScale } from './utils/fieldHeatmapLayers.js';
+import { estimatedTdsMgL } from './utils/soilSampling';
 
 import {
   initDatabase,
@@ -217,81 +218,14 @@ const hasLiveGpsFix = data => {
   );
 };
 
-const normalizeHeatValue = (value, min, max) => {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ''
-  ) {
-    return null;
-  }
-
-  const numericValue = Number(value);
-
-  if (!Number.isFinite(numericValue)) {
-    return null;
-  }
-
-  const normalized = Math.max(
-    0,
-    Math.min(1, (numericValue - min) / (max - min))
-  );
-
-  return 0.2 + normalized * 0.8;
-};
-
+// Live Monitoring interpolates raw readings and colors the result afterwards.
 const LAYER_CONFIG = {
-  // Moisture and pH share one band definition with Field Map
-  // (utils/layerBands.js), so a reading has the same color on both screens.
-  moisture: {
-    extract: row => MOISTURE_LAYER.intensity(row.moisture),
-    gradient: MOISTURE_LAYER.gradient
-  },
-  ph: {
-    extract: row => PH_LAYER.intensity(row.ph),
-    gradient: PH_LAYER.gradient
-  },
-  ec: {
-    extract: row =>
-      normalizeHeatValue(row.ec, 0, 4),
-    gradient: {
-      0.2: '#dc2626',
-      0.4: '#ea580c',
-      0.6: '#eab308',
-      0.8: '#84cc16',
-      1.0: '#15803d'
-    }
-  },
-  nitrogen: {
-    extract: row =>
-      normalizeHeatValue(row.nitrogen, 0, 60),
-    gradient: {
-      0.2: '#dc2626',
-      0.5: '#d97706',
-      0.8: '#15803d',
-      1.0: '#1e40af'
-    }
-  },
-  phosphorus: {
-    extract: row =>
-      normalizeHeatValue(row.phosphorus, 0, 80),
-    gradient: {
-      0.2: '#dc2626',
-      0.5: '#d97706',
-      0.8: '#15803d',
-      1.0: '#1e40af'
-    }
-  },
-  potassium: {
-    extract: row =>
-      normalizeHeatValue(row.potassium, 0, 100),
-    gradient: {
-      0.2: '#dc2626',
-      0.5: '#d97706',
-      0.8: '#15803d',
-      1.0: '#1e40af'
-    }
-  }
+  moisture: FIELD_HEAT_LAYERS.moisture,
+  ph: FIELD_HEAT_LAYERS.ph,
+  ec: FIELD_HEAT_LAYERS.ec,
+  nitrogen: FIELD_HEAT_LAYERS.nitrogen,
+  phosphorus: FIELD_HEAT_LAYERS.phosphorus,
+  potassium: FIELD_HEAT_LAYERS.potassium
 };
 
 function TelemetrySyncBar({
@@ -551,13 +485,13 @@ export default function App() {
   const activeLayerConfig =
     LAYER_CONFIG[selectedLayer] ?? LAYER_CONFIG.ph;
 
-  const liveHeatPoints = rawLiveReadings
+  const liveHeatPoints = useMemo(() => rawLiveReadings
     .map(reading => [
       reading.lat,
       reading.lng,
-      activeLayerConfig.extract(reading)
+      activeLayerConfig.extractValue(reading)
     ])
-    .filter(point => point[2] !== null);
+    .filter(point => point[2] !== null), [rawLiveReadings, activeLayerConfig]);
 
   const selectedHistoricalHeatPoints = useMemo(
     () =>
@@ -565,7 +499,7 @@ export default function App() {
         .map(record => [
           record.latitude,
           record.longitude,
-          activeLayerConfig.extract(record)
+          activeLayerConfig.extractValue(record)
         ])
         .filter(point => point[2] !== null),
     [
@@ -574,10 +508,17 @@ export default function App() {
     ]
   );
 
-  const displayedHeatPoints =
+  const displayedHeatPoints = useMemo(() =>
     selectedHistoricalRecords.length > 0
       ? selectedHistoricalHeatPoints
-      : liveHeatPoints;
+      : liveHeatPoints,
+    [selectedHistoricalRecords.length, selectedHistoricalHeatPoints, liveHeatPoints]
+  );
+
+  const displayScale = useMemo(() => {
+    if (activeLayerConfig.valueToIntensity) return activeLayerConfig.valueToIntensity;
+    return relativeColorScale(displayedHeatPoints.map(point => point[2])).toIntensity;
+  }, [activeLayerConfig, displayedHeatPoints]);
 
   const selectedHistoricalPositions = useMemo(
     () =>
@@ -1330,7 +1271,7 @@ export default function App() {
                 <div className="kpi-status">
                   <CheckCircle2 size={13} />{' '}
                   {soilOk
-                    ? 'Within range'
+                    ? 'Moisture reading received'
                     : 'No valid reading'}
                 </div>
               </div>
@@ -1366,7 +1307,7 @@ export default function App() {
                 <div className="kpi-status">
                   <CheckCircle2 size={13} />{' '}
                   {soilOk
-                    ? 'Optimal'
+                    ? 'Compare with crop-specific pH requirements'
                     : 'No valid reading'}
                 </div>
               </div>
@@ -1410,7 +1351,7 @@ export default function App() {
                 <div className="kpi-status">
                   <CheckCircle2 size={13} />{' '}
                   {soilOk
-                    ? 'Within range'
+                    ? `Estimated TDS: ${estimatedTdsMgL(liveData.ec) ?? '--'} mg/L (EC-derived)`
                     : 'No valid reading'}
                 </div>
               </div>
@@ -1428,7 +1369,7 @@ export default function App() {
                   </div>
 
                   <span className="kpi-title">
-                    NPK Ratio
+                    NPK Sensor Analysis
                   </span>
                 </div>
 
@@ -1454,7 +1395,7 @@ export default function App() {
                 <div className="kpi-status">
                   <CheckCircle2 size={13} />{' '}
                   {soilOk
-                    ? 'Balanced'
+                    ? 'EC-derived estimate; not verified nutrient concentrations'
                     : 'No valid reading'}
                 </div>
               </div>
@@ -1529,13 +1470,13 @@ export default function App() {
                         Electrical Conductivity
                       </option>
                       <option value="nitrogen">
-                        Nitrogen (N)
+                        Nitrogen (N) — Sensor Estimate
                       </option>
                       <option value="phosphorus">
-                        Phosphorus (P)
+                        Phosphorus (P) — Sensor Estimate
                       </option>
                       <option value="potassium">
-                        Potassium (K)
+                        Potassium (K) — Sensor Estimate
                       </option>
                     </select>
                   </div>
@@ -1552,6 +1493,9 @@ export default function App() {
                   }
                   zoom={18}
                   heatPoints={displayedHeatPoints}
+                  valueToIntensity={displayScale}
+                  maxInfluenceRadiusM={25}
+                  minInterpolationNeighbors={2}
                   roverPos={
                     !selectedHistoricalPos && hasGpsFix
                       ? [liveData.lat, liveData.lng]

@@ -22,6 +22,9 @@ import {
   appDate,
   appTimestamp
 } from '../utils/time';
+import { extendLegacySoilBackup } from '../utils/backupCompatibility';
+import { ensureSoilClassificationSchema } from '../utils/soilSchema';
+import { BUILTIN_CROP_REFERENCES } from '../utils/cropReferences';
 
 let dbPromise = null;
 
@@ -46,6 +49,10 @@ export async function initDatabase() {
           })
       };
 
+      // Non-destructive compatibility migration for databases created before
+      // operator-tagged soil types were introduced (including old native builds).
+      await ensureSoilClassificationSchema(db);
+
       // Consolidate the older SQL-plugin store once.
       // Its original database file is left intact.
       const legacy = await invoke(
@@ -57,6 +64,7 @@ export async function initDatabase() {
       }
 
       await seedDefaultCropProfiles(db);
+      await ensureCacaoAndSoilReferenceDefaults(db);
 
       return db;
     })().catch(error => {
@@ -159,6 +167,7 @@ const DEFAULT_CROP_PROFILES = [
     name: 'Rice (Oryza sativa)',
     category: 'Cereal / Grain',
     notes: '',
+    compatibleSoilTypes: BUILTIN_CROP_REFERENCES['CRP-001'].preferredSoils,
     thresholds: t(
       5.5, 7.0,
       40, 80,
@@ -173,6 +182,7 @@ const DEFAULT_CROP_PROFILES = [
     name: 'Sweet Corn (Zea mays)',
     category: 'Cereal / Grain',
     notes: '',
+    compatibleSoilTypes: BUILTIN_CROP_REFERENCES['CRP-002'].preferredSoils,
     thresholds: t(
       5.8, 7.2,
       30, 60,
@@ -187,6 +197,7 @@ const DEFAULT_CROP_PROFILES = [
     name: 'Cassava / Tuber',
     category: 'Root Crop',
     notes: '',
+    compatibleSoilTypes: BUILTIN_CROP_REFERENCES['CRP-003'].preferredSoils,
     thresholds: t(
       5.0, 6.5,
       25, 50,
@@ -201,6 +212,7 @@ const DEFAULT_CROP_PROFILES = [
     name: 'Leafy Greens (Pechay / Brassica)',
     category: 'Vegetable',
     notes: '',
+    compatibleSoilTypes: BUILTIN_CROP_REFERENCES['CRP-004'].preferredSoils,
     thresholds: t(
       6.0, 7.5,
       50, 75,
@@ -211,6 +223,17 @@ const DEFAULT_CROP_PROFILES = [
     )
   }
 ];
+
+export const REQUIRED_CACAO_PROFILE = {
+  id: 'CRP-CACAO', // stable non-numeric identifier, avoids collisions with CRP-005 custom profiles
+  name: 'Cacao (Theobroma cacao)',
+  category: 'Tree Crop',
+  notes: BUILTIN_CROP_REFERENCES['CRP-CACAO'].note,
+  compatibleSoilTypes: BUILTIN_CROP_REFERENCES['CRP-CACAO'].preferredSoils,
+  // Only pH and preferred soil classes are scored. Legacy values are retained
+  // because the crop_profiles schema requires the existing profile shape.
+  thresholds: t(5.5, 6.7, 30, 65, 0.5, 2, 20, 40, 20, 40, 30, 60)
+};
 
 async function upsertCropProfile(db, crop) {
   const th = crop.thresholds;
@@ -234,13 +257,14 @@ async function upsertCropProfile(db, crop) {
        max_p,
        min_k,
        max_k,
-       notes
+       notes,
+       compatible_soil_types
      )
      VALUES (
        $1, $2, $3, $4,
        $5, $6, $7, $8,
        $9, $10, $11, $12,
-       $13, $14, $15, $16
+       $13, $14, $15, $16, $17
      )
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
@@ -257,7 +281,8 @@ async function upsertCropProfile(db, crop) {
        max_p = excluded.max_p,
        min_k = excluded.min_k,
        max_k = excluded.max_k,
-       notes = excluded.notes`,
+       notes = excluded.notes,
+       compatible_soil_types = excluded.compatible_soil_types`,
     [
       crop.id,
       crop.name,
@@ -274,7 +299,8 @@ async function upsertCropProfile(db, crop) {
       th.maxP,
       th.minK,
       th.maxK,
-      crop.notes || ''
+      crop.notes || '',
+      JSON.stringify(crop.compatibleSoilTypes || [])
     ]
   );
 }
@@ -308,12 +334,44 @@ async function seedDefaultCropProfiles(db) {
   );
 }
 
+// One-time non-destructive upgrade for installations whose original crop
+// profiles have already been seeded. Never overwrite existing pH thresholds,
+// custom crop profiles or a user's configured compatible-soil list.
+async function ensureCacaoAndSoilReferenceDefaults(db) {
+  const done = await db.select("SELECT value FROM _app_meta WHERE key='crop_reference_upgrade_v1'");
+  if (done[0]?.value === '1') return;
+
+  const existing = await db.select('SELECT id, name, compatible_soil_types FROM crop_profiles');
+  const hasCacao = existing.some(row => row.id === REQUIRED_CACAO_PROFILE.id ||
+    /\bcacao\b|\btheobroma cacao\b/i.test(row.name || ''));
+  if (!hasCacao) await upsertCropProfile(db, REQUIRED_CACAO_PROFILE);
+
+  for (const original of DEFAULT_CROP_PROFILES) {
+    const reference = BUILTIN_CROP_REFERENCES[original.id];
+    if (!reference?.preferredSoils?.length) continue;
+    const row = existing.find(r => r.id === original.id && r.name === original.name);
+    if (!row) continue; // only touch unmodified built-in profile names
+    let configured = [];
+    try { configured = JSON.parse(row.compatible_soil_types || '[]'); } catch { /* treat invalid as unconfigured */ }
+    if (!Array.isArray(configured) || configured.length) continue;
+    await db.execute(
+      `UPDATE crop_profiles SET compatible_soil_types = $1 WHERE id = $2 AND (compatible_soil_types IS NULL OR compatible_soil_types = '' OR compatible_soil_types = '[]')`,
+      [JSON.stringify(reference.preferredSoils), row.id]
+    );
+  }
+
+  await db.execute(
+    "INSERT INTO _app_meta(key,value) VALUES('crop_reference_upgrade_v1','1') ON CONFLICT(key) DO UPDATE SET value='1'"
+  );
+}
+
 function rowToCrop(row) {
   return {
     id: row.id,
     name: row.name,
     category: row.category,
     notes: row.notes || '',
+    compatibleSoilTypes: (() => { try { return JSON.parse(row.compatible_soil_types || '[]'); } catch { return []; } })(),
     thresholds: {
       minPh: row.min_ph,
       maxPh: row.max_ph,
@@ -334,6 +392,9 @@ function rowToCrop(row) {
 export async function fetchCropProfiles() {
   try {
     const db = await initDatabase();
+    // Recheck after a database import/overwrite that happened while the
+    // frontend remained open; the metadata guard keeps this idempotent.
+    await ensureCacaoAndSoilReferenceDefaults(db);
 
     const rows = await db.select(
       'SELECT * FROM crop_profiles ORDER BY id ASC'
@@ -466,12 +527,13 @@ export async function saveSoilSample(sample) {
          phosphorus,
          potassium,
          overall,
-         location_source
+         location_source,
+         sample_session_id
        )
        VALUES (
          $1, $2, $3, $4,
          $5, $6, $7, $8,
-         $9, $10, $11, $12, $13
+         $9, $10, $11, $12, $13, $14
        )`,
       [
         sample.mission_id ?? null,
@@ -486,7 +548,8 @@ export async function saveSoilSample(sample) {
         sample.p,
         sample.k,
         sample.overall ?? 50,
-        sample.location_source ?? (sample.lat != null && sample.lng != null ? 'GPS' : 'UNLOCATED')
+        sample.location_source ?? (sample.lat != null && sample.lng != null ? 'GPS' : 'UNLOCATED'),
+        sample.session_id ?? null
       ]
     );
 
@@ -498,6 +561,28 @@ export async function saveSoilSample(sample) {
     );
     return null;
   }
+}
+
+// Raw reception log is independent from finalized representative samples in telemetry.
+export async function saveMissionSoilReading({ sessionId, missionId, receivedAt, data, coords }) {
+  const db = await initDatabase();
+  await db.execute(
+    `INSERT INTO mission_soil_readings
+     (session_id, mission_id, received_at, latitude, longitude, moisture, ph, ec,
+      nitrogen, phosphorus, potassium, soil_valid)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [sessionId, missionId, receivedAt, coords?.[0] ?? null, coords?.[1] ?? null,
+     data.moisture ?? null, data.ph ?? null, data.ec ?? null,
+     data.nitrogen ?? null, data.phosphorus ?? null, data.potassium ?? null, 1]
+  );
+}
+
+export async function fetchMissionRawReadings(missionId) {
+  const db = await initDatabase();
+  return db.select(
+    'SELECT * FROM mission_soil_readings WHERE mission_id = $1 ORDER BY received_at, id',
+    [missionId]
+  );
 }
 
 export async function fetchMissionSamples(missionId) {
@@ -633,13 +718,14 @@ export async function exportTelemetryPackage() {
 
 async function readBackup(path) {
   const fileContent = await readTextFile(path);
-
-  // Validate every table, column, primary key and relationship
-  // before asking the operator to apply the backup.
-  return invoke(
-    'validate_database_backup',
-    { fileContent }
-  );
+  const live = await invoke('database_snapshot');
+  let input;
+  try { input = JSON.parse(fileContent); }
+  catch { throw new Error('The selected backup is not valid JSON.'); }
+  // Upgrade only known additive soil extension columns and the empty raw table.
+  // The Rust validator still rejects incompatible or tampered schemas.
+  const compatible = extendLegacySoilBackup(input, live);
+  return invoke('validate_database_backup', { fileContent: JSON.stringify(compatible) });
 }
 
 export async function importTelemetryPackage() {
@@ -796,6 +882,7 @@ function rowToField(row, missionCount = 0) {
   return {
     id: row.id,
     name: row.name,
+    soilType: row.soil_type || '',
     boundary: geoJSONToBoundary(
       row.boundary_geojson
     ),
@@ -905,6 +992,40 @@ export async function createField({
     return {
       error: 'Could not save the field to the database.'
     };
+  }
+}
+
+export async function updateFieldSoilType(id, soilType) {
+  try {
+    const db = await initDatabase();
+    // A no-op name assignment makes the pre-existing fields UPDATE trigger
+    // (installed before soil_type existed) update revision/audit timestamps.
+    // It does not modify the field name, boundary or its linked missions.
+    const saveSoilType = () => db.execute(
+      'UPDATE fields SET soil_type = $1, name = name WHERE id = $2',
+      [soilType || null, id]
+    );
+
+    let result;
+    try {
+      result = await saveSoilType();
+    } catch (error) {
+      // Defensive retry for older databases opened or replaced since init.
+      if (!/no such column\s*:\s*soil_type/i.test(String(error))) throw error;
+      await ensureSoilClassificationSchema(db);
+      result = await saveSoilType();
+    }
+
+    if (!result?.rowsAffected) {
+      console.error('Could not update soil type: field no longer exists:', id);
+      return false;
+    }
+
+    const rows = await db.select('SELECT soil_type FROM fields WHERE id = $1', [id]);
+    return rows.length === 1 && (rows[0].soil_type || '') === (soilType || '');
+  } catch (error) {
+    console.error('Could not update the operator-entered soil type:', error);
+    return false;
   }
 }
 

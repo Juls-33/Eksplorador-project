@@ -16,8 +16,21 @@ import {
   saveCropProfile,
   deleteCropProfile,
   fetchRecordedPlots,
-  fetchPlotSamples
+  fetchPlotSamples,
+  fetchFields
 } from '../services/db';
+import { ecDsM, estimatedTdsMgL } from '../utils/soilSampling';
+import { summarizeCropCompatibility } from '../utils/cropCompatibility';
+import { BUILTIN_CROP_REFERENCES } from '../utils/cropReferences';
+import './CropAssessmentView.css';
+
+// Legacy crop profile reference ranges remain editable, but only measured pH
+// and manually configured soil-type compatibility contribute to the crop score.
+// EC/NPK are displayed as monitoring/advisory outputs, not nutrient diagnoses.
+const SOIL_TYPES = [
+  ['sandy','Sandy'], ['sandy-loam','Sandy loam'], ['loam','Loam'],
+  ['clay-loam','Clay loam'], ['clay','Clay'], ['silt-loam','Silt loam']
+];
 
 // Every soil parameter the rover records that has a crop threshold range.
 // `key` is the field on a telemetry sample; `min`/`max` are threshold keys.
@@ -30,13 +43,6 @@ const PARAMETERS = [
   { key: 'k', label: 'Potassium', unit: 'mg/kg', step: 1, min: 'minK', max: 'maxK' }
 ];
 
-// Heat intensity per sample: 1 = every parameter in range, 0.6 = one out, 0.25 = two or more out.
-const SUITABILITY_GRADIENT = {
-  0.2: '#dc2626',
-  0.6: '#eab308',
-  1.0: '#15803d'
-};
-
 const emptyForm = {
   id: '',
   name: '',
@@ -47,71 +53,13 @@ const emptyForm = {
   minN: 25, maxN: 45,
   minP: 25, maxP: 45,
   minK: 35, maxK: 55,
-  notes: ''
+  notes: '', compatibleSoilTypes: []
 };
-
-// Checks one soil sample against a crop's threshold ranges. Parameters the
-// sample has no reading for (null / missing) are skipped, not counted as failures.
-function evaluateSample(sample, thresholds) {
-  const failed = [];
-  let checked = 0;
-
-  PARAMETERS.forEach((p) => {
-    const raw = sample[p.key];
-    const lo = thresholds[p.min];
-    const hi = thresholds[p.max];
-    if (raw === null || raw === undefined || lo == null || hi == null) return;
-    const value = Number(raw);
-    if (!Number.isFinite(value)) return;
-
-    checked += 1;
-    if (value < lo || value > hi) failed.push(p.key);
-  });
-
-  return { checked, failed };
-}
-
-// Monotone-chain convex hull over [lat, lng] points. Used as the heatmap
-// clipping area, because plot boundaries are not stored in the database.
-function convexHull(points) {
-  const pts = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  if (pts.length < 3) return [];
-
-  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-
-  const lower = [];
-  pts.forEach((p) => {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
-    lower.push(p);
-  });
-
-  const upper = [];
-  [...pts].reverse().forEach((p) => {
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
-    upper.push(p);
-  });
-
-  upper.pop();
-  lower.pop();
-  const hull = lower.concat(upper);
-  return hull.length >= 3 ? hull : [];
-}
-
-// Fallback clipping area for plots whose samples are too few or too
-// collinear to form a hull: a small padded box (~15 m) around the samples.
-function paddedBox(points, pad = 0.00015) {
-  const lats = points.map((p) => p[0]);
-  const lngs = points.map((p) => p[1]);
-  const south = Math.min(...lats) - pad;
-  const north = Math.max(...lats) + pad;
-  const west = Math.min(...lngs) - pad;
-  const east = Math.max(...lngs) + pad;
-  return [[south, west], [south, east], [north, east], [north, west]];
-}
 
 export default function CropAssessmentView({ onHelp }) {
   const [crops, setCrops] = useState([]);
   const [plots, setPlots] = useState([]);
+  const [knownFields, setKnownFields] = useState([]);
   const [selectedCropId, setSelectedCropId] = useState('');
   const [selectedPlot, setSelectedPlot] = useState('');
   const [plotSamples, setPlotSamples] = useState([]);
@@ -128,9 +76,10 @@ export default function CropAssessmentView({ onHelp }) {
     let cancelled = false;
 
     async function loadData() {
-      const [cropRows, plotRows] = await Promise.all([fetchCropProfiles(), fetchRecordedPlots()]);
+      const [cropRows, plotRows, fieldRows] = await Promise.all([fetchCropProfiles(), fetchRecordedPlots(), fetchFields()]);
       if (cancelled) return;
       setCrops(cropRows);
+      setKnownFields(fieldRows);
       setSelectedCropId(cropRows[0]?.id || '');
       setPlots(plotRows);
       setSelectedPlot(plotRows[0]?.plot || '');
@@ -155,60 +104,47 @@ export default function CropAssessmentView({ onHelp }) {
   }, [selectedPlot]);
 
   const currentCrop = crops.find(c => c.id === selectedCropId) || crops[0];
+  const selectedSoilType = knownFields.find(f => f.name === selectedPlot)?.soilType || '';
+  const soilTypeLabel = SOIL_TYPES.find(([value])=>value === selectedSoilType)?.[1] || 'Not classified';
+  const conditionSummary = useMemo(() => {
+    const valid = plotSamples.filter(s => Number.isFinite(Number(s.ec)) && s.ec !== null);
+    if (!valid.length) return null;
+    const ec = valid.reduce((total, s) => total + Number(s.ec), 0) / valid.length;
+    const npkAvg = key => {
+      const vals = valid.map(s => s[key]).filter(v => v != null && Number.isFinite(Number(v))).map(Number);
+      return vals.length ? vals.reduce((a,b) => a+b,0)/vals.length : null;
+    };
+    return { ec, n: npkAvg('n'), p: npkAvg('p'), k: npkAvg('k') };
+  }, [plotSamples]);
 
   const filteredCrops = crops.filter(c => {
     return filterCategory === 'ALL' || c.category === filterCategory;
   });
 
-  // Score every sample of the selected plot against the selected crop.
-  // Memoized so the map only re-interpolates when the crop or plot changes.
+  // Evaluate each geotagged sample independently. Compatibility is categorical,
+  // so we show actual sampling pins rather than interpolating arbitrary grades.
   const analysis = useMemo(() => {
     if (!currentCrop) return null;
-
-    const evaluated = plotSamples
-      .map((s) => ({ sample: s, ...evaluateSample(s, currentCrop.thresholds) }))
-      .filter((r) => r.checked > 0 && Number.isFinite(Number(r.sample.lat)) && Number.isFinite(Number(r.sample.lng)));
-
-    const counts = { suitable: 0, marginal: 0, unsuitable: 0 };
-    const failureTally = {};
-
-    const heatPoints = evaluated.map(({ sample, failed }) => {
-      failed.forEach((key) => { failureTally[key] = (failureTally[key] || 0) + 1; });
-
-      if (failed.length === 0) {
-        counts.suitable += 1;
-        return [Number(sample.lat), Number(sample.lng), 1];
-      }
-      if (failed.length === 1) {
-        counts.marginal += 1;
-        return [Number(sample.lat), Number(sample.lng), 0.6];
-      }
-      counts.unsuitable += 1;
-      return [Number(sample.lat), Number(sample.lng), 0.25];
-    });
-
-    const focusPoints = heatPoints.map(([lat, lng]) => [lat, lng]);
-
-    const limiting = PARAMETERS
-      .filter((p) => failureTally[p.key])
-      .map((p) => ({ label: p.label, count: failureTally[p.key] }))
-      .sort((a, b) => b.count - a.count);
-
-    const hull = convexHull(focusPoints);
-
-    return {
-      total: evaluated.length,
-      counts,
-      limiting,
-      heatPoints,
-      focusPoints,
-      boundary: hull.length ? hull : (focusPoints.length ? paddedBox(focusPoints) : [])
-    };
-  }, [plotSamples, currentCrop]);
+    const located = plotSamples.filter(s => Number.isFinite(Number(s.lat)) &&
+      Number.isFinite(Number(s.lng)) && s.lat !== null && s.lng !== null &&
+      Number(s.lat) !== 0 && Number(s.lng) !== 0);
+    const { evaluated, counts } = summarizeCropCompatibility(
+      located, currentCrop.thresholds, selectedSoilType,
+      currentCrop.compatibleSoilTypes || []
+    );
+    const markers = evaluated.map(({ sample, criteria, status }, index) => ({
+      lat: Number(sample.lat), lng: Number(sample.lng),
+      label: String(index + 1), statusTone: status,
+      statusTitle: `Sample ${index + 1}: pH ${criteria.ph.value ?? 'unavailable'} · ${status === 'matched' ? 'Preferences match' : status === 'review' ? 'Review conditions' : 'Insufficient pH data'}`,
+      locationSource: sample.location_source || 'GPS'
+    }));
+    const focusPoints = markers.map(({lat,lng}) => [lat,lng]);
+    return { evaluated, counts, markers, focusPoints, total: evaluated.length };
+  }, [plotSamples, currentCrop, selectedSoilType]);
 
   const handleOpenAddModal = () => {
     const nextNumber = Math.max(0, ...crops.map(c => parseInt(c.id.replace(/\D/g, ''), 10) || 0)) + 1;
-    setFormData({ ...emptyForm, id: `CRP-${String(nextNumber).padStart(3, '0')}` });
+    setFormData({ ...emptyForm, compatibleSoilTypes: [], id: `CRP-${String(nextNumber).padStart(3, '0')}` });
     setIsEditing(false);
     setModalError(null);
     setIsModalOpen(true);
@@ -220,6 +156,7 @@ export default function CropAssessmentView({ onHelp }) {
       name: crop.name,
       category: crop.category,
       notes: crop.notes || '',
+      compatibleSoilTypes: crop.compatibleSoilTypes || [],
       ...crop.thresholds
     });
     setIsEditing(true);
@@ -265,6 +202,7 @@ export default function CropAssessmentView({ onHelp }) {
       name: formData.name.trim(),
       category: formData.category,
       notes: formData.notes.trim(),
+      compatibleSoilTypes: formData.compatibleSoilTypes || [],
       thresholds
     };
 
@@ -285,17 +223,17 @@ export default function CropAssessmentView({ onHelp }) {
   };
 
   return (
-    <div className="crop-assessment-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
+    <div className="crop-assessment-view">
       {/* Header Bar */}
-      <div className="view-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="view-header crop-assessment-header">
         <div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Crop Suitability & Threshold Assessment</h2>
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Preliminary Crop Compatibility</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            Multi-factor crop viability diagnostics, field area matching, and custom agronomical thresholds.
+            pH-based compatibility screening with operator-tagged soil type; EC and NPK are advisory sensor indicators, not laboratory nutrient tests.
           </p>
         </div>
 
-        <div className="view-header-actions" style={{ display: 'flex', gap: '10px' }}>
+        <div className="view-header-actions crop-assessment-actions">
           <HelpButton viewId="Crop Assessment" onOpen={onHelp} />
           {/* Category Filter */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -317,6 +255,8 @@ export default function CropAssessmentView({ onHelp }) {
               <option value="Cereal / Grain">Cereal / Grain</option>
               <option value="Root Crop">Root Crop</option>
               <option value="Vegetable">Vegetable</option>
+              <option value="Tree Crop">Tree Crop</option>
+              <option value="Legume">Legume</option>
             </select>
           </div>
 
@@ -338,9 +278,9 @@ export default function CropAssessmentView({ onHelp }) {
       </div>
 
       {/* Main Grid: Crop Directory & Evaluation Card */}
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '14px', flex: 1, minHeight: 0 }}>
+      <div className="crop-assessment-layout">
         {/* Left Column: Crop List */}
-        <div className="card" style={{ overflowY: 'auto' }}>
+        <div className="card crop-directory-card">
           <div className="card-header">
             <span className="card-title">Assessed Crops Matrix</span>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{filteredCrops.length} Profiles</span>
@@ -377,7 +317,7 @@ export default function CropAssessmentView({ onHelp }) {
         </div>
 
         {/* Right Column: Crop Detail, Threshold Matrix & Plot Matching */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', overflowY: 'auto' }}>
+        <div className="crop-assessment-details">
           {currentCrop && (
             <>
               {/* Profile Header & Compatibility Overview */}
@@ -459,125 +399,113 @@ export default function CropAssessmentView({ onHelp }) {
                 </div>
               </div>
 
-              {/* Threshold Parameters Grid */}
+              {/* Only the two assessed properties are presented as crop requirements.
+                  EC, moisture and NPK are sensor context; their old arbitrary
+                  profile numbers are not defensible crop sufficiency thresholds. */}
               <div className="card">
-                <div className="card-header">
-                  <span className="card-title">Agronomic Threshold Range Rules</span>
-                </div>
-
-                <div style={{ padding: '14px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
-                  <div style={{ padding: '10px', background: 'var(--bg-main)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>Target pH Range</span>
-                    <div style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--earth-light)' }}>
-                      {currentCrop.thresholds.minPh} - {currentCrop.thresholds.maxPh}
-                    </div>
+                <div className="card-header"><span className="card-title">Crop Requirements Used in Screening</span></div>
+                <div className="crop-reference-grid">
+                  <div className="crop-reference-tile">
+                    <span className="crop-reference-label">Preferred soil pH</span>
+                    <strong>{currentCrop.thresholds.minPh}–{currentCrop.thresholds.maxPh}</strong>
+                    <small>Outside this range is flagged for review, not automatic rejection.</small>
                   </div>
-
-                  <div style={{ padding: '10px', background: 'var(--bg-main)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>Target Moisture</span>
-                    <div style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--primary-green)' }}>
-                      {currentCrop.thresholds.minMoisture}% - {currentCrop.thresholds.maxMoisture}%
-                    </div>
+                  <div className="crop-reference-tile">
+                    <span className="crop-reference-label">Preferred soil textures</span>
+                    <strong className="crop-reference-soils">{(currentCrop.compatibleSoilTypes || []).length
+                      ? currentCrop.compatibleSoilTypes.map(t => SOIL_TYPES.find(([v]) => v === t)?.[1] || t).join(', ')
+                      : 'Not scored'}</strong>
+                    <small>Manually classified by the operator at field level.</small>
                   </div>
-
-                  <div style={{ padding: '10px', background: 'var(--bg-main)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>EC Tolerance</span>
-                    <div style={{ fontWeight: 800, fontSize: '1.1rem' }}>
-                      {currentCrop.thresholds.minEC} - {currentCrop.thresholds.maxEC} <span style={{ fontSize: '0.7rem' }}>dS/m</span>
-                    </div>
-                  </div>
-
-                  <div style={{ padding: '10px', background: 'var(--bg-main)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>Opt. Nitrogen (N)</span>
-                    <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--earth-dark)' }}>{currentCrop.thresholds.minN} - {currentCrop.thresholds.maxN} mg/kg</div>
-                  </div>
-
-                  <div style={{ padding: '10px', background: 'var(--bg-main)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>Opt. Phosphorus (P)</span>
-                    <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--earth-dark)' }}>{currentCrop.thresholds.minP} - {currentCrop.thresholds.maxP} mg/kg</div>
-                  </div>
-
-                  <div style={{ padding: '10px', background: 'var(--bg-main)', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>Opt. Potassium (K)</span>
-                    <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--earth-dark)' }}>{currentCrop.thresholds.minK} - {currentCrop.thresholds.maxK} mg/kg</div>
+                  <div className="crop-reference-tile">
+                    <span className="crop-reference-label">Assessment method</span>
+                    <strong>Rule-based</strong>
+                    <small>Per-sample pH and preferred texture check; no fertilizer or yield prediction.</small>
                   </div>
                 </div>
+                {BUILTIN_CROP_REFERENCES[currentCrop.id] && <p className="crop-reference-citation">
+                  Reference: <a href={BUILTIN_CROP_REFERENCES[currentCrop.id].url} target="_blank" rel="noopener noreferrer">
+                    {BUILTIN_CROP_REFERENCES[currentCrop.id].source}
+                  </a>. {BUILTIN_CROP_REFERENCES[currentCrop.id].note}
+                  <span> Crop profile values remain operator-editable; edited thresholds may differ from the cited defaults.</span>
+                </p>}
               </div>
 
-              {/* Suitability Heatmap for the selected plot and crop */}
-              <div className="card">
-                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span className="card-title">Field Suitability Heatmap</span>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    {currentCrop.name} on {selectedPlot || 'no plot selected'}
-                  </span>
+              <div className="card" style={{ padding: '12px', fontSize: '0.8rem' }}>
+                <strong>Operator-tagged soil type: {soilTypeLabel}</strong>
+                <p style={{ marginTop: 6, color: 'var(--text-muted)' }}>
+                  {selectedSoilType
+                    ? (currentCrop?.compatibleSoilTypes?.length
+                      ? `This crop's configured soil types: ${currentCrop.compatibleSoilTypes.map(t => SOIL_TYPES.find(([v]) => v === t)?.[1] || t).join(', ')}.`
+                      : 'No crop-specific soil-type reference has been configured. The soil type is recorded as context but not scored.')
+                    : 'Set the field soil type in Field Map to allow a crop-specific soil compatibility check.'}
+                </p>
+                {conditionSummary && <p style={{ marginTop: 7 }}>
+                  <strong>EC-related advisory:</strong> Mean field EC {ecDsM(conditionSummary.ec)?.toFixed(3)} dS/m;
+                  estimated TDS {estimatedTdsMgL(conditionSummary.ec)?.toFixed(1)} mg/L. These are conductivity-based indicators, not a laboratory ECe/salinity classification.
+                  Sensor N/P/K averages: {['n','p','k'].map(k=>conditionSummary[k]?.toFixed(1) ?? '—').join(' / ')} mg/kg (uncalibrated, moisture-sensitive).
+                  Confirm nutrient deficiencies using laboratory soil testing before fertilizer advice.
+                </p>}
+              </div>
+
+              {/* Categorical compatibility belongs to the measured sample pins.
+                  Interpolating 0.25/0.60/1.00 as a continuous surface would
+                  fabricate quantitative suitability between observations. */}
+              <div className="card crop-compatibility-card">
+                <div className="card-header crop-compatibility-heading">
+                  <span className="card-title">Sample-Level Crop Compatibility</span>
+                  <span className="crop-compact-caption">{currentCrop.name} · {selectedPlot || 'No field selected'}</span>
                 </div>
-
                 {!analysis || analysis.total === 0 ? (
-                  <div style={{ padding: '28px 14px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
-                    {selectedPlot
-                      ? `${selectedPlot} has no scored samples yet. Log readings there in Field Map.`
-                      : 'Select a plot above to map where it suits this crop.'}
-                  </div>
+                  <p className="crop-empty-message">{selectedPlot
+                    ? `${selectedPlot} has no geotagged samples to evaluate.`
+                    : 'Select a recorded field to evaluate sample points.'}</p>
                 ) : (
-                  <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', fontSize: '0.78rem' }}>
-                      <strong style={{ fontSize: '0.85rem' }}>
-                        {Math.round((analysis.counts.suitable / analysis.total) * 100)}% of {analysis.total} samples are fully suitable
-                      </strong>
-                      <span style={{ padding: '2px 8px', borderRadius: '4px', background: '#dcfce7', color: '#166534', fontWeight: 700 }}>
-                        {analysis.counts.suitable} suitable
-                      </span>
-                      <span style={{ padding: '2px 8px', borderRadius: '4px', background: '#fef3c7', color: '#92400e', fontWeight: 700 }}>
-                        {analysis.counts.marginal} marginal
-                      </span>
-                      <span style={{ padding: '2px 8px', borderRadius: '4px', background: '#fee2e2', color: '#991b1b', fontWeight: 700 }}>
-                        {analysis.counts.unsuitable} unsuitable
-                      </span>
+                  <div className="crop-compatibility-body">
+                    <p className="crop-disclaimer">Results are a preliminary screening of measured pH and, when configured, field-level soil texture. Pin colors apply only to sampled points, not unmeasured areas.</p>
+                    <div className="crop-stat-row">
+                      <span><b>{analysis.counts.phMatched}/{analysis.total}</b> within preferred pH</span>
+                      <span><b>{analysis.counts.matched}</b> assessed preferences match</span>
+                      <span><b>{analysis.counts.review}</b> require review</span>
+                      <span><b>{analysis.counts.insufficient}</b> insufficient pH</span>
                     </div>
-
-                    <div style={{ position: 'relative', height: '380px', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--card-border)' }}>
+                    <div className="crop-compatibility-map">
                       <HeatmapMap
-                        heatPoints={analysis.heatPoints}
+                        heatPoints={[]}
                         focusPoints={analysis.focusPoints}
-                        boundary={analysis.boundary}
-                        gradient={SUITABILITY_GRADIENT}
+                        labeledPoints={analysis.markers}
+                        boundary={[]}
                         showRover={false}
                         showFollowControl={false}
                       />
-
-                      <div style={{
-                        position: 'absolute',
-                        bottom: '12px',
-                        left: '12px',
-                        zIndex: 1000,
-                        background: 'rgba(255, 255, 255, 0.95)',
-                        border: '1px solid var(--card-border)',
-                        borderRadius: '8px',
-                        padding: '8px 10px',
-                        fontSize: '0.72rem',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '4px'
-                      }}>
-                        {[
-                          { color: '#15803d', label: 'All parameters in range' },
-                          { color: '#eab308', label: 'One parameter out of range' },
-                          { color: '#dc2626', label: 'Two or more out of range' }
-                        ].map((item) => (
-                          <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: item.color }} />
-                            {item.label}
-                          </div>
-                        ))}
-                      </div>
                     </div>
-
-                    {analysis.limiting.length > 0 && (
-                      <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                        Most often out of range: {analysis.limiting.map((l) => `${l.label} (${l.count} of ${analysis.total})`).join(', ')}.
-                      </p>
-                    )}
+                    <div className="crop-status-legend">
+                      <span><i className="crop-dot match"/> All assessed preferences match</span>
+                      <span><i className="crop-dot review"/> At least one condition needs review</span>
+                      <span><i className="crop-dot insufficient"/> pH unavailable / invalid</span>
+                    </div>
+                    <div className="crop-sample-table-wrapper">
+                      <table className="crop-sample-table">
+                        <thead><tr><th>Point</th><th>pH</th><th>pH interpretation</th><th>Soil texture</th><th>Overall screening</th></tr></thead>
+                        <tbody>
+                          {analysis.evaluated.map(({ sample, criteria, status }, i) => (
+                            <tr key={sample.id ?? `${i}-${sample.timestamp ?? ''}`}>
+                              <td>{i + 1}</td>
+                              <td>{criteria.ph.value == null ? '—' : criteria.ph.value.toFixed(2)}</td>
+                              <td>{criteria.ph.status === 'match' ? 'Within preferred range'
+                                : criteria.ph.status === 'below' ? `${criteria.ph.deviation} below preferred minimum`
+                                : criteria.ph.status === 'above' ? `${criteria.ph.deviation} above preferred maximum`
+                                : 'Not evaluated'}</td>
+                              <td>{criteria.soilType.status === 'match' ? 'Preferred texture'
+                                : criteria.soilType.status === 'review' ? 'Different from preferred textures'
+                                : 'Not evaluated'}</td>
+                              <td><span className={`crop-result ${status}`}>{status === 'matched' ? 'Preferences match' : status === 'review' ? 'Review conditions' : 'Insufficient data'}</span></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="crop-disclaimer">Screening does not consider climate, drainage, soil depth, salinity measured by standardized methods, or independently verified nutrients.</p>
                   </div>
                 )}
               </div>
@@ -600,8 +528,8 @@ export default function CropAssessmentView({ onHelp }) {
           <div className="ui-dialog" style={{
             background: '#fff',
             borderRadius: '12px',
-            padding: '24px',
-            width: '540px',
+            padding: 'clamp(14px, 2vw, 24px)',
+            width: 'min(620px, calc(100vw - 32px))',
             maxHeight: '90vh',
             overflowY: 'auto',
             display: 'flex',
@@ -658,13 +586,27 @@ export default function CropAssessmentView({ onHelp }) {
                 <option value="Cereal / Grain">Cereal / Grain</option>
                 <option value="Root Crop">Root Crop</option>
                 <option value="Vegetable">Vegetable</option>
+                <option value="Tree Crop">Tree Crop</option>
                 <option value="Legume">Legume</option>
               </select>
             </div>
 
+            <div>
+              <label style={{ fontSize: '0.78rem', fontWeight: 700 }}>Compatible soil types (optional; configure only from a verified crop reference)</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
+                {SOIL_TYPES.map(([value,label]) => <label key={value} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem' }}>
+                  <input type="checkbox" checked={(formData.compatibleSoilTypes || []).includes(value)}
+                    onChange={e => setFormData(prev => ({ ...prev, compatibleSoilTypes: e.target.checked
+                      ? [...(prev.compatibleSoilTypes || []), value]
+                      : (prev.compatibleSoilTypes || []).filter(x => x !== value) }))} />
+                  {label}
+                </label>)}
+              </div>
+            </div>
+            <p style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>Only pH and the preferred soil-type list affect compatibility. The other historical threshold fields are retained in the database but are not interpreted as validated crop nutrient requirements.</p>
             {/* Threshold Ranges */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              {PARAMETERS.map((p) => (
+              {PARAMETERS.filter(p => p.key === 'ph').map((p) => (
                 <div key={p.key}>
                   <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
                     Min / Max {p.label}{p.unit ? ` (${p.unit})` : ''}

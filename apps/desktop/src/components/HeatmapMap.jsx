@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
-import 'leaflet.heat';
 import { AlertTriangle, Crosshair, Wifi, WifiOff, CloudOff, MapPin, Search, X } from 'lucide-react';
 import { appLocalDataDir, join } from '@tauri-apps/api/path';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { generateIDWHeatmapGrid } from '../utils/geo';
+import { autoHeatmapBoundary, heatmapCoverageOpacity, heatmapSupportSites } from '../utils/heatmapCoverage';
 import { fetchAllCoverage } from '../services/tileStorage';
 import { searchPlaces, MIN_QUERY_LENGTH } from '../services/placeSearch';
 import AnimatedMenu from './ui/AnimatedMenu';
@@ -32,10 +32,29 @@ const isInRegion = (lat, lng) =>
   lat >= REGION_BOUNDS[0][0] && lat <= REGION_BOUNDS[1][0] &&
   lng >= REGION_BOUNDS[0][1] && lng <= REGION_BOUNDS[1][1];
 
+// Raster colors are assigned directly from interpolated intensity.
+// Unlike leaflet.heat, neighboring pixels do not add together and inflate
+// moisture or other numeric measurements near dense clusters of samples.
+function rasterColor(value, gradient) {
+  const stops = Object.entries(gradient).map(([k, hex]) => [Number(k), hex]).sort((a,b) => a[0] - b[0]);
+  if (!stops.length) return '#64748b';
+  if (value <= stops[0][0]) return stops[0][1];
+  if (value >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
+  const high = stops.findIndex(([v]) => value <= v);
+  const [x0, a] = stops[high - 1], [x1, b] = stops[high];
+  const t = (value - x0) / (x1 - x0);
+  const channel = (hex, offset) => parseInt(hex.slice(offset, offset + 2), 16);
+  const parts = [1, 3, 5].map(i => Math.round(channel(a,i)*(1-t) + channel(b,i)*t));
+  return `rgb(${parts.join(',')})`;
+}
+
 export default function HeatmapMap({
   center = [14.6095, 120.9895],
   zoom = 18,
   heatPoints = [],
+  valueToIntensity = (value) => value,
+  maxInfluenceRadiusM = 55,
+  minInterpolationNeighbors = 1,
   focusPoints = [],
   labeledPoints = [],
   roverPos = [14.6095, 120.9895],
@@ -487,35 +506,68 @@ export default function HeatmapMap({
     }
   }, [boundary]);
 
-  // Render the heatmap.
+  // Draw an IDW raster of measured parameters, with a soft visual footprint.
+  // Feathering affects opacity ONLY, so it never changes predicted soil values.
   useEffect(() => {
     if (!mapInstanceRef.current) return;
-
     if (heatLayerRef.current) {
       mapInstanceRef.current.removeLayer(heatLayerRef.current);
+      heatLayerRef.current = null;
     }
+    if (!heatPoints.length) return;
 
-    if (heatPoints.length > 0) {
-      const interpolatedPoints = generateIDWHeatmapGrid(
-        heatPoints,
-        boundary,
-        {
-          gridResolution: 32,
-          power: 2.0,
-          maxInfluenceRadiusM: 55
-        }
+    // Live Monitoring has no field boundary. Derive an extent with enough
+    // transparent margin for rounded, irregular distance-limited coverage;
+    // never interpret the temporary rectangle as measured soil coverage.
+    const polygon = boundary?.length >= 3
+      ? boundary
+      : autoHeatmapBoundary(heatPoints, maxInfluenceRadiusM);
+    if (polygon.length < 3) return;
+    const minLat = Math.min(...polygon.map(p=>p[0]));
+    const maxLat = Math.max(...polygon.map(p=>p[0]));
+    const minLng = Math.min(...polygon.map(p=>p[1]));
+    const maxLng = Math.max(...polygon.map(p=>p[1]));
+    if (maxLat <= minLat || maxLng <= minLng) return;
+    // A finer raster + feathered alpha avoids the blocky square appearance
+    // without changing any measured or interpolated parameter values.
+    const resolution = 96;
+    const supportSites = heatmapSupportSites(heatPoints);
+    const readings = generateIDWHeatmapGrid(heatPoints, polygon, {
+      gridResolution: resolution,
+      power: 2,
+      maxInfluenceRadiusM,
+      minNeighbors: minInterpolationNeighbors
+    });
+    if (!readings.length) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = resolution + 1;
+    canvas.height = resolution + 1;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    // Overwrite each pixel individually: duplicate grid/source coordinates
+    // must not artificially intensify the display at overlapping locations.
+    // Canvas 'copy' composite mode would erase earlier pixels of the cloud.
+    for (const [lat, lng, measuredValue] of readings) {
+      const intensity = valueToIntensity(measuredValue);
+      if (intensity === null || !Number.isFinite(intensity)) continue;
+      const coverageAlpha = heatmapCoverageOpacity(
+        [lat, lng], supportSites, maxInfluenceRadiusM, minInterpolationNeighbors
       );
-
-      if (interpolatedPoints.length > 0) {
-        heatLayerRef.current = L.heatLayer(interpolatedPoints, {
-          radius: 22,
-          blur: 16,
-          maxZoom: 19,
-          gradient: gradient
-        }).addTo(mapInstanceRef.current);
-      }
+      if (coverageAlpha <= 0) continue;
+      const x = Math.max(0, Math.min(resolution, Math.round((lng-minLng)/(maxLng-minLng)*resolution)));
+      const y = Math.max(0, Math.min(resolution, Math.round((maxLat-lat)/(maxLat-minLat)*resolution)));
+      ctx.clearRect(x, y, 1, 1);
+      ctx.fillStyle = rasterColor(intensity, gradient);
+      ctx.globalAlpha = coverageAlpha;
+      ctx.fillRect(x, y, 1, 1);
     }
-  }, [heatPoints, boundary, gradient]);
+    ctx.globalAlpha = 1;
+    heatLayerRef.current = L.imageOverlay(
+      canvas.toDataURL('image/png'),
+      [[minLat,minLng],[maxLat,maxLng]],
+      { opacity: 0.73, interactive: false, className: 'eksplorador-nonadditive-heatmap' }
+    ).addTo(mapInstanceRef.current);
+  }, [heatPoints, boundary, gradient, valueToIntensity, maxInfluenceRadiusM, minInterpolationNeighbors]);
 
   // Frame the selected historical samples.
   useEffect(() => {
@@ -544,7 +596,7 @@ export default function HeatmapMap({
 
     historicalLabelsGroupRef.current.clearLayers();
 
-    labeledPoints.forEach(({ lat, lng, label, isAnchor, locationSource }) => {
+    labeledPoints.forEach(({ lat, lng, label, isAnchor, locationSource, statusTone, statusTitle }) => {
       if (
         !Number.isFinite(Number(lat)) ||
         !Number.isFinite(Number(lng))
@@ -552,6 +604,8 @@ export default function HeatmapMap({
         return;
       }
 
+      const toneColors = { matched: '#15803d', review: '#ca8a04', insufficient: '#64748b' };
+      const markerColor = toneColors[statusTone] || (isAnchor || ['OPERATOR_MAP', 'MISSION_PIN'].includes(locationSource) ? '#D99A2B' : '#1F5132');
       const markerIcon = L.divIcon({
         className: 'historical-map-label',
         html: `<div style="
@@ -561,7 +615,7 @@ export default function HeatmapMap({
           display: flex;
           align-items: center;
           justify-content: center;
-          background: ${isAnchor || ['OPERATOR_MAP', 'MISSION_PIN'].includes(locationSource) ? '#D99A2B' : '#1F5132'};
+          background: ${markerColor};
           color: #fff;
           border: 2px solid #fff;
           box-shadow: 0 2px 7px rgba(0, 0, 0, 0.35);
@@ -575,9 +629,9 @@ export default function HeatmapMap({
       L.marker([lat, lng], {
         icon: markerIcon,
         zIndexOffset: 700,
-        title: ['OPERATOR_MAP', 'MISSION_PIN'].includes(locationSource)
+        title: statusTitle || (['OPERATOR_MAP', 'MISSION_PIN'].includes(locationSource)
           ? `Operator-estimated sample #${label} (not GPS)`
-          : isAnchor ? `Anchor sample #${label}` : `Historical sample #${label}`
+          : isAnchor ? `Anchor sample #${label}` : `Historical sample #${label}`)
       }).addTo(historicalLabelsGroupRef.current);
     });
   }, [labeledPoints]);

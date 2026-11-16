@@ -1,0 +1,30 @@
+/* Offline soil texture references for the Field Map operator classification. */
+.soil-guide-overlay { position:fixed; inset:0; z-index:23000; background:rgba(10,27,18,.56); display:grid; place-items:center; padding:18px; }
+.soil-guide-dialog { width:min(960px,100%); max-height:min(88vh,920px); min-height:0; display:flex; flex-direction:column; border-radius:18px; overflow:hidden; background:#fff; box-shadow:0 25px 85px rgba(12,29,19,.3); color:#19352a; }
+.soil-guide-header { display:flex; justify-content:space-between; align-items:flex-start; gap:15px; padding:18px 22px; border-bottom:1px solid #e5eae5; }
+.soil-guide-header__title { display:flex; align-items:flex-start; gap:12px; min-width:0; }
+.soil-guide-header__icon { width:42px; height:42px; flex:0 0 auto; display:grid; place-items:center; border-radius:11px; background:#e2f0e5; color:#27683d; }
+.soil-guide-header h2 { margin:0 0 5px; font-size:1.24rem; letter-spacing:-.025em; }
+.soil-guide-header p { margin:0; font-size:.83rem; color:#617369; }
+.soil-guide-close { border:0; background:#f1f5f1; padding:8px; border-radius:9px; cursor:pointer; color:#304e3b; display:grid; place-items:center; }
+.soil-guide-close:hover { background:#e5eee6; }
+.soil-guide-body { overflow-y:auto; padding:16px 22px 22px; }
+.soil-guide-caution { padding:11px 13px; margin-bottom:15px; background:#fff9e9; border:1px solid #eedcac; color:#75551c; border-radius:10px; font-size:.78rem; line-height:1.55; }
+.soil-guide-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.soil-guide-item { display:grid; grid-template-columns:133px minmax(0,1fr); overflow:hidden; border:1px solid #e1e8e2; border-radius:12px; min-height:166px; background:#fff; }
+.soil-guide-item--selected { border-color:#79aa84; background:#f2faf2; box-shadow:inset 0 0 0 1px #95bc9c; }
+.soil-guide-item img { width:133px; height:100%; min-height:166px; object-fit:cover; }
+.soil-guide-item__content { display:flex; flex-direction:column; min-width:0; padding:11px 12px; gap:5px; }
+.soil-guide-item__top { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:5px; }
+.soil-guide-item h3 { font-size:.9rem; line-height:1.25; margin:0; color:#183729; }
+.soil-guide-current { display:inline-flex; align-items:center; gap:3px; font-size:.62rem; color:#176338; background:#dff1e3; border-radius:12px; padding:3px 6px; font-weight:700; }
+.soil-guide-item p { font-size:.75rem; line-height:1.35; margin:0; color:#4d5f54; }
+.soil-guide-item small { font-size:.69rem; line-height:1.35; color:#718075; }
+.soil-guide-choose { margin-top:auto; align-self:flex-start; border:1px solid #285c39; background:#285c39; color:#fff; font-size:.7rem; font-weight:700; border-radius:7px; padding:6px 10px; cursor:pointer; }
+.soil-guide-choose:hover:not(:disabled) { background:#1b442a; }
+.soil-guide-choose:disabled { background:#e4eee6; border-color:#d9e6dc; color:#396348; cursor:default; }
+.soil-guide-footer { padding:12px 22px; border-top:1px solid #e5eae5; display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:.72rem; color:#6c7a70; }
+.soil-guide-footer button { border:0; border-radius:8px; background:#28583a; color:#fff; font-weight:750; padding:9px 18px; cursor:pointer; }
+.soil-guide-dialog button:focus-visible,.field-soil-type-panel__guide-button:focus-visible { outline:3px solid #83c7a4; outline-offset:2px; }
+@media (max-width:740px) { .soil-guide-grid { grid-template-columns:1fr; } .soil-guide-dialog { max-height:94vh; } .soil-guide-header { padding:15px; } .soil-guide-body { padding:13px; } .soil-guide-footer { padding:12px 15px; } }
+@media (max-width:420px) { .soil-guide-item { grid-template-columns:106px minmax(0,1fr); } .soil-guide-item img { width:106px; } .soil-guide-item__content { padding:9px; } }

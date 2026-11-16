@@ -64,24 +64,25 @@ export const MOISTURE_LAYER = buildBandedLayer({
   floor: 0,
   ceil: 100,
   bands: [
-    { lo: 0, hi: 24, color: '#ef4444', label: '< 25%', desc: 'Deficient / Very Dry' },
-    { lo: 25, hi: 34, color: '#f97316', label: '25% - 34%', desc: 'Low / Drying' },
-    { lo: 35, hi: 55, color: '#22c55e', label: '35% - 55%', desc: 'Optimal Moisture' },
-    { lo: 56, hi: 60, color: '#38bdf8', label: '56% - 60%', desc: 'Moist / Slightly Wet' },
-    { lo: 61, hi: 100, color: '#0284c7', label: '> 60%', desc: 'Saturated / Wet' }
+    { lo: 0, hi: 24, color: '#ef4444', label: '< 25%', desc: 'Lower measured moisture' },
+    { lo: 25, hi: 34, color: '#f97316', label: '25% - 34%', desc: 'Lower-mid measured moisture' },
+    { lo: 35, hi: 55, color: '#22c55e', label: '35% - 55%', desc: 'Midrange at sampling time' },
+    { lo: 56, hi: 60, color: '#38bdf8', label: '56% - 60%', desc: 'Higher measured moisture' },
+    { lo: 61, hi: 100, color: '#0284c7', label: '> 60%', desc: 'High measured moisture' }
   ]
 });
 
+// Descriptive USDA-NRCS-inspired acidity classes, NOT crop suitability scores.
+// A green near-neutral map cell is not necessarily more suitable for every crop.
 export const PH_LAYER = buildBandedLayer({
   step: 0.1,
-  floor: 4.0,
-  ceil: 9.0,
+  floor: 0,
+  ceil: 14,
   bands: [
-    { lo: 0, hi: 5.5, color: '#dc2626', label: '\u2264 5.5', desc: 'Strongly Acidic' },
-    { lo: 5.6, hi: 5.7, color: '#ea580c', label: '5.6 - 5.7', desc: 'Moderately Acidic' },
-    { lo: 5.8, hi: 6.2, color: '#eab308', label: '5.8 - 6.2', desc: 'Slightly Acidic' },
-    { lo: 6.3, hi: 7.0, color: '#16a34a', label: '6.3 - 7.0', desc: 'Optimal Neutral' },
-    { lo: 7.1, hi: 7.4, color: '#2563eb', label: '7.1 - 7.4', desc: 'Slightly Alkaline' },
-    { lo: 7.5, hi: 14, color: '#7c3aed', label: '\u2265 7.5', desc: 'Alkaline' }
+    { lo: 0, hi: 5.4, color: '#b91c1c', label: '< 5.5', desc: 'Strongly acidic or lower' },
+    { lo: 5.5, hi: 6.4, color: '#d97706', label: '5.5 - 6.4', desc: 'Acidic' },
+    { lo: 6.5, hi: 7.5, color: '#16a34a', label: '6.5 - 7.5', desc: 'Near-neutral' },
+    { lo: 7.6, hi: 8.4, color: '#2563eb', label: '7.6 - 8.4', desc: 'Alkaline' },
+    { lo: 8.5, hi: 14, color: '#7c3aed', label: '>= 8.5', desc: 'Strongly alkaline or higher' }
   ]
 });

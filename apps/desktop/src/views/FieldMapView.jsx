@@ -18,9 +18,15 @@ import {
   Info,
   Undo2,
   FileText,
-  CheckCircle2
+  CheckCircle2,
+  Timer,
+  Sprout,
+  Images,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
+import SoilTypeGuide from '../components/SoilTypeGuide';
 import OperatorNavGuide from '../components/OperatorNavGuide';
 import PointToPointMissionDialog from '../components/PointToPointMissionDialog';
 import { operatorMapStart } from '../utils/pointToPointMission.js';
@@ -34,10 +40,13 @@ import { useLoRaConnection } from '../hooks/useLoRaConnection';
 import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
 import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
 import { resolveSoilSampleLocation, isInsideSamplingField, SOIL_LOCATION_SOURCE } from '../utils/manualSampleGeotag';
-import { MOISTURE_LAYER, PH_LAYER } from '../utils/layerBands';
+import { fieldLayerPresentation } from '../utils/fieldHeatmapLayers';
 import {
   saveSoilSample,
+  saveMissionSoilReading,
+  updateFieldSoilType,
   fetchMissionSamples,
+  fetchMissionRawReadings,
   fetchFields,
   createField,
   updateFieldBoundary,
@@ -51,6 +60,7 @@ import {
   createFieldAmendment
 } from '../services/db';
 import { summarizeSamples, compareSamples } from '../utils/soilHistory';
+import { estimatedTdsMgL, ecDsM, summarizeSoilSession, samplingPhase, formatTimeLeft, MIN_AVERAGE_READINGS } from '../utils/soilSampling';
 import { hasBoundary } from '../utils/fieldGeo';
 import './FieldMapView.css';
 
@@ -87,71 +97,6 @@ const TREND_STYLE = {
   stable: { symbol: '•', color: 'var(--text-muted)' },
   none: { symbol: '–', color: 'var(--text-muted)' }
 };
-const layerConfigurations = {
-  overall: {
-    label: 'Overall Soil Health',
-    unit: 'Score / 100',
-    gradient: {
-      0.2: '#dc2626',
-      0.4: '#ea580c',
-      0.6: '#eab308',
-      0.8: '#84cc16',
-      1.0: '#15803d'
-    },
-    ranges: [
-      { color: '#15803d', label: '85 - 100', desc: 'Optimal Fertility' },
-      { color: '#84cc16', label: '70 - 84', desc: 'Good Condition' },
-      { color: '#eab308', label: '55 - 69', desc: 'Moderate / Caution' },
-      { color: '#ea580c', label: '40 - 54', desc: 'Low Nutrient' },
-      { color: '#dc2626', label: '< 40', desc: 'Critical / Degraded' }
-    ],
-    extractValue: (s) => {
-      const value = validNumber(s.overall);
-      return value === null ? null : Math.min(1, Math.max(0, value / 100));
-    }
-  },
-  // Moisture and pH: legend, intensity and gradient all come from one band
-  // definition (utils/layerBands.js), shared with the dashboard map.
-  moisture: {
-    label: 'Soil Moisture',
-    unit: '%',
-    gradient: MOISTURE_LAYER.gradient,
-    ranges: MOISTURE_LAYER.legend,
-    extractValue: (s) => MOISTURE_LAYER.intensity(validNumber(s.moisture))
-  },
-  ph: {
-    label: 'Soil pH Level',
-    unit: 'pH',
-    gradient: PH_LAYER.gradient,
-    ranges: PH_LAYER.legend,
-    extractValue: (s) => PH_LAYER.intensity(validNumber(s.ph))
-  },
-  npk: {
-    label: 'NPK Compound Ratio',
-    unit: 'mg/kg',
-    gradient: {
-      0.2: '#dc2626',
-      0.5: '#d97706',
-      0.8: '#15803d',
-      1.0: '#1e40af'
-    },
-    ranges: [
-      { color: '#1e40af', label: 'High', desc: 'Rich / Excessive NPK' },
-      { color: '#15803d', label: 'Balanced', desc: 'Optimal Macronutrients' },
-      { color: '#d97706', label: 'Low', desc: 'Nutrient Depleted' },
-      { color: '#dc2626', label: 'Deficient', desc: 'Severe Shortage' }
-    ],
-    extractValue: (s) => {
-      const n = validNumber(s.n);
-      const p = validNumber(s.p);
-      const k = validNumber(s.k);
-
-      if (n === null || p === null || k === null) return null;
-
-      return Math.min(1.0, Math.max(0.1, (n + p + k) / 160));
-    }
-  }
-};
 
 export default function FieldMapView({ onHelp }) {
   const receiverStatus = useLoRaConnection();
@@ -167,12 +112,15 @@ export default function FieldMapView({ onHelp }) {
   const [isLoading, setIsLoading] = useState(true);
   const [fieldFilter, setFieldFilter] = useState('ALL'); // 'ALL' or a field id (as string)
   const [selectedMissionId, setSelectedMissionId] = useState(null);
-  const [selectedLayerKey, setSelectedLayerKey] = useState('overall');
+  const [selectedLayerKey, setSelectedLayerKey] = useState('ph');
 
   // Mission Logging Telemetry State Machine
   const [missionState, setMissionState] = useState('IDLE'); // IDLE, IN_PROGRESS, PAUSED, FINISHED
   const [liveSamples, setLiveSamples] = useState([]);
   const [baselineSamples, setBaselineSamples] = useState([]);
+  const [showRawPackets, setShowRawPackets] = useState(false);
+  const [rawPackets, setRawPackets] = useState([]);
+  const [rawPacketsLoading, setRawPacketsLoading] = useState(false);
   const [compareToId, setCompareToId] = useState(null); // null = previous mission of the same field
   // Prevent continuous telemetry from saving the same probe insertion repeatedly.
   // A new sample becomes eligible only after the probe is lifted and inserted again.
@@ -181,6 +129,9 @@ export default function FieldMapView({ onHelp }) {
   const probeInsertedRef = useRef(false);
   const insertionGenerationRef = useRef(0);
   const pendingNoGpsSampleRef = useRef(null);
+  const soilSessionRef = useRef(null);
+  const [soilSessionStatus, setSoilSessionStatus] = useState({ phase: 'idle', remainingMs: 0, rawCount: 0 });
+  const [readySoilSample, setReadySoilSample] = useState(null); // Only after a verified average has been saved.
   // Soil sample location is separate from the A→B navigation estimate.
   // Only an explicit operator choice may serve as the manual sample geotag.
   const [manualSoilLocationEnabled, setManualSoilLocationEnabled] = useState(false);
@@ -230,6 +181,9 @@ export default function FieldMapView({ onHelp }) {
   const [fieldSamples, setFieldSamples] = useState([]);
   const [amendments, setAmendments] = useState([]);
   const [isAddingAmendment, setIsAddingAmendment] = useState(false);
+  const [showTreatmentHistory, setShowTreatmentHistory] = useState(false);
+  const [soilTypeGuideOpen, setSoilTypeGuideOpen] = useState(false);
+  const [soilTypeSaving, setSoilTypeSaving] = useState(false);
   const [newTreatment, setNewTreatment] = useState('');
 
   const [latestSensorData, setLatestSensorData] = useState({
@@ -244,7 +198,7 @@ export default function FieldMapView({ onHelp }) {
     lng: null
   });
 
-  const activeConfig = layerConfigurations[selectedLayerKey];
+  const activeConfig = useMemo(() => fieldLayerPresentation(selectedLayerKey, liveSamples), [selectedLayerKey, liveSamples]);
 
   // ---------- Derived data ----------
   const fieldsById = useMemo(() => Object.fromEntries(fields.map((f) => [f.id, f])), [fields]);
@@ -470,10 +424,15 @@ export default function FieldMapView({ onHelp }) {
     setManualSoilLocationPicking(false);
     setManualSoilLocation(null);
     pendingNoGpsSampleRef.current = null;
+    soilSessionRef.current = null;
+    setSoilSessionStatus({ phase: 'idle', remainingMs: 0, rawCount: 0 });
+    setReadySoilSample(null);
     probeInsertedRef.current = false;
     insertionGenerationRef.current += 1;
     // A prior SQLite write may still be finishing; keep the in-flight guard.
     setSelectedMissionId(id);
+    setRawPackets([]);
+    setShowRawPackets(false);
     setCompareToId(null);
     setManualReached([]);
     sampleCapturedForInsertionRef.current = false;
@@ -489,163 +448,195 @@ export default function FieldMapView({ onHelp }) {
     if (next !== selectedMissionId) selectMission(next);
   }, [visibleMissions, selectedMissionId, isLoading]);
 
+  // Every qualifying packet is archived with a mission and insertion ID.
+  // Only the representative 5-minute average goes into telemetry/heatmaps.
+  const finalizeActiveInsertion = async (session) => {
+    if (!session || session.completed || session.finalizing || soilSessionRef.current !== session) return;
+    if (samplingPhase(session, Date.now()).phase !== 'finalize') return;
+    const average = summarizeSoilSession(session.readings, session.startedAt);
+    if (average.count < MIN_AVERAGE_READINGS) return;
+
+    const location = resolveSoilSampleLocation({
+      gpsCoords: session.lastGps && Date.now() - session.lastGpsSeenAt <= 15000 ? session.lastGps : null,
+      manualEnabled: manualSoilLocationEnabled,
+      manualSelection: manualSoilLocation,
+      boundary: activeBoundary
+    });
+    if (location.outsideField) {
+      setNotification({ type: 'error', message: 'Sample GPS position is outside this field. Raw readings were kept, but no mapped sample was created.' });
+      return;
+    }
+    if (!location.coords && manualSoilLocationEnabled && !manualSoilLocation) {
+      setSoilSessionStatus({ phase: 'location', remainingMs: 0, rawCount: session.readings.length });
+      return;
+    }
+    session.finalizing = true;
+    try {
+      // Do not claim a completed sample if any original packet could not be persisted.
+      const writes = await Promise.allSettled(session.rawWrites);
+      if (writes.some(w => w.status === 'rejected')) throw new Error('Some raw packets could not be stored');
+      if (soilSessionRef.current !== session) return;
+      const coord = location.coords;
+      const newSample = {
+        mission_id: String(session.missionId),
+        session_id: session.id,
+        plot: session.fieldName,
+        coords: coord ?? [null, null],
+        lat: coord?.[0] ?? null,
+        lng: coord?.[1] ?? null,
+        location_source: location.source,
+        moisture: average.moisture,
+        ph: average.ph,
+        ec: average.ec,
+        n: average.nitrogen,
+        p: average.phosphorus,
+        k: average.potassium,
+        // Retain the legacy display index for compatibility; do not interpret as fertility.
+        overall: average.moisture != null && average.ph != null
+          ? Math.round((average.moisture + average.ph * 10) / 2) : null,
+        timestamp: new Date().toISOString()
+      };
+      const saved = await saveSoilSample(newSample);
+      if (!saved) throw new Error('Could not persist the final sample');
+      session.completed = true;
+      sampleCapturedForInsertionRef.current = true;
+      setLiveSamples(prev => [...prev, newSample]);
+      setFieldSamples(prev => [...prev, newSample]);
+      setMissions(prev => prev.map(m => String(m.id) === String(session.missionId) ? { ...m, sampleCount: m.sampleCount + 1 } : m));
+      setSoilSessionStatus({ phase: 'ready', remainingMs: 0, rawCount: session.readings.length });
+      setReadySoilSample({
+        missionName: currentSelected?.name || `Mission #${session.missionId}`,
+        sampleCount: average.count,
+        rawCount: session.readings.length,
+        values: { moisture: average.moisture, ph: average.ph, ec: average.ec, n: average.nitrogen, p: average.phosphorus, k: average.potassium },
+        locationSource: location.source,
+        coords: location.coords ?? null
+      });
+      if (manualSoilLocation) setManualSoilLocation(null);
+      setNotification({
+        type: 'success',
+        message: `Five-minute post-buffer observation saved (${average.count} readings averaged after the 5 s lead-in). Probe is ready to be lifted. ${location.source === SOIL_LOCATION_SOURCE.GPS ? '' : 'Coordinates are operator-estimated or unavailable.'}`
+      });
+    } catch (error) {
+      setNotification({ type: 'error', message: `Soil sample incomplete: ${String(error)}. Raw packets retained where possible.` });
+    } finally {
+      session.finalizing = false;
+    }
+  };
+
+  // Countdown updates independently of packet arrivals. A stale LoRa feed must
+  // not falsely declare that five minutes of valid observation were completed.
+  useEffect(() => {
+    if (missionState !== 'IN_PROGRESS') {
+      if (soilSessionRef.current && !soilSessionRef.current.completed) {
+        setNotification({ type: 'info', message: 'Observation interrupted. Already received raw packets remain stored; no five-minute average was created.' });
+      }
+      soilSessionRef.current = null;
+      setSoilSessionStatus({ phase: 'idle', remainingMs: 0, rawCount: 0 });
+      return;
+    }
+    const tick = () => {
+      const session = soilSessionRef.current;
+      if (!session) return;
+      const status = samplingPhase(session, Date.now());
+      setSoilSessionStatus(prev =>
+        prev.phase === 'location' && !manualSoilLocation && manualSoilLocationEnabled
+          ? { phase: 'location', remainingMs: 0, rawCount: session.readings.length }
+          : { ...status, rawCount: session.readings.length }
+      );
+      if (status.phase === 'finalize') void finalizeActiveInsertion(session);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [missionState, currentSelected?.id, manualSoilLocation, manualSoilLocationEnabled, activeBoundary]);
+
   // ---------- Tauri serial/sensor live data listener ----------
   useEffect(() => {
-    const unlistenPromise = listen('sensor-data', async (event) => {
+    const unlistenPromise = listen('sensor-data', (event) => {
       const data = event.payload;
-      if (data.error) return;
-
-      // Always update latest real-time readings for the telemetry monitor card.
+      // Battery packets share this event channel; never interpret one as a lifted soil probe.
+      if (!data || data.error || data.type === 'battery') return;
       setLatestSensorData(data);
-
       const lat = validNumber(data.lat);
       const lng = validNumber(data.lng);
-
-      // Use live heading when the telemetry payload provides one. Different
-      // backends commonly expose this as heading, course, bearing, or gpsHeading.
-      // Keep the last known heading if no heading value is present in this packet.
-      const heading = validNumber(
-        data.heading ?? data.course ?? data.bearing ?? data.gpsHeading
-      );
-
-      if (heading !== null) {
-        // Normalize any negative or >360-degree value into the 0-359.999 range.
-        setRoverHeading(((heading % 360) + 360) % 360);
-      }
-
-      // Rover position is navigation state, not sample state. Keep the map and
-      // navigation guide updated whenever valid GPS coordinates are available,
-      // even if logging is paused or the soil probe is lifted.
-      const hasValidGps =
-        lat !== null &&
-        lng !== null &&
-        lat >= -90 &&
-        lat <= 90 &&
-        lng >= -180 &&
-        lng <= 180 &&
-        !(lat === 0 && lng === 0);
-
+      const heading = validNumber(data.heading ?? data.course ?? data.bearing ?? data.gpsHeading);
+      if (heading !== null) setRoverHeading(((heading % 360) + 360) % 360);
+      const hasValidGps = lat !== null && lng !== null && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && !(lat === 0 && lng === 0) && (data.satsLocked == null || Number(data.satsLocked) > 0);
       if (hasValidGps) {
         setRoverPos([lat, lng]);
         clearTimeout(gpsExpiry.current);
-        // DATA lacks calibrated accuracy/age metadata. This is only an RC
-        // planning display timeout; it cannot qualify autonomous localization.
         gpsExpiry.current = setTimeout(() => { setRoverPos(null); setRoverHeading(null); }, 5000);
       } else {
         clearTimeout(gpsExpiry.current);
         setRoverPos(null); setRoverHeading(null);
       }
-
-      // Saving soil samples is separate from updating rover position.
       if (missionState !== 'IN_PROGRESS' || !currentSelected || currentSelected.status !== 'in_progress') return;
-
-      const isProbeInserted = data.soilValid === 1;
-
-      // Preserve one record per physical probe insertion, including if the
-      // operator must choose a location after soil readings have started.
-      // In-progress saves are serialized to avoid duplicate telemetry records.
-      const saveInsertion = async (packet, location, generation) => {
-        if (sampleCapturedForInsertionRef.current || sampleSaveInFlightRef.current) return;
-        sampleSaveInFlightRef.current = true;
-        const coord = location.coords;
-        const newSample = {
-          mission_id: String(currentSelected.id),
-          plot: currentSelected.fieldName,
-          coords: coord ?? [null, null],
-          lat: coord?.[0] ?? null,
-          lng: coord?.[1] ?? null,
-          location_source: location.source,
-          moisture: packet.moisture,
-          ph: packet.ph,
-          ec: packet.ec,
-          n: packet.nitrogen,
-          p: packet.phosphorus,
-          k: packet.potassium,
-          overall: Math.round((packet.moisture + packet.ph * 10) / 2),
-          timestamp: new Date().toISOString()
+      const inserted = data.soilValid === 1;
+      let session = soilSessionRef.current;
+      if (!inserted) {
+        if (session) {
+          if (!session.completed) {
+            setNotification({ type: 'info', message: `Probe lifted before five-minute sample completion (${session.readings.length} raw packets retained). Reinsert and complete a new observation.` });
+          }
+          soilSessionRef.current = null;
+          setSoilSessionStatus({ phase: 'idle', remainingMs: 0, rawCount: 0 });
+        }
+        return;
+      }
+      const receivedAt = Date.now();
+      if (!session) {
+        setReadySoilSample(null); // A new insertion replaces the last success state.
+        session = {
+          id: globalThis.crypto.randomUUID(),
+          startedAt: receivedAt,
+          lastSeen: receivedAt,
+          missionId: currentSelected.id,
+          fieldName: currentSelected.fieldName,
+          readings: [],
+          rawWrites: [],
+          lastGps: null,
+          lastGpsSeenAt: 0,
+          finalizing: false,
+          completed: false
         };
-        try {
-          const saved = await saveSoilSample(newSample);
-          if (!saved) {
-            setNotification({ type: 'error', message: 'A soil sample could not be saved to SQLite.' });
-            return;
-          }
-          setLiveSamples(prev => [...prev, newSample]);
-          setFieldSamples(prev => [...prev, newSample]);
-          setMissions(prev => prev.map(m => m.id === currentSelected.id ? { ...m, sampleCount: m.sampleCount + 1 } : m));
-          if (insertionGenerationRef.current === generation) {
-            sampleCapturedForInsertionRef.current = true;
-          }
-          if (insertionGenerationRef.current === generation) pendingNoGpsSampleRef.current = null;
-          if (location.source === SOIL_LOCATION_SOURCE.GPS && manualSoilLocation) {
-            // Never silently reuse a previous operator estimate after a GPS fix.
-            setManualSoilLocation(null);
-          }
-          if (location.source === SOIL_LOCATION_SOURCE.OPERATOR_MAP ||
-              location.source === SOIL_LOCATION_SOURCE.MISSION_PIN) {
-            // One deliberate map/pin choice belongs to one insertion ONLY.
-            setManualSoilLocation(null);
-            setNotification({ type: 'success', message: 'Soil sample saved with an operator-estimated location (not a GPS fix).' });
-          } else if (location.source === SOIL_LOCATION_SOURCE.UNLOCATED) {
-            setNotification({ type: 'info', message: 'Soil values saved without coordinates. Choose a manual location before the next insertion if GPS is unavailable.' });
-          }
-        } finally {
-          sampleSaveInFlightRef.current = false;
-        }
-      };
-
-      if (!isProbeInserted) {
-        if (probeInsertedRef.current) {
-          // If an operator never chose a location, keep the real soil values
-          // instead of discarding the whole insertion when the probe is lifted.
-          const pending = pendingNoGpsSampleRef.current;
-          if (pending && !sampleCapturedForInsertionRef.current) {
-            // Honor a location the operator picked while readings were already
-            // incoming, even if the next telemetry packet is probe-lifted.
-            const fallbackLocation = resolveSoilSampleLocation({
-              gpsCoords: null,
-              manualEnabled: manualSoilLocationEnabled,
-              manualSelection: manualSoilLocation,
-              boundary: activeBoundary
-            });
-            void saveInsertion(pending, fallbackLocation, insertionGenerationRef.current);
-          }
-          probeInsertedRef.current = false;
-          insertionGenerationRef.current += 1;
-          sampleCapturedForInsertionRef.current = false;
-          pendingNoGpsSampleRef.current = null;
-        }
-        return;
+        soilSessionRef.current = session;
+        setSoilSessionStatus({ phase: 'lead-in', remainingMs: 5000, rawCount: 0 });
       }
-      if (!probeInsertedRef.current) {
-        probeInsertedRef.current = true;
-        insertionGenerationRef.current += 1;
-        sampleCapturedForInsertionRef.current = false;
+      if (String(session.missionId) !== String(currentSelected.id)) return;
+      session.lastSeen = receivedAt;
+      if (hasValidGps) {
+        session.lastGps = [lat, lng];
+        session.lastGpsSeenAt = receivedAt;
       }
-      if (sampleCapturedForInsertionRef.current || sampleSaveInFlightRef.current) return;
-
-      const location = resolveSoilSampleLocation({
-        gpsCoords: hasValidGps ? [lat, lng] : null,
-        manualEnabled: manualSoilLocationEnabled,
-        manualSelection: manualSoilLocation,
-        boundary: activeBoundary
+      const receivedIso = new Date(receivedAt).toISOString();
+      const reading = { receivedAt, data };
+      session.readings.push(reading);
+      // Persist *every* packet during this insertion, including the lead-in and
+      // packets received after the final average, to permit full audit/replay.
+      const pending = saveMissionSoilReading({
+        sessionId: session.id, missionId: session.missionId, receivedAt: receivedIso,
+        data, coords: hasValidGps ? [lat, lng] : null
       });
-      // A true GPS position outside the saved field remains rejected, as in
-      // the original app. The operator cannot bypass the boundary by clicking.
-      if (location.outsideField) return;
-      if (!hasValidGps && manualSoilLocationEnabled && !manualSoilLocation) {
-        // Wait for a deliberate location pick; incoming readings remain cached.
-        // If the probe is lifted first, save without coordinates (above).
-        pendingNoGpsSampleRef.current = data;
-        return;
-      }
-      void saveInsertion(data, location, insertionGenerationRef.current);
+      session.rawWrites.push(pending);
+      // Avoid unhandled rejections if storage fails while the user is still sampling.
+      void pending.catch(() => {});
+      if (samplingPhase(session, receivedAt).phase === 'finalize') void finalizeActiveInsertion(session);
     });
-
-    return () => {
-      unlistenPromise.then((unlisten) => unlisten());
-    };
+    return () => { unlistenPromise.then(unlisten => unlisten()); };
   }, [missionState, currentSelected, activeBoundary, manualSoilLocationEnabled, manualSoilLocation]);
+
+  const toggleRawPackets = async () => {
+    if (showRawPackets) { setShowRawPackets(false); return; }
+    if (!currentSelected) return;
+    setShowRawPackets(true);
+    setRawPacketsLoading(true);
+    try {
+      setRawPackets(await fetchMissionRawReadings(currentSelected.id));
+    } catch (error) {
+      setNotification({ type: 'error', message: `Could not load mission raw packets: ${String(error)}` });
+    } finally { setRawPacketsLoading(false); }
+  };
 
   // ---------- Wizard helpers ----------
   const resetWizard = () => {
@@ -854,6 +845,7 @@ export default function FieldMapView({ onHelp }) {
     setSelectedMissionId(created.id);
     setCompareToId(null);
     setLiveSamples([]);
+    soilSessionRef.current = null;
     sampleCapturedForInsertionRef.current = false;
     setManualReached([]);
     resetWizard();
@@ -876,6 +868,8 @@ export default function FieldMapView({ onHelp }) {
       return;
     }
     setMissions((prev) => prev.map((m) => (m.id === id ? { ...m, status: 'completed' } : m)));
+    soilSessionRef.current = null;
+    setSoilSessionStatus({ phase: 'idle', remainingMs: 0, rawCount: 0 });
     setMissionState('FINISHED');
     setManualSoilLocationEnabled(false);
     setManualSoilLocationPicking(false);
@@ -950,6 +944,29 @@ export default function FieldMapView({ onHelp }) {
     if (String(newMission.fieldId) === String(field.id)) setNewMission((prev) => ({ ...prev, fieldId: '' }));
     setFieldError(null);
   };
+  // Both the dropdown and visual guide use the same persisted classification.
+  // No new schema or crop-scoring rules are introduced by this UX feature.
+  const saveOperatorSoilType = async (type) => {
+    if (!viewField || soilTypeSaving) return false;
+    setSoilTypeSaving(true);
+    try {
+      const ok = await updateFieldSoilType(viewField.id, type);
+      if (!ok) {
+        setNotification({ type: 'error', message: 'Could not save the field soil classification.' });
+        return false;
+      }
+      setFields(prev => prev.map(f => f.id === viewField.id ? { ...f, soilType: type } : f));
+      setNotification({ type: 'success', message: `Soil type saved for ${viewField.name}. Crop Assessment will use it when crop-specific compatible soils are configured.` });
+      return true;
+    } catch (error) {
+      console.error('Soil classification save failed:', error);
+      setNotification({ type: 'error', message: 'Could not save the field soil classification.' });
+      return false;
+    } finally {
+      setSoilTypeSaving(false);
+    }
+  };
+
   // ---------- Render helpers ----------
   const primaryBtn = (enabled = true) => ({
     cursor: enabled ? 'pointer' : 'not-allowed',
@@ -1012,6 +1029,34 @@ export default function FieldMapView({ onHelp }) {
         onPinChange={setPointToPointPinIndex}
         sending={deploymentSequence !== null}
       />
+      <SoilTypeGuide
+        open={soilTypeGuideOpen && Boolean(viewField)}
+        value={viewField?.soilType || ''}
+        saving={soilTypeSaving}
+        onClose={() => setSoilTypeGuideOpen(false)}
+        onChoose={async type => {
+          if (await saveOperatorSoilType(type)) setSoilTypeGuideOpen(false);
+        }}
+      />
+      {readySoilSample && (
+        <div className="soil-ready-modal__backdrop" role="presentation">
+          <div className="soil-ready-modal" role="dialog" aria-modal="true" aria-labelledby="soil-ready-title">
+            <div className="soil-ready-modal__icon"><CheckCircle2 size={28} aria-hidden="true" /></div>
+            <h3 id="soil-ready-title">Sample saved — Ready to lift</h3>
+            <p>The five-minute observation is complete. The averaged sample was saved to <strong>{readySoilSample.missionName}</strong>. You may now retract the probe.</p>
+            <div className="soil-ready-modal__data">
+              <div><span>Valid averaged readings</span><strong>{readySoilSample.sampleCount}</strong></div>
+              <div><span>Raw packets preserved</span><strong>{readySoilSample.rawCount}</strong></div>
+              <div><span>Sample moisture</span><strong>{fmt(readySoilSample.values.moisture, 1)}%</strong></div>
+              <div><span>Sample pH</span><strong>{fmt(readySoilSample.values.ph, 2)}</strong></div>
+              <div><span>Sample EC</span><strong>{fmt(readySoilSample.values.ec, 0)} µS/cm</strong></div>
+              <div><span>Location</span><strong>{readySoilSample.locationSource === SOIL_LOCATION_SOURCE.GPS ? 'GPS geotag' : readySoilSample.locationSource === SOIL_LOCATION_SOURCE.MISSION_PIN ? 'Mission pin' : readySoilSample.locationSource === SOIL_LOCATION_SOURCE.OPERATOR_MAP ? 'Manual map' : 'Unlocated'}</strong></div>
+            </div>
+            <button type="button" className="soil-ready-modal__button" onClick={() => setReadySoilSample(null)}>Acknowledge and continue</button>
+            <small>New sampling begins on the next valid probe insertion after lifting.</small>
+          </div>
+        </div>
+      )}
       {pointToPointPicking && (
         <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', borderRadius: 8, background: '#fef3c7', color: '#78350f' }}>
           <MapPin size={16} /> Click on the Field Map to set Point A (operator estimate, not GPS).
@@ -1287,10 +1332,12 @@ export default function FieldMapView({ onHelp }) {
                     color: 'var(--text-dark)'
                   }}
                 >
-                  <option value="overall">Overall Soil Health</option>
-                  <option value="moisture">Soil Moisture</option>
-                  <option value="ph">Soil pH</option>
-                  <option value="npk">NPK Ratio</option>
+                  <option value="ph">Soil pH — Acidity / Alkalinity</option>
+                  <option value="moisture">Soil Moisture — Sampling Snapshot</option>
+                  <option value="ec">Electrical Conductivity (EC)</option>
+                  <option value="nitrogen">Nitrogen (N) — Sensor Estimate</option>
+                  <option value="phosphorus">Phosphorus (P) — Sensor Estimate</option>
+                  <option value="potassium">Potassium (K) — Sensor Estimate</option>
                 </select>
               </div>
             </div>
@@ -1376,6 +1423,9 @@ export default function FieldMapView({ onHelp }) {
               boundary={activeBoundary}
               waypoints={displayedWaypoints}
               heatPoints={heatPointsForLayer}
+              valueToIntensity={activeConfig.valueToIntensity}
+              maxInfluenceRadiusM={25}
+              minInterpolationNeighbors={2}
               labeledPoints={samplePins}
               focusPoints={focusPoints}
               roverPos={roverPos}
@@ -1396,6 +1446,34 @@ export default function FieldMapView({ onHelp }) {
               onWaypointDelete={(index) => setTempWaypoints((prev) => prev.filter((_, i) => i !== index))}
               gradient={activeConfig.gradient}
             />
+            {/* Map-centered sampling chip: shown during active mission logging, not in the sidebar. */}
+            {missionState === 'IN_PROGRESS' && wizardStep === 'IDLE' && currentSelected && (
+              <div className={`soil-map-timer-chip soil-map-timer-chip--${soilSessionStatus.phase}`} role="status" aria-live="polite">
+                <span className="soil-map-timer-chip__icon"><Timer size={18} aria-hidden="true" /></span>
+                <span className="soil-map-timer-chip__content">
+                  <strong>{soilSessionStatus.phase === 'idle' ? 'Awaiting probe insertion' :
+                    soilSessionStatus.phase === 'lead-in' ? 'LoRa lead-in buffer' :
+                    soilSessionStatus.phase === 'observing' ? 'Soil sample in progress' :
+                    soilSessionStatus.phase === 'stale' ? 'Telemetry delayed' :
+                    soilSessionStatus.phase === 'insufficient' ? 'Need more sensor packets' :
+                    soilSessionStatus.phase === 'location' ? 'Choose a sample geotag' :
+                    soilSessionStatus.phase === 'ready' ? 'Sample saved — Ready to lift' : 'Saving sample…'}</strong>
+                  <small>{soilSessionStatus.phase === 'idle' ? 'Insert probe to start 5:05 timer' :
+                    soilSessionStatus.phase === 'lead-in' ? `${formatTimeLeft(soilSessionStatus.remainingMs)} until averaging begins` :
+                    soilSessionStatus.phase === 'observing' ? `${formatTimeLeft(soilSessionStatus.remainingMs)} remaining · ${soilSessionStatus.rawCount} raw packets` :
+                    soilSessionStatus.phase === 'stale' ? 'Do not lift; waiting for a fresh packet' :
+                    soilSessionStatus.phase === 'insufficient' ? 'Keep inserted until more data arrive' :
+                    soilSessionStatus.phase === 'location' ? 'Select map point or mission pin' :
+                    soilSessionStatus.phase === 'ready' ? `${soilSessionStatus.rawCount} packets retained` : 'Do not lift yet'}</small>
+                </span>
+                {soilSessionStatus.phase === 'observing' && <span className="soil-map-timer-chip__clock">{formatTimeLeft(soilSessionStatus.remainingMs)}</span>}
+                {(soilSessionStatus.phase === 'lead-in' || soilSessionStatus.phase === 'observing') && (
+                  <span className="soil-map-timer-chip__track" aria-hidden="true">
+                    <span style={{ width: `${Math.min(100,Math.max(0,(soilSessionStatus.phase === 'lead-in' ? 5000-soilSessionStatus.remainingMs : 5000+300000-soilSessionStatus.remainingMs)/305000*100))}%` }} />
+                  </span>
+                )}
+              </div>
+            )}
             {/* Paused-logging overlay: a translucent yellow wash so it's unmistakable at a glance */}
             {missionState === 'PAUSED' && wizardStep === 'IDLE' && (
               <div style={{
@@ -1458,6 +1536,13 @@ export default function FieldMapView({ onHelp }) {
                   </div>
                 ))}
               </div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.35, borderTop: '1px solid var(--card-border)', paddingTop: '6px' }}>
+                Estimated between samples · ≥2 nearby sites · 25 m radius. Blank areas lack supported predictions.
+                <details style={{ marginTop: '5px' }}>
+                  <summary style={{ cursor: 'pointer', color: 'var(--primary-green)', fontWeight: 700 }}>Interpretation & limitations</summary>
+                  <p style={{ margin: '6px 0 0' }}>{activeConfig.note} Raw values are interpolated before applying colors. No fertilizer requirements are inferred.</p>
+                </details>
+              </div>
             </div>
           </div>
         </div>
@@ -1506,7 +1591,7 @@ export default function FieldMapView({ onHelp }) {
                     </div>
                     <div style={{ padding: '6px 8px', background: 'var(--bg-main)', borderRadius: '6px' }}>
                       <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Avg. Conductivity</div>
-                      <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{fmt(overview.avg.ec, 2)}{overview.avg.ec !== null ? ' dS/m' : ''}</div>
+                      <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>{fmt(ecDsM(overview.avg.ec), 3)}{overview.avg.ec !== null ? ' dS/m' : ''}</div>
                     </div>
                     <div style={{ padding: '6px 8px', background: 'var(--bg-main)', borderRadius: '6px' }}>
                       <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Samples Recorded</div>
@@ -1566,13 +1651,16 @@ export default function FieldMapView({ onHelp }) {
                 </div>
 
                 <div style={{ padding: '6px', background: 'var(--bg-main)', borderRadius: '6px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>EC (dS/m)</div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>EC (µS/cm)</div>
                   <div style={{ fontWeight: 800, fontSize: '0.9rem' }}>
                     {latestSensorData.ec}
                   </div>
                 </div>
               </div>
 
+              <div style={{ marginTop: 6, fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                Estimated TDS: {fmt(estimatedTdsMgL(latestSensorData.ec), 1)} mg/L (0.60 × EC; not independently measured)
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '6px' }}>
                 <div style={{ padding: '6px', background: 'var(--bg-main)', borderRadius: '6px', textAlign: 'center' }}>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Nitrogen (N)</div>
@@ -1687,7 +1775,7 @@ export default function FieldMapView({ onHelp }) {
                     {[
                       { key: 'ph', label: 'Avg. pH', decimals: 2 },
                       { key: 'moisture', label: 'Avg. Moisture', decimals: 1, unit: '%' },
-                      { key: 'ec', label: 'Avg. EC', decimals: 2, unit: ' dS/m' },
+                      { key: 'ec', label: 'Avg. EC', decimals: 0, unit: ' µS/cm' },
                       { key: 'n', label: 'Avg. Nitrogen', decimals: 1, unit: ' mg/kg' },
                       { key: 'p', label: 'Avg. Phosphorus', decimals: 1, unit: ' mg/kg' },
                       { key: 'k', label: 'Avg. Potassium', decimals: 1, unit: ' mg/kg' }
@@ -1702,21 +1790,36 @@ export default function FieldMapView({ onHelp }) {
                   </div>
                 )}
 
-                <div style={{ borderTop: '1px solid var(--card-border)', paddingTop: '10px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <FileText size={14} color="var(--primary-green)" />
-                      Amendments & Treatments
-                    </span>
-                    <button
-                      className="badge"
-                      onClick={() => setIsAddingAmendment(!isAddingAmendment)}
-                      style={{ background: 'var(--primary-green)', color: '#fff', cursor: 'pointer', border: 'none', padding: '4px 10px' }}
-                    >
-                      <Plus size={13} /> Add Record
-                    </button>
-                  </div>
-
+                <div className="field-soil-type-panel">
+                  <div className="field-soil-type-panel__heading"><Sprout size={17} aria-hidden="true" /><strong>Operator-tagged soil type</strong></div>
+                  <p>Enter the field's observed soil classification. This is manual information used as context in Crop Assessment, not measured by the rover.</p>
+                  <select aria-label="Operator-entered soil type" value={viewField?.soilType || ''} disabled={soilTypeSaving}
+                    onChange={e => { void saveOperatorSoilType(e.target.value); }}>
+                    <option value="">Select soil type (not classified)</option>
+                    <option value="sandy">Sandy</option>
+                    <option value="sandy-loam">Sandy loam</option>
+                    <option value="loam">Loam</option>
+                    <option value="clay-loam">Clay loam</option>
+                    <option value="clay">Clay</option>
+                    <option value="silt-loam">Silt loam</option>
+                  </select>
+                  <button type="button" className="field-soil-type-panel__guide-button" onClick={() => setSoilTypeGuideOpen(true)}>
+                    <Images size={16} aria-hidden="true" /> View soil type pictures &amp; identification tips
+                  </button>
+                  <small>{viewField?.soilType ? 'Saved for this field. Crop matching is applied only for crops with configured, verified compatible soil types.' : 'Soil type has not yet been tagged for this field.'}</small>
+                </div>
+                <div className="field-treatment-history">
+                  <button type="button" className="field-treatment-history__toggle" aria-expanded={showTreatmentHistory} onClick={() => setShowTreatmentHistory(v => !v)}>
+                    <FileText size={15} aria-hidden="true" />
+                    <span>Amendments &amp; Treatments <small>(optional history · {amendments.length} records)</small></span>
+                    {showTreatmentHistory ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
+                  {showTreatmentHistory && (
+                    <div className="field-treatment-history__content">
+                      <div className="field-treatment-history__actions">
+                        <span>Prior compost, lime, fertilizer and other treatments</span>
+                        <button className="badge" type="button" onClick={() => setIsAddingAmendment(!isAddingAmendment)}><Plus size={13} /> Add Record</button>
+                      </div>
                   {isAddingAmendment && (
                     <div style={{ display: 'flex', gap: '8px', padding: '10px', background: 'var(--bg-main)', borderRadius: '6px', border: '1px solid var(--card-border)', marginBottom: '8px' }}>
                       <input
@@ -1751,6 +1854,8 @@ export default function FieldMapView({ onHelp }) {
                       ))}
                     </div>
                   )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1763,6 +1868,10 @@ export default function FieldMapView({ onHelp }) {
                 <span className="card-title">Mission Samples</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{numberedSamples.length} samples</span>
+                  <button type="button" className="badge" onClick={toggleRawPackets}
+                    aria-pressed={showRawPackets} title="Inspect mission-linked raw sensor packets">
+                    {showRawPackets ? 'Hide raw packets' : 'View raw packets'}
+                  </button>
                   <button
                     type="button"
                     className="badge"
@@ -1834,6 +1943,23 @@ export default function FieldMapView({ onHelp }) {
                 )}
                 {numberedSamples.length > 100 && (
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.72rem', paddingTop: '6px' }}>Showing the latest 100 of {numberedSamples.length}. Older samples keep their numbers on the map.</p>
+                )}
+                {showRawPackets && (
+                  <div style={{ marginTop: 12, borderTop: '1px solid var(--card-border)', paddingTop: 8 }}>
+                    <strong style={{ fontSize: '0.79rem' }}>Raw mission sensor packets — {rawPacketsLoading ? 'loading…' : `${rawPackets.length} recorded`}</strong>
+                    <p style={{ fontSize: '0.71rem', color: 'var(--text-muted)' }}>Original packets including the first five seconds and interrupted insertions. Final averages are separate in the table above. Refresh by closing and reopening this view.</p>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.7rem' }}>
+                      <thead><tr>{['Session', 'Received', 'Moisture', 'EC (µS/cm)', 'pH', 'N / P / K'].map(h=><th key={h} style={{ textAlign: 'left', padding: 4 }}>{h}</th>)}</tr></thead>
+                      <tbody>{rawPackets.slice(-50).reverse().map(r=><tr key={r.id} style={{ borderTop: '1px solid var(--card-border)' }}>
+                        <td style={{ padding: 4 }} title={r.session_id}>{String(r.session_id).slice(0,8)}</td>
+                        <td style={{ padding: 4 }}>{String(r.received_at || '').slice(11,19)} UTC</td>
+                        <td style={{ padding: 4 }}>{fmt(r.moisture,1)}%</td>
+                        <td style={{ padding: 4 }}>{fmt(r.ec,1)}</td>
+                        <td style={{ padding: 4 }}>{fmt(r.ph,2)}</td>
+                        <td style={{ padding: 4 }}>{[r.nitrogen,r.phosphorus,r.potassium].map(v=>fmt(v,0)).join(' / ')}</td>
+                      </tr>)}</tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             </div>

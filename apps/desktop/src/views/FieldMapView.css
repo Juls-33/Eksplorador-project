@@ -116,3 +116,46 @@
 .manual-sample-location-panel__selected button { border:0; background:transparent; cursor:pointer; color:#9a3412; padding:2px; display:flex; }
 .manual-sample-location-panel__pick { font-weight:700; color:#9a3412; }
 .manual-sample-location-panel__waiting { font-weight:600; color:#92400e; }
+
+/* Timed soil sampling: compact chip INSIDE the map, clear of right-hand map controls. */
+.soil-map-timer-chip { position:absolute;z-index:1010;top:15px;left:50%;transform:translateX(-50%);width:min(350px,calc(100% - 110px));display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.97);border:1px solid #b5c9bc;border-radius:13px;padding:10px 14px 13px;box-shadow:0 8px 28px rgba(10,35,24,.18);pointer-events:none;color:#152d20;font-size:.82rem; }
+.soil-map-timer-chip__icon {width:34px;height:34px;flex-shrink:0;display:grid;place-items:center;background:#d9eee0;color:#1b6b38;border-radius:10px;}
+.soil-map-timer-chip__content{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1;}
+.soil-map-timer-chip__content strong{font-size:.83rem;line-height:1.12;}
+.soil-map-timer-chip__content small{font-size:.7rem;color:#53675a;line-height:1.25;}
+.soil-map-timer-chip__clock{font-weight:850;font-size:1.14rem;font-variant-numeric:tabular-nums;color:#174a2b;white-space:nowrap;}
+.soil-map-timer-chip__track{position:absolute;left:12px;right:12px;bottom:5px;height:3px;background:#e3efe7;border-radius:4px;overflow:hidden;}
+.soil-map-timer-chip__track span{height:100%;background:#2d7b4a;display:block;transition:width 1s linear;}
+.soil-map-timer-chip--stale,.soil-map-timer-chip--insufficient,.soil-map-timer-chip--location{border-color:#e0b86b;background:#fffbeb;}
+.soil-map-timer-chip--ready{background:#f0fbf2;border-color:#86c69a;}
+@media (max-width:640px){.soil-map-timer-chip{top:55px;left:50%;width:calc(100% - 24px);}}
+/* Successful save modal; never appears on unsuccessful or incomplete sampling. */
+.soil-ready-modal__backdrop{position:fixed;inset:0;z-index:22000;display:grid;place-items:center;background:rgba(10,24,17,.46);padding:16px;}
+.soil-ready-modal{width:min(440px,100%);background:#fff;border-radius:18px;padding:26px;box-shadow:0 24px 80px rgba(0,0,0,.25);color:#1a2d21;text-align:center;}
+.soil-ready-modal__icon{display:grid;place-items:center;width:56px;height:56px;border-radius:50%;margin:0 auto 12px;background:#dff5e5;color:#18773a;}
+.soil-ready-modal h3{margin:0;font-size:1.25rem;color:#173e25;}
+.soil-ready-modal p{font-size:.86rem;line-height:1.55;color:#4b6153;margin:10px 0 17px;}
+.soil-ready-modal__data{display:grid;grid-template-columns:1fr 1fr;gap:9px;text-align:left;margin-bottom:18px;}
+.soil-ready-modal__data>div{display:flex;flex-direction:column;gap:4px;padding:10px;background:#f4f7f5;border-radius:9px;}
+.soil-ready-modal__data span{font-size:.69rem;color:#728276;}
+.soil-ready-modal__data strong{font-size:.88rem;}
+.soil-ready-modal__button{width:100%;border:0;border-radius:9px;background:#28583a;color:#fff;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;}
+.soil-ready-modal__button:focus-visible{outline:3px solid #93c5a5;outline-offset:2px;}
+.soil-ready-modal>small{display:block;margin-top:10px;color:#728276;font-size:.72rem;}
+/* Primary soil type input in the Soil Profile card; treatment log is secondary. */
+.field-soil-type-panel{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--card-border);padding:12px;background:#f1f7f1;border-radius:10px;}
+.field-soil-type-panel__heading{display:flex;align-items:center;gap:7px;font-size:.88rem;color:#214b30;}
+.field-soil-type-panel p{margin:0;font-size:.77rem;color:#607363;line-height:1.4;}
+.field-soil-type-panel select{width:100%;padding:9px 10px;border:1px solid #b2cdb7;background:#fff;border-radius:8px;font-weight:650;font-size:.83rem;color:#183c25;}
+.field-soil-type-panel>small{font-size:.7rem;color:#66806c;line-height:1.4;}
+.field-treatment-history{border-top:1px solid var(--card-border);padding-top:6px;}
+.field-treatment-history__toggle{width:100%;background:none;border:0;padding:8px 0;display:flex;align-items:center;gap:7px;cursor:pointer;color:#364a40;text-align:left;font-weight:700;font-size:.8rem;}
+.field-treatment-history__toggle span{flex:1;}
+.field-treatment-history__toggle small{color:#79877d;font-weight:400;font-size:.71rem;}
+.field-treatment-history__content{padding:8px 0;}
+.field-treatment-history__actions{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;font-size:.76rem;color:#6f7e72;}
+.field-treatment-history__actions button{background:#28583a;color:#fff;cursor:pointer;border:0;padding:5px 10px;}
+
+/* Offline illustrated soil-type guide, opened from the existing field classification. */
+.field-soil-type-panel__guide-button { display:flex; align-items:center; justify-content:center; gap:7px; padding:9px 10px; font-size:.76rem; font-weight:700; color:#275d38; background:#fff; border:1px solid #8eaf97; border-radius:8px; cursor:pointer; }
+.field-soil-type-panel__guide-button:hover { background:#e6f4e9; }

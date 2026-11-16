@@ -326,6 +326,7 @@ pub fn ensure_schema(conn: &mut Connection) -> DbResult<()> {
     for (name, definition) in [
         ("plot", "TEXT"),
         ("overall", "REAL"),
+        ("sample_session_id", "TEXT"),
     ] {
         if !existing.iter().any(|column| column["name"] == name) {
             tx.execute_batch(
@@ -338,6 +339,43 @@ pub fn ensure_schema(conn: &mut Connection) -> DbResult<()> {
             .map_err(error)?;
         }
     }
+
+    // Raw sensor packets are stored separately from one finalized average per insertion.
+    // The table is added non-destructively for existing databases; no salinity column is stored.
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS mission_soil_readings (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         session_id TEXT NOT NULL,
+         mission_id INTEGER NOT NULL REFERENCES missions(id),
+         received_at TEXT NOT NULL,
+         latitude REAL, longitude REAL,
+         moisture REAL, ph REAL, ec REAL,
+         nitrogen REAL, phosphorus REAL, potassium REAL,
+         soil_valid INTEGER NOT NULL DEFAULT 1
+         );
+         CREATE INDEX IF NOT EXISTS idx_mission_soil_readings_session
+           ON mission_soil_readings(session_id, received_at);"
+    ).map_err(error)?;
+
+    let field_info = select(&tx, "PRAGMA table_info(fields)", &[])?;
+    if !field_info.iter().any(|c| c["name"] == "soil_type") {
+        tx.execute_batch("ALTER TABLE fields ADD COLUMN soil_type TEXT DEFAULT NULL;")
+            .map_err(error)?;
+    }
+    let crop_info = select(&tx, "PRAGMA table_info(crop_profiles)", &[])?;
+    if !crop_info.iter().any(|c| c["name"] == "compatible_soil_types") {
+        tx.execute_batch("ALTER TABLE crop_profiles ADD COLUMN compatible_soil_types TEXT DEFAULT NULL;")
+            .map_err(error)?;
+    }
+
+    // Rebuild update triggers for these tables after adding the optional
+    // soil classification columns. CREATE TRIGGER IF NOT EXISTS alone would
+    // leave a previous trigger's UPDATE OF column list unchanged, meaning
+    // soil-type-only edits might not advance the database revision.
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS _app_update_fields;
+         DROP TRIGGER IF EXISTS _app_update_crop_profiles;"
+    ).map_err(error)?;
 
     // Existing audit values are left untouched.
     // Only future normal writes receive UTC+8 timestamps.
