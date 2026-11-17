@@ -7,6 +7,7 @@
 #include "ADS1X15.h"
 
 using namespace ADS1X15;
+uint32_t lastA31Debug = 0;
 
 SoftwareWire wire(22, 23);
 ADS1115<SoftwareWire> ads(wire);
@@ -95,7 +96,12 @@ uint8_t soilReply[21];uint8_t soilCount=0;
 unsigned long soilLastPoll=0,soilQueryAt=0;
 bool soilWaiting=false;
 // Set TRUE after HC-SR04 is connected and verified. Unknown sonar readings stop forward motion.
-const bool ULTRASONIC_ENABLED=true;
+const bool ULTRASONIC_ENABLED=true;   
+
+// FALSE = A31 ignores sonar: it neither blocks the start nor stops a running leg.
+// Manual mode already ignores sonar. Sensor is still read for telemetry only.
+const bool SONAR_INTERLOCK_ENABLED = false;
+
 const uint8_t AUTO_OBSTACLE_LIMIT=5;
 uint8_t autoObstacleEvents=0;
 bool obstaclePrevious=false;
@@ -1138,6 +1144,34 @@ void loop() {
   // ---------------- SENSOR UPDATES ----------------
 
   updateUltrasonicDistance();
+//debug
+Serial.print("[SONAR PIN] ECHO=");
+Serial.print(digitalRead(PIN_ECHO));
+Serial.print(" | TRIG=");
+Serial.println(digitalRead(PIN_TRIG));
+//
+
+  //debug
+static unsigned long lastSonarDebug = 0;
+
+if (millis() - lastSonarDebug >= 1000) {
+  lastSonarDebug = millis();
+
+  char sonarDbg[64];
+
+  snprintf(
+    sonarDbg,
+    sizeof(sonarDbg),
+    "SONARDBG:%lu,%d,%u,%d\n",
+    (unsigned long)sonarEchoUs,
+    sonarValid,
+    (unsigned)currentObstacleDist,
+    forwardBlocked
+  );
+
+  espSerial.write((const uint8_t*)sonarDbg, strlen(sonarDbg));
+}
+  //
 
   // A0 current sensor disconnected; overload monitoring remains disabled.
   serviceSoil();
@@ -1270,7 +1304,7 @@ void loop() {
       currentState == STATE_HOLD && rcNeutral) a31SawArmedHold = true;
   if (a31MissionStaged && a31SawArmedHold && a31SemiNow && !a31PreviousSemi &&
       espInTxMode && !safetyLatched && !driveSyncFaultLatched &&
-      rcNeutral && !forwardBlocked && sonarValid) {
+           rcNeutral && (!SONAR_INTERLOCK_ENABLED || (!forwardBlocked && sonarValid))) { // the original: rcNeutral && !forwardBlocked && sonarValid) {
     a31MissionStaged = false;
     a31SawArmedHold = false;
     missionActive = true;
@@ -1278,6 +1312,46 @@ void loop() {
     Serial.println(F("[A31] Deliberate HOLD->SEMI_AUTO start"));
     espSerial.println(F("MISSION_STATUS:A31_STARTED"));
   }
+
+
+  // A31 diagnostic: forward Mega-side start conditions to ESP32 USB Serial
+if (millis() - lastA31Debug >= 500) {
+  lastA31Debug = millis();
+
+  char dbg[128];
+
+  int n = snprintf(
+    dbg,
+    sizeof(dbg),
+    "A31DBG:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%d,%u,%lu\n",
+    a31MissionStaged,
+    a31SawArmedHold,
+    rcFresh,
+    rcRearmRequired,
+    a31SemiNow,
+    a31PreviousSemi,
+    espInTxMode,
+    safetyLatched,
+    driveSyncFaultLatched,
+    rcNeutral,
+    sonarValid,
+    forwardBlocked,
+    (unsigned)steer,
+    (unsigned)throttle,
+    (unsigned)actuator,
+    (unsigned)armPulse,
+    (unsigned)modePulse,
+    (int)currentState,
+    (unsigned)currentObstacleDist,
+    (unsigned long)sonarEchoUs
+  );
+
+  if (n > 0 && n < sizeof(dbg)) {
+    espSerial.write((const uint8_t*)dbg, n);
+  }
+}
+  //debug////////////////////////////
+
   a31PreviousSemi = a31SemiNow;
 
   // The mission clock does not advance outside SEMI_AUTO or during safety recovery.
@@ -1668,9 +1742,16 @@ void processAutoDrive() {
   const char op = currentCommand.charAt(1);
   // All motion needs a functioning forward-looking sensor for the first test.
   // Only FORWARD is electronically protected by this single HC-SR04.
-  if (!sonarValid || forwardBlocked || (op == 'F' && currentObstacleDist <= OBSTACLE_DISTANCE_CM)) {
+    if (SONAR_INTERLOCK_ENABLED && //new
+      (!sonarValid || forwardBlocked || (op == 'F' && currentObstacleDist <= OBSTACLE_DISTANCE_CM))) {
     a31StopAndHold(F("SONAR_UNKNOWN_OR_OBSTACLE")); return;
-  }
+  }//new
+  
+  //originally
+  // if (!sonarValid || forwardBlocked || (op == 'F' && currentObstacleDist <= OBSTACLE_DISTANCE_CM)) {
+  //   a31StopAndHold(F("SONAR_UNKNOWN_OR_OBSTACLE")); return;
+  // }
+//
   const DriveEncoderSnapshot counts = readDriveEncoders();
   if (counts.left != a31LastLeftTicks && counts.right != a31LastRightTicks) {
     a31LastLeftTicks = counts.left;
