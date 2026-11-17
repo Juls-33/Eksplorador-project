@@ -504,6 +504,18 @@ void processMegaLine(const char *s) {
     } else if (!strncmp(s, "MISSION_STATUS:", 15)) {
       Serial.print("[MEGA MISSION] ");
       Serial.println(s + 15);
+
+      //debug
+    } else if (!strncmp(s, "A31DBG:", 7)) {
+      Serial.print("[A31 DEBUG] ");
+      Serial.println(s + 7);
+
+      } else if (!strncmp(s, "SONARDBG:", 9)) {
+  Serial.print("[SONAR DEBUG] ");
+  Serial.println(s + 9);
+      //
+
+
     } else if (!strncmp(s, "FAULT:", 6)) {
       Serial.print("[MEGA SAFETY] ");
       Serial.println(s);
