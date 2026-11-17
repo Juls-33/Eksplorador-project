@@ -29,6 +29,11 @@ export default function PointToPointMissionDialog({ open, onClose, onPickMap, on
     return () => clearInterval(interval);
   }, [open]);
   const gpsStart = freshFusionStart(gps, now);
+  const gpsStatus = !gps ? 'No FUS navigation GPS received from the desktop receiver yet.'
+    : gps.valid !== true ? 'The latest FUS navigation message has no valid GPS fix.'
+    : gps.source !== 'fusion' ? 'Navigation GPS source is not validated FUS data.'
+    : !gpsStart ? 'The last FUS GPS fix is stale or invalid (5-second freshness limit).'
+    : 'Fresh GPS available. You may still override it with a map-selected position to correct drift.';
   const start = origin === 'GPS' ? gpsStart : manualStart;
   const target = waypoints[pinIndex];
   let plan = null, planningError = '';
@@ -71,10 +76,12 @@ export default function PointToPointMissionDialog({ open, onClose, onPickMap, on
               <Navigation size={14} /> {gpsStart ? 'Use live GPS' : 'GPS has no fresh fix'}
             </button>
             <button type="button" style={{ ...buttonStyle, background: origin === 'MANUAL' ? '#e5f3e8' : 'white' }}
-              onClick={() => { setOrigin('MANUAL'); setAligned(false); }}>Use map position</button>
+              onClick={() => { setOrigin('MANUAL'); setAligned(false); if (!manualStart) onPickMap(); }}>
+              {manualStart ? 'Use selected map position' : 'Choose Point A on map'}</button>
             <button type="button" style={{ ...buttonStyle, background: 'var(--primary-green)', color: 'white' }}
               onClick={() => { setOrigin('MANUAL'); setAligned(false); onPickMap(); }}><MapPin size={14}/> Select on map</button>
           </div>
+          <p role="status" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 0 }}>{gpsStatus}</p>
           <p style={{ fontSize: '0.82rem', marginBottom: 0 }}>Source: <strong>{origin === 'GPS' ? 'Validated FUS GPS fix' : 'Operator estimate (not GPS)'}</strong></p>
           <p style={{ fontSize: '0.82rem', marginBottom: 0 }}>Point A: {format(start?.coords)}</p>
           <p style={{ fontSize: '0.82rem', marginBottom: 0 }}>Point B: {format(target)}</p>
@@ -94,6 +101,7 @@ export default function PointToPointMissionDialog({ open, onClose, onPickMap, on
           <strong>4. Review the movement</strong>
           {plan ? <>
             <p style={{ margin: '8px 0' }}>Forward command: <code>{plan.sequence}</code> · {plan.durationS.toFixed(3)} s · about {plan.estimatedLegM.toFixed(2)} m</p>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '4px 0' }}>Calculated from {plan.distanceM.toFixed(2)} m ÷ 0.25 m/s = {plan.estimatedTotalS.toFixed(2)} s total estimate. Each upload is capped at 2.000 s by the Mega A3.1 safety limit.</p>
             {plan.partial && <p style={{ fontSize: '0.82rem', color: '#92400e' }}>This is a short partial leg, not the entire {plan.distanceM.toFixed(2)} m path. Stop and inspect before planning another leg.</p>}
           </> : <p style={{ fontSize: '0.82rem' }}>{planningError || 'Awaiting valid starting position.'}</p>}
           <label style={{ display: 'flex', gap: 8, fontSize: '0.82rem' }}><input type="checkbox" checked={probeClear} onChange={e => setProbeClear(e.target.checked)} /> Soil probe is fully retracted and clear.</label>
