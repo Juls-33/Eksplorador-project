@@ -188,9 +188,9 @@ const unsigned long BENCH_MAX_STEP_MS = 2500;
 // A3.1 supervised one-leg commands: TR0.800,TF1.500
 // Values are SECONDS (not meters/degrees). Hard limits do not depend on desktop.
 const unsigned long A31_MIN_STEP_MS = 100;
-const unsigned long A31_MAX_STEP_MS = 2000;
-const unsigned long A31_MAX_TURN_MS = 1500;
-const unsigned long A31_MAX_LEG_MS = 4000;
+const unsigned long A31_MAX_STEP_MS = 60000;   // was 2000
+const unsigned long A31_MAX_TURN_MS = 1500;    // unchanged
+const unsigned long A31_MAX_LEG_MS  = 120000;  // was 4000, must be >= A31_MAX_STEP_MS
 const unsigned long A31_STEP_SETTLE_MS = 200;
 const uint8_t A31_MAX_LEG_STEPS = 2;
 const unsigned long A31_ENCODER_STALL_MS = 650;
