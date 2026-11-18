@@ -771,10 +771,28 @@ fn get_connection() -> Result<Connection> {
     Ok(conn)
 }
 
+fn verified_sensor_gps(json: &serde_json::Value) -> Option<(f64, f64)> {
+    let lat = json.get("lat")?.as_f64()?;
+    let lng = json.get("lng")?.as_f64()?;
+    let sats = json.get("satsLocked")?.as_u64()?;
+
+    if !lat.is_finite()
+        || !lng.is_finite()
+        || lat.abs() > 90.0
+        || lng.abs() > 180.0
+        || (lat == 0.0 && lng == 0.0)
+        || sats == 0
+    {
+        return None;
+    }
+
+    Some((lat, lng))
+}
+
 #[derive(Clone)]
 struct BufferedReading {
-    latitude: f64,
-    longitude: f64,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
     ph: f64,
     moisture: f64,
     ec: f64,
@@ -1300,14 +1318,13 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
 
                                         // Preserve the existing backend
                                         // saving condition.
-                                        let has_fix =
-                                            lat != 0.0 || lng != 0.0;
+                                        let verified_gps = verified_sensor_gps(&json);
 
-                                        if soil_valid && has_fix {
+                                        if soil_valid {
                                             reading_buffer.push(
                                                 BufferedReading {
-                                                    latitude: lat,
-                                                    longitude: lng,
+                                                    latitude: verified_gps.map(|(lat, _)| lat),
+                                                    longitude: verified_gps.map(|(_, lng)| lng),
 
                                                     ph: json
                                                         .get("ph")
@@ -1457,4 +1474,119 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+#[cfg(test)]
+mod sw05_gps_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn verified_gps_requires_positive_satellite_lock() {
+        assert_eq!(
+            verified_sensor_gps(&json!({
+                "lat": 14.6094,
+                "lng": 120.9896,
+                "satsLocked": 8
+            })),
+            Some((14.6094, 120.9896))
+        );
+
+        for bad in [
+            json!({"lat": 14.6094, "lng": 120.9896, "satsLocked": 0}),
+            json!({"lat": 14.6094, "lng": 120.9896}),
+            json!({"lat": 0.0, "lng": 0.0, "satsLocked": 8}),
+            json!({"lat": 100.0, "lng": 120.9896, "satsLocked": 8}),
+            json!({"lat": 14.6094, "satsLocked": 8}),
+        ] {
+            assert_eq!(verified_sensor_gps(&bad), None);
+        }
+    }
+
+    #[test]
+    fn soil_buffer_preserves_measurements_without_gps() {
+        use rusqlite::{params, Connection};
+
+        // An isolated database: never opens eksplorerador.db.
+        let conn = Connection::open_in_memory().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE telemetry (
+                id INTEGER PRIMARY KEY,
+                latitude REAL,
+                longitude REAL,
+                moisture REAL,
+                ph REAL
+            );"
+        ).unwrap();
+
+        let packets = [
+            json!({
+                "lat": 14.6094,
+                "lng": 120.9896,
+                "satsLocked": 8,
+                "moisture": 35.0,
+                "ph": 6.5
+            }),
+            json!({
+                "lat": 14.6095,
+                "lng": 120.9897,
+                "satsLocked": 0,
+                "moisture": 40.0,
+                "ph": 6.7
+            }),
+            json!({
+                "lat": 14.6096,
+                "lng": 120.9898,
+                "moisture": 45.0,
+                "ph": 6.9
+            }),
+        ];
+
+        for (index, packet) in packets.iter().enumerate() {
+            let gps = verified_sensor_gps(packet);
+
+            conn.execute(
+                "INSERT INTO telemetry
+                (latitude, longitude, moisture, ph)
+                VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    gps.map(|(lat, _)| lat),
+                    gps.map(|(_, lng)| lng),
+                    packet["moisture"].as_f64().unwrap(),
+                    packet["ph"].as_f64().unwrap()
+                ],
+            ).unwrap();
+
+            let (lat, lng, moisture): (
+                Option<f64>,
+                Option<f64>,
+                f64
+            ) = conn.query_row(
+                "SELECT latitude, longitude, moisture
+                FROM telemetry WHERE id = ?1",
+                [index as i64 + 1],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            ).unwrap();
+
+            assert_eq!(moisture, 35.0 + index as f64 * 5.0);
+
+            if index == 0 {
+                assert_eq!(lat, Some(14.6094));
+                assert_eq!(lng, Some(120.9896));
+            } else {
+                assert_eq!(lat, None);
+                assert_eq!(lng, None);
+            }
+        }
+
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM telemetry",
+                [],
+                |row| row.get::<_, i64>(0)
+            ).unwrap(),
+            3
+        );
+    }
+
 }

@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Message::Ignore => {}
+            Message::Battery(_) => {},
         }
         if let Some(payload) = stream.take_due(now) {
             encoder_telemetry::trace("encoder_emitted", || {

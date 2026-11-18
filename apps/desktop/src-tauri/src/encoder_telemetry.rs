@@ -14,7 +14,7 @@ pub fn trace(stage: &str, details: impl FnOnce() -> String) {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     if *ENABLED.get_or_init(|| std::env::var("EKSPLORADOR_TELEMETRY_DEBUG").as_deref() == Ok("1")) {
         eprintln!("[telemetry:{stage}] {}", details());
-    }
+    }   
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -320,6 +320,7 @@ mod tests {
                 }
                 Message::Ignore => {}
                 Message::Fusion(_) => panic!("legacy fixture unexpectedly contained fusion"),
+                Message::Battery(_) => panic!("legacy fixture unexpectedly contained battery"),
             }
         }
         assert_eq!((encoders, sensors), (5, 1));
@@ -491,6 +492,7 @@ mod tests {
                     assert!(event.get("leftTicks").is_none());
                 }
                 Message::Ignore => {}
+                Message::Battery(_) => {},
             }
         }
         assert_eq!(counts, (0, 2, 1));

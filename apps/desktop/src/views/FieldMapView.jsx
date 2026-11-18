@@ -573,7 +573,16 @@ export default function FieldMapView({ onHelp }) {
       const lng = validNumber(data.lng);
       const heading = validNumber(data.heading ?? data.course ?? data.bearing ?? data.gpsHeading);
       if (heading !== null) setRoverHeading(((heading % 360) + 360) % 360);
-      const hasValidGps = lat !== null && lng !== null && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && !(lat === 0 && lng === 0) && (data.satsLocked == null || Number(data.satsLocked) > 0);
+      const hasValidGps =
+        lat !== null &&
+        lng !== null &&
+        lat >= -90 && lat <= 90 &&
+        lng >= -180 && lng <= 180 &&
+        !(lat === 0 && lng === 0) &&
+        data.satsLocked !== null &&
+        data.satsLocked !== undefined &&
+        Number.isInteger(Number(data.satsLocked)) &&
+        Number(data.satsLocked) > 0;
       if (hasValidGps) {
         setRoverPos([lat, lng]);
         clearTimeout(gpsExpiry.current);

@@ -1545,4 +1545,509 @@ mod tests {
                 .ends_with("+08:00")
         );
     }
+
+    #[test]
+    fn sw04_step1_json_export_integrity() {
+        // Create an isolated in-memory database.
+        let conn = db();
+        seed(&conn, "SW04 Test Field");
+
+        // Capture the source database.
+        let original = snapshot(&conn).unwrap();
+
+        // Serialize the package exactly as the export format does.
+        let json = serde_json::to_string_pretty(&original).unwrap();
+
+        // Use a temporary file rather than the production database.
+        let path = std::env::temp_dir().join(format!(
+            "eksplorador_sw04_export_{}_{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        std::fs::write(&path, json).unwrap();
+
+        // Read the exported file and reconstruct the package.
+        let exported_text = std::fs::read_to_string(&path).unwrap();
+        let exported = parse_snapshot(&exported_text).unwrap();
+
+        // Verify package identity and schema version.
+        assert_eq!(exported.format, "eksplorador.database");
+        assert_eq!(exported.version, 2);
+
+        // Compare actual data, column definitions and relationships.
+        assert_eq!(
+            serde_json::to_value(&original.tables).unwrap(),
+            serde_json::to_value(&exported.tables).unwrap()
+        );
+
+        // Verify SQLite auto-increment metadata.
+        assert_eq!(original.sequences, exported.sequences);
+
+        // Verify expected table counts.
+        for name in [
+            "fields",
+            "missions",
+            "telemetry",
+            "crops",
+            "crop_profiles",
+            "field_amendments",
+        ] {
+            assert_eq!(
+                original.tables[name].rows.len(),
+                exported.tables[name].rows.len()
+            );
+            assert_eq!(exported.tables[name].rows.len(), 1);
+        }
+
+        // Clean up the temporary backup.
+        std::fs::remove_file(&path).unwrap();
+
+        println!("SW04-STEP1A: JSON generated and parsed - PASS");
+        println!("SW04-STEP1B: Row counts and schema preserved - PASS");
+        println!("SW04-STEP1C: Sequences preserved - PASS");
+        println!("SW04-STEP1D: Temporary export removed - PASS");
+    }
+
+    #[test]
+    fn sw04_step1_file_safeguards() {
+        use std::fs::{self, OpenOptions};
+        use std::io::Write;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let folder = std::env::temp_dir().join(format!(
+            "sw04_export_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        fs::create_dir(&folder).unwrap();
+        let target = folder.join("backup.json");
+
+        // First export.
+        fs::write(&target, "ORIGINAL BACKUP").unwrap();
+
+        // STEP1E: Existing files cannot be recreated
+        // with create_new(true).
+        let duplicate = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target);
+
+        assert!(duplicate.is_err());
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "ORIGINAL BACKUP"
+        );
+        println!("SW04-STEP1E: Existing file protected - PASS");
+
+        // STEP1F: Simulate the overwrite process used
+        // by export_database().
+        let temporary = folder.join("backup.json.tmp");
+
+        {
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .unwrap();
+
+            output.write_all(b"NEW BACKUP").unwrap();
+            output.sync_all().unwrap();
+        }
+
+        // The original must remain intact until rename.
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "ORIGINAL BACKUP"
+        );
+
+        // Windows overwrite behavior must be observed.
+        let rename_result = fs::rename(&temporary, &target);
+
+        match rename_result {
+            Ok(()) => {
+                assert_eq!(
+                    fs::read_to_string(&target).unwrap(),
+                    "NEW BACKUP"
+                );
+                println!(
+                    "SW04-STEP1F: Windows overwrite succeeded - PASS"
+                );
+            }
+            Err(error) => {
+                // Failed rename must preserve the original.
+                assert_eq!(
+                    fs::read_to_string(&target).unwrap(),
+                    "ORIGINAL BACKUP"
+                );
+                println!(
+                    "SW04-STEP1F: Windows overwrite unsupported: {}",
+                    error
+                );
+                println!(
+                    "SW04-STEP1F: Existing backup preserved - PASS"
+                );
+            }
+        }
+
+        // Remove test-only files.
+        fs::remove_dir_all(&folder).unwrap();
+        println!("SW04-STEP1G: Temporary files removed - PASS");
+    }
+
+
+    #[test]
+    fn sw04_step2_overwrite_import_integrity() {
+        // Create two independent in-memory databases.
+        let mut active = db();
+        let backup_source = db();
+
+        seed(&active, "Original Field");
+        seed(&backup_source, "Imported Field");
+
+        // Add an extra record to the active database.
+        // This must disappear after the overwrite.
+        active.execute(
+            "INSERT INTO fields(name) VALUES('Old Extra Field')",
+            [],
+        ).unwrap();
+
+        // Create the import package from Database B.
+        let package = snapshot(&backup_source).unwrap();
+
+        // Replace Database A with Database B.
+        restore(
+            &mut active,
+            &package,
+            None,
+            false,
+        ).unwrap();
+
+        // Verify all included tables match Database B.
+        assert_eq!(
+            data(&active),
+            data(&backup_source)
+        );
+
+        println!("SW04-STEP2A: Complete overwrite - PASS");
+
+        // Verify old active data has disappeared.
+        let old_count: i64 = active.query_row(
+            "SELECT COUNT(*) FROM fields
+            WHERE name IN ('Original Field', 'Old Extra Field')",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(old_count, 0);
+
+        println!("SW04-STEP2B: Old records removed - PASS");
+
+        // Verify imported records exist.
+        let imported_count: i64 = active.query_row(
+            "SELECT COUNT(*) FROM fields
+            WHERE name = 'Imported Field'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(imported_count, 1);
+
+        println!("SW04-STEP2C: Imported records preserved - PASS");
+
+        // Verify foreign-key relationships remain valid.
+        let fk_violations: i64 = active.query_row(
+            "SELECT COUNT(*) FROM pragma_foreign_key_check",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(fk_violations, 0);
+
+        println!("SW04-STEP2D: Foreign keys valid - PASS");
+
+        // Verify the database has no structural corruption.
+        let integrity: String = active.query_row(
+            "PRAGMA integrity_check",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(integrity, "ok");
+
+        println!("SW04-STEP2E: SQLite integrity - PASS");
+    }
+
+    #[test]
+    fn sw04_step3_merged_records_persist_correctly() {
+        // Both databases are isolated and in memory.
+        let source = db();
+        let mut destination = db();
+
+        // Simulate the first database's records.
+        seed(&source, "Field A");
+
+        // Simulate the second database's records
+        // after the merge planner remaps overlapping IDs.
+        source.execute(
+            "INSERT INTO fields(id, name)
+            VALUES(2, 'Field B')",
+            [],
+        ).unwrap();
+
+        source.execute(
+            "INSERT INTO missions(id, field_id, name)
+            VALUES(2, 2, 'Mission B')",
+            [],
+        ).unwrap();
+
+        source.execute(
+            "INSERT INTO telemetry(
+                mission_id, timestamp, ph, sample_session_id
+            ) VALUES(
+                2, '13:00:00', 7.1, 'sw04-session-b'
+            )",
+            [],
+        ).unwrap();
+
+        source.execute(
+            "INSERT INTO field_amendments(
+                field_id, date, treatment
+            ) VALUES(
+                2, '2026-11-18', 'Compost'
+            )",
+            [],
+        ).unwrap();
+
+        // Prepare a full backup containing both sets.
+        let merged_package = snapshot(&source).unwrap();
+
+        // Verify that Rust accepts the merged-style package.
+        validate(&destination, &merged_package).unwrap();
+
+        println!("SW04-STEP3G: Package validation - PASS");
+
+        // Persist through the actual Rust restore function.
+        restore(
+            &mut destination,
+            &merged_package,
+            None,
+            false,
+        ).unwrap();
+
+        assert_eq!(data(&source), data(&destination));
+
+        println!("SW04-STEP3H: Records persisted - PASS");
+
+        // Confirm that each mission belongs to its own field.
+        let relationships: Vec<(String, String)> = {
+            let mut stmt = destination.prepare(
+                "SELECT f.name, m.name
+                FROM missions m
+                JOIN fields f ON m.field_id = f.id
+                ORDER BY f.id"
+            ).unwrap();
+
+            stmt.query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            }).unwrap()
+            .map(|row| row.unwrap())
+            .collect()
+        };
+
+        assert_eq!(
+            relationships,
+            vec![
+                ("Field A".into(), "Field A".into()),
+                ("Field B".into(), "Mission B".into()),
+            ]
+        );
+
+        println!("SW04-STEP3I: Mission relationships - PASS");
+
+        // The remapped mission must own the imported reading.
+        let reading_count: i64 = destination.query_row(
+            "SELECT COUNT(*)
+            FROM telemetry
+            WHERE mission_id = 2
+            AND sample_session_id = 'sw04-session-b'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(reading_count, 1);
+
+        println!("SW04-STEP3J: Telemetry relationship - PASS");
+
+        // Verify foreign-key integrity.
+        let fk_errors: i64 = destination.query_row(
+            "SELECT COUNT(*) FROM pragma_foreign_key_check",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(fk_errors, 0);
+
+        println!("SW04-STEP3K: Foreign keys valid - PASS");
+
+        // Verify SQLite structural integrity.
+        let integrity: String = destination.query_row(
+            "PRAGMA integrity_check",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(integrity, "ok");
+
+        println!("SW04-STEP3L: SQLite integrity - PASS");
+    }
+
+    
+    #[test]
+    fn sw04_step4_corrupt_backup_recovery() {
+        // Use isolated in-memory SQLite databases.
+        let source = db();
+        seed(&source, "Imported Field");
+
+        let mut active = db();
+        seed(&active, "Protected Field");
+
+        let original_data = data(&active);
+        let original_revision = revision(&active).unwrap();
+
+        // STEP4A: Malformed JSON must be rejected.
+        assert!(parse_snapshot(
+            "{ invalid database backup"
+        ).is_err());
+
+        println!("SW04-STEP4A: Malformed JSON rejected - PASS");
+
+        // STEP4B: Unsupported backup format.
+        let mut invalid_format =
+            serde_json::to_value(snapshot(&source).unwrap())
+                .unwrap();
+
+        invalid_format["format"] =
+            serde_json::json!("unknown.database");
+
+        assert!(parse_snapshot(
+            &invalid_format.to_string()
+        ).is_err());
+
+        println!("SW04-STEP4B: Invalid format rejected - PASS");
+
+        // STEP4C: Unsupported backup version.
+        let mut invalid_version =
+            serde_json::to_value(snapshot(&source).unwrap())
+                .unwrap();
+
+        invalid_version["version"] = serde_json::json!(999);
+
+        assert!(parse_snapshot(
+            &invalid_version.to_string()
+        ).is_err());
+
+        println!("SW04-STEP4C: Invalid version rejected - PASS");
+
+        // STEP4D: Missing required table.
+        let mut missing_table = snapshot(&source).unwrap();
+
+        missing_table.tables.remove("fields");
+
+        assert!(restore(
+            &mut active,
+            &missing_table,
+            None,
+            false
+        ).is_err());
+
+        assert_eq!(data(&active), original_data);
+
+        println!("SW04-STEP4D: Missing table rejected - PASS");
+
+        // STEP4E: Broken mission-to-field reference.
+        let mut invalid_reference = snapshot(&source).unwrap();
+
+        invalid_reference.tables
+            .get_mut("missions")
+            .unwrap()
+            .rows[0]
+            .insert(
+                "field_id".into(),
+                serde_json::json!(999)
+            );
+
+        assert!(restore(
+            &mut active,
+            &invalid_reference,
+            None,
+            false
+        ).is_err());
+
+        assert_eq!(data(&active), original_data);
+
+        println!("SW04-STEP4E: Invalid FK rejected - PASS");
+
+        // STEP4F: Duplicate crop name causes a
+        // SQLite UNIQUE constraint violation.
+        let mut duplicate = snapshot(&source).unwrap();
+
+        let mut duplicated_row = duplicate.tables["crops"]
+            .rows[0].clone();
+
+        duplicated_row.insert(
+            "id".into(),
+            serde_json::json!(2)
+        );
+
+        duplicate.tables
+            .get_mut("crops")
+            .unwrap()
+            .rows
+            .push(duplicated_row);
+
+        assert!(restore(
+            &mut active,
+            &duplicate,
+            None,
+            false
+        ).is_err());
+
+        assert_eq!(data(&active), original_data);
+
+        // Confirm metadata and database integrity
+        // remained intact after rejected imports.
+        assert_eq!(
+            revision(&active).unwrap(),
+            original_revision
+        );
+
+        let integrity: String = active.query_row(
+            "PRAGMA integrity_check",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(integrity, "ok");
+
+        let fk_errors: i64 = active.query_row(
+            "SELECT COUNT(*)
+            FROM pragma_foreign_key_check",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        assert_eq!(fk_errors, 0);
+
+        println!("SW04-STEP4F: Constraint rollback - PASS");
+        println!("SW04: Original data and integrity preserved");
+    }
+
 }
