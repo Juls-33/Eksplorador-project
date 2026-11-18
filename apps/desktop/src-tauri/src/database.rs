@@ -341,6 +341,15 @@ pub fn ensure_schema(conn: &mut Connection) -> DbResult<()> {
     }
 
     // Raw sensor packets are stored separately from one finalized average per insertion.
+
+    // One finalized soil sample per insertion.
+    // Historical telemetry rows without a session ID remain unrestricted.
+    tx.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_unique_sample_session
+         ON telemetry(sample_session_id)
+         WHERE sample_session_id IS NOT NULL;"
+    ).map_err(error)?;
+
     // The table is added non-destructively for existing databases; no salinity column is stored.
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS mission_soil_readings (

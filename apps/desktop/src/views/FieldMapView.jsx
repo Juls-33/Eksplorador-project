@@ -60,7 +60,7 @@ import {
   createFieldAmendment
 } from '../services/db';
 import { summarizeSamples, compareSamples } from '../utils/soilHistory';
-import { estimatedTdsMgL, ecDsM, summarizeSoilSession, samplingPhase, formatTimeLeft, MIN_AVERAGE_READINGS } from '../utils/soilSampling';
+import { estimatedTdsMgL, ecDsM, summarizeSoilSession, recordUniqueSoilReading, samplingPhase, formatTimeLeft, MIN_AVERAGE_READINGS } from '../utils/soilSampling';
 import { hasBoundary } from '../utils/fieldGeo';
 import './FieldMapView.css';
 
@@ -496,9 +496,20 @@ export default function FieldMapView({ onHelp }) {
           ? Math.round((average.moisture + average.ph * 10) / 2) : null,
         timestamp: new Date().toISOString()
       };
+      
       const saved = await saveSoilSample(newSample);
       if (!saved) throw new Error('Could not persist the final sample');
+
+      // The operator may have lifted the probe or changed missions
+      // while the asynchronous database write was underway.
+      if (soilSessionRef.current !== session) {
+        // The record may already be committed. Do not update UI state
+        // for a session that is no longer active.
+        return;
+      }
+
       session.completed = true;
+
       sampleCapturedForInsertionRef.current = true;
       setLiveSamples(prev => [...prev, newSample]);
       setFieldSamples(prev => [...prev, newSample]);
@@ -604,14 +615,14 @@ export default function FieldMapView({ onHelp }) {
         setSoilSessionStatus({ phase: 'lead-in', remainingMs: 5000, rawCount: 0 });
       }
       if (String(session.missionId) !== String(currentSelected.id)) return;
-      session.lastSeen = receivedAt;
+      // Only fresh measurements refresh the five-minute session freshness.
       if (hasValidGps) {
         session.lastGps = [lat, lng];
         session.lastGpsSeenAt = receivedAt;
       }
       const receivedIso = new Date(receivedAt).toISOString();
       const reading = { receivedAt, data };
-      session.readings.push(reading);
+      recordUniqueSoilReading(session, reading);
       // Persist *every* packet during this insertion, including the lead-in and
       // packets received after the final average, to permit full audit/replay.
       const pending = saveMissionSoilReading({

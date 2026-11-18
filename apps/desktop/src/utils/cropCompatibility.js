@@ -1,6 +1,14 @@
 // Transparent, per-sample screening using preferred crop requirements.
 // Not a yield forecast, laboratory nutrient test, or whole-land suitability model.
-const hasNumber = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+
+const hasNumber = value => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'boolean') return false;
+  if (typeof value === 'string' && value.trim() === '') return false;
+
+  return Number.isFinite(Number(value));
+};
+
 
 export function evaluateCropCompatibility(sample, thresholds = {}, soilType = '', compatibleSoilTypes = []) {
   const result = {

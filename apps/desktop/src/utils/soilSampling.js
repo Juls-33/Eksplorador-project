@@ -23,6 +23,28 @@ export function ecDsM(ecMicroSiemens) {
 }
 
 const FIELDS = ['moisture', 'ph', 'ec', 'nitrogen', 'phosphorus', 'potassium'];
+// Accept a unique, forward-moving sequence only for the current probe insertion.
+// Returns false on retransmission or a delayed/out-of-order packet.
+// A newly created insertion has independent sequence tracking.
+export function recordUniqueSoilReading(session, reading) {
+  const seq = reading?.data?.seq;
+  // Rust's sensor classifier expects a numeric seq, but keep a compatibility
+  // path for direct test fixtures or legacy payloads without it.
+  if (!Number.isSafeInteger(seq) || seq < 0 || seq > 0xFFFFFFFF) {
+    session.readings.push(reading);
+    session.lastSeen = reading.receivedAt;
+    return true;
+  }
+  // 32-bit serial-number ordering, including the 0xFFFFFFFF -> 0 wrap.
+  if (session.lastAcceptedSeq !== undefined) {
+    const delta = (seq - session.lastAcceptedSeq) >>> 0;
+    if (delta === 0 || delta >= 0x80000000) return false;
+  }
+  session.lastAcceptedSeq = seq;
+  session.readings.push(reading);
+  session.lastSeen = reading.receivedAt;
+  return true;
+}
 export function summarizeSoilSession(readings, startedAt, endAt = startedAt + SOIL_OBSERVATION_MS) {
   // Intentionally exclude the lead-in window and samples received after completion.
   const eligible = readings.filter(r => {

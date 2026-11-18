@@ -733,16 +733,26 @@ fn get_connection() -> Result<Connection> {
             )),
         ]);
 
+        
+        eprintln!("[SW03] Starting database migrations");
+
         migrations
             .to_latest(&mut conn)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Migration failed: {e}"))?;
 
-        database::ensure_schema(&mut conn)?;
+        eprintln!("[SW03] Migrations completed");
+
+        database::ensure_schema(&mut conn)
+            .map_err(|e| format!("ensure_schema failed: {e}"))?;
+
+        eprintln!("[SW03] Schema initialization completed");
 
         Ok(())
+
     });
 
     if let Err(message) = ready {
+        eprintln!("[SW03] DATABASE INITIALIZATION ERROR: {message}");
         return Err(
             rusqlite::Error::ToSqlConversionFailure(
                 Box::new(std::io::Error::new(
