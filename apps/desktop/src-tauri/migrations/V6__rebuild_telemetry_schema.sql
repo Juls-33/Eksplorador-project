@@ -1,5 +1,6 @@
-PRAGMA foreign_keys = OFF;
-
+-- V6: create telemetry replacement table. The Rust V6 hook performs a
+-- schema-aware row copy and table swap in the same migration transaction.
+-- V3 legacy seed script remains intentionally disabled.
 -- Create target telemetry table with full columns and explicit FK to missions
 CREATE TABLE IF NOT EXISTS telemetry_rebuilt (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19,20 +20,3 @@ CREATE TABLE IF NOT EXISTS telemetry_rebuilt (
     overall REAL,
     FOREIGN KEY (mission_id) REFERENCES missions(id)
 );
-
--- Copy existing data safely into the new table
-INSERT OR IGNORE INTO telemetry_rebuilt (
-    id, timestamp, latitude, longitude, ph, moisture, ec, 
-    nitrogen, phosphorus, potassium, mission_id, created_at, updated_at,
-    plot, overall
-)
-SELECT 
-    id, timestamp, latitude, longitude, ph, moisture, ec, 
-    nitrogen, phosphorus, potassium, mission_id, created_at, updated_at,
-    plot, overall
-FROM telemetry;
-
-DROP TABLE telemetry;
-ALTER TABLE telemetry_rebuilt RENAME TO telemetry;
-
-PRAGMA foreign_keys = ON;

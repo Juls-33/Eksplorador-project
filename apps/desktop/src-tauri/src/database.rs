@@ -1057,10 +1057,7 @@ mod tests {
     fn db() -> Connection {
         let mut conn = pre_v6_db();
 
-        conn.execute_batch(include_str!(
-            "../migrations/V6__rebuild_telemetry_schema.sql"
-        ))
-        .unwrap();
+        run_v6_compat_in_test(&mut conn);
 
         ensure_schema(&mut conn).unwrap();
 
@@ -1116,10 +1113,7 @@ mod tests {
         )
         .unwrap();
 
-        conn.execute_batch(include_str!(
-            "../migrations/V6__rebuild_telemetry_schema.sql"
-        ))
-        .unwrap();
+        run_v6_compat_in_test(&mut conn);
 
         ensure_schema(&mut conn).unwrap();
 
@@ -2050,4 +2044,173 @@ mod tests {
         println!("SW04: Original data and integrity preserved");
     }
 
+}
+
+// V6 compatibility migration. It is used by normal initialization and by
+// the old V6 regression tests, which now run the same Rust migration hook.
+pub(crate) fn v6_compat_migration() -> rusqlite_migration::M<'static> {
+    rusqlite_migration::M::up_with_hook(
+        include_str!("../migrations/V6__rebuild_telemetry_schema.sql"),
+        |tx: &rusqlite::Transaction<'_>| {
+            let columns = {
+                let mut stmt = tx.prepare("PRAGMA table_info(telemetry)")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+                rows.collect::<rusqlite::Result<Vec<String>>>()?
+            };
+            let has_column = |name: &str| columns.iter().any(|column| column == name);
+            let plot = if has_column("plot") { "plot" } else { "NULL" };
+            let overall = if has_column("overall") { "overall" } else { "NULL" };
+
+            // Every other source column exists after V1/V2/V4 migrations.
+            // Keep original IDs, measurement values, GPS and mission links.
+            let copy_sql = format!(
+                r#"INSERT INTO telemetry_rebuilt (
+                       id, timestamp, latitude, longitude, ph, moisture, ec,
+                       nitrogen, phosphorus, potassium, mission_id, created_at,
+                       updated_at, plot, overall
+                   )
+                   SELECT id, timestamp, latitude, longitude, ph, moisture, ec,
+                          nitrogen, phosphorus, potassium, mission_id,
+                          created_at, updated_at, {plot}, {overall}
+                   FROM telemetry;
+                   DROP TABLE telemetry;
+                   ALTER TABLE telemetry_rebuilt RENAME TO telemetry;"#
+            );
+            tx.execute_batch(&copy_sql)?;
+            Ok(())
+        },
+    )
+}
+
+#[cfg(test)]
+fn run_v6_compat_in_test(conn: &mut rusqlite::Connection) {
+    // Tests formerly called execute_batch(V6.sql), bypassing migration hooks.
+    // Use the actual V6 migration here so the tests exercise copy + swap.
+    rusqlite_migration::Migrations::new(vec![v6_compat_migration()])
+        .to_latest(conn)
+        .expect("V6 compatibility migration failed in test database");
+}
+
+// SW-07 Step 4: actual registered migrations, real ensure_schema, and SQLite
+// close/reopen persistence. ALL database access stays in a unique TEMP file.
+// This module is appended only to src-tauri/src/database.rs by the installer.
+#[cfg(test)]
+mod sw07_actual_migration_persistence_tests {
+    use super::{ensure_schema, v6_compat_migration};
+    use rusqlite::{params, Connection};
+    use rusqlite_migration::{Migrations, M};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDatabase(PathBuf);
+    impl TempDatabase {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be after Unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "eksplorador_sw07_step4_{}_{}.sqlite", std::process::id(), nonce
+            ));
+            assert!(!path.exists(), "refuse to reuse an existing database file");
+            Self(path)
+        }
+    }
+    impl Drop for TempDatabase {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_file(format!("{}-wal", self.0.display()));
+            let _ = std::fs::remove_file(format!("{}-shm", self.0.display()));
+        }
+    }
+
+    #[test]
+    fn sw07_fresh_migrations_and_finalized_sample_survive_sqlite_reopen() {
+        let temp = TempDatabase::new();
+        let boundary = r#"{"type":"Polygon","coordinates":[[[120.9892,14.6094],[120.9898,14.6094],[120.9897,14.6099],[120.9892,14.6094]]]}"#;
+        let pins = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"order":1},"geometry":{"type":"Point","coordinates":[120.9895,14.6096]}}]}"#;
+        let (field_id, mission_id, sample_id);
+        {
+            let mut conn = Connection::open(&temp.0).expect("open temporary SQLite database");
+            let migrations = Migrations::new(vec![
+                M::up(include_str!("../migrations/V1__create_telemetry_table.sql")),
+                M::up(include_str!("../migrations/V2__add_npk_columns.sql")),
+                M::up(include_str!("../migrations/V4__add_mission_and_audit_timestamps.sql")),
+                M::up(include_str!("../migrations/V5__create_additional_tables.sql")),
+                v6_compat_migration(),
+            ]);
+            migrations.to_latest(&mut conn).expect("V1/V2/V4/V5/V6 fresh migration");
+            ensure_schema(&mut conn).expect("complete actual Rust ensure_schema");
+            conn.execute_batch("PRAGMA foreign_keys = ON;")
+                .expect("enforce foreign keys");
+            let fk_enabled: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+            assert_eq!(fk_enabled, 1, "foreign key enforcement must be enabled");
+
+            conn.execute(
+                "INSERT INTO fields(name, boundary_geojson) VALUES(?1, ?2)",
+                params!["SW07 Fresh Field", boundary],
+            ).expect("insert synthetic field");
+            field_id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO missions(field_id, name, mission_date, pins_geojson, status) VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![field_id, "SW07 Fresh Mission", "2026-11-18", pins, "completed"],
+            ).expect("insert synthetic mission");
+            mission_id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO telemetry(mission_id, timestamp, latitude, longitude, moisture, ph, ec, nitrogen, phosphorus, potassium, plot, sample_session_id) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![mission_id, "2026-11-18T12:00:00Z", 14.6096_f64, 120.9895_f64,
+                    36.5_f64, 6.8_f64, 420.0_f64, 20.0_f64, 15.0_f64, 40.0_f64,
+                    "SW07 Fresh Field", "sw07-actual-reopen-unique-session"],
+            ).expect("insert synthetic finalized soil sample");
+            sample_id = conn.last_insert_rowid();
+            let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+            assert_eq!(integrity, "ok");
+            let bad_fks: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0)
+            ).unwrap();
+            assert_eq!(bad_fks, 0);
+            println!("PASS: Actual registered V1/V2/V4/V5/V6 migrations and Rust ensure_schema initialized fresh temp DB");
+            println!("PASS: Synthetic field, mission and finalized sample inserted with FK checks enabled");
+            // Dropping conn here closes the real SQLite file.
+        }
+        {
+            let conn = Connection::open(&temp.0).expect("reopen same temporary SQLite file");
+            conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+            let row = conn.query_row(
+                "SELECT f.name, f.boundary_geojson, m.name, m.pins_geojson,
+                        t.moisture, t.ph, t.ec, t.latitude, t.longitude,
+                        t.nitrogen, t.phosphorus, t.potassium, t.sample_session_id
+                 FROM fields f JOIN missions m ON m.field_id = f.id
+                 JOIN telemetry t ON t.mission_id = m.id
+                 WHERE f.id=?1 AND m.id=?2 AND t.id=?3",
+                params![field_id, mission_id, sample_id],
+                |r| Ok((
+                    r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+                    r.get::<_, f64>(4)?, r.get::<_, f64>(5)?, r.get::<_, f64>(6)?,
+                    r.get::<_, f64>(7)?, r.get::<_, f64>(8)?,
+                    r.get::<_, f64>(9)?, r.get::<_, f64>(10)?, r.get::<_, f64>(11)?,
+                    r.get::<_, String>(12)?
+                )),
+            ).expect("field->mission->sample join after reopen");
+            assert_eq!(row.0, "SW07 Fresh Field");
+            assert_eq!(row.1, boundary);
+            assert_eq!(row.2, "SW07 Fresh Mission");
+            assert_eq!(row.3, pins);
+            assert_eq!((row.4, row.5, row.6), (36.5, 6.8, 420.0));
+            assert_eq!((row.7, row.8), (14.6096, 120.9895));
+            assert_eq!((row.9, row.10, row.11), (20.0, 15.0, 40.0));
+            assert_eq!(row.12, "sw07-actual-reopen-unique-session");
+            println!("PASS: Field, mission, GeoJSON, GPS, NPK and finalized sample survived SQLite close/reopen");
+
+            let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+            assert_eq!(integrity, "ok");
+            let bad_fks: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0)
+            ).unwrap();
+            assert_eq!(bad_fks, 0, "persisted data must have zero FK violations");
+            println!("PASS: SQLite integrity and foreign-key validation after reopen");
+        }
+        // TempDatabase::drop removes only the unique temp file and possible sidecars.
+    }
 }

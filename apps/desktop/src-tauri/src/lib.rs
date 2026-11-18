@@ -728,9 +728,7 @@ fn get_connection() -> Result<Connection> {
             M::up(include_str!(
                 "../migrations/V5__create_additional_tables.sql"
             )),
-            M::up(include_str!(
-                "../migrations/V6__rebuild_telemetry_schema.sql"
-            )),
+            database::v6_compat_migration(),
         ]);
 
         
