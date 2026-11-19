@@ -27,7 +27,7 @@ const int TABLE_SIZE = sizeof(voltageTable) / sizeof(voltageTable[0]);
 float smoothedPercent = -1.0;
 
 const float SMOOTHING_FACTOR = 0.50;
-const float CALIBRATION_FACTOR = 1.0370; // 1.0471
+const float CALIBRATION_FACTOR = 1.0520; // 1.0471
 const float DIVIDER_RATIO = 5.54545;
 
 float batteryVoltage = 0.0;
