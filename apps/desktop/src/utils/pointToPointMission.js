@@ -1,5 +1,7 @@
 import { calculateBearing, calculateDistance } from './geo.js';
 
+// EKSPLORADOR_GPS_MISSION_FIX_V1
+
 // A3.1 Mega accepts one supervised timed TF command, max 60 seconds.
 // The map estimates direction/distance; this is NOT GPS waypoint tracking.
 export const FORWARD_MPS = 0.25; // measured field estimate; ground speed varies
@@ -13,12 +15,26 @@ export function validPoint(point) {
     !(point[0] === 0 && point[1] === 0);
 }
 
+// Kept under its existing exported name for callers. Only satellite-confirmed
+// DATA telemetry may be used if a fresh FUS fix is unavailable. No cached/stale GPS.
 export function freshFusionStart(fix, now = Date.now()) {
-  if (!fix || fix.source !== 'fusion' || fix.valid !== true || !validPoint(fix.position) ||
-      !Number.isFinite(fix.receivedAt) || !Number.isFinite(fix.ageAtReceiptMs) ||
-      fix.receivedAt > now || fix.ageAtReceiptMs < 0 ||
-      now - fix.receivedAt + fix.ageAtReceiptMs > GPS_FRESH_MS) return null;
-  return { coords: [...fix.position], source: 'GPS', capturedAt: fix.receivedAt };
+  if (!fix || !['fusion', 'telemetry'].includes(fix.source) || fix.valid !== true ||
+      !validPoint(fix.position) || !Number.isFinite(fix.receivedAt) ||
+      !Number.isFinite(fix.ageAtReceiptMs) || fix.receivedAt > now ||
+      fix.ageAtReceiptMs < 0 || now - fix.receivedAt + fix.ageAtReceiptMs > GPS_FRESH_MS ||
+      (fix.source === 'telemetry' && (!Number.isInteger(fix.satsLocked) || fix.satsLocked < 1))) {
+    return null;
+  }
+  return { coords: [...fix.position], source: 'GPS', capturedAt: fix.receivedAt,
+    fixSource: fix.source };
+}
+
+// Prefer authoritative FUS; otherwise reuse the same fresh GPS that drives
+// Field Map's rover pin, explicitly marked 'telemetry' rather than 'fusion'.
+export function choosePlanningGps(fus, telemetry, now = Date.now()) {
+  if (fus?.source === 'fusion' && freshFusionStart(fus, now)) return fus;
+  if (telemetry?.source === 'telemetry' && freshFusionStart(telemetry, now)) return telemetry;
+  return fus ?? null;
 }
 
 export function operatorMapStart(coords) {
@@ -36,6 +52,7 @@ export function makeStraightLeg({ start, target, pinIndex, now = Date.now(), gps
   if (start.source === 'GPS') {
     const current = freshFusionStart(gps, now);
     if (!current || current.capturedAt !== start.capturedAt ||
+        current.fixSource !== start.fixSource ||
         current.coords.some((value, i) => value !== start.coords[i])) {
       throw new Error('GPS position changed or expired. Confirm fresh GPS again.');
     }

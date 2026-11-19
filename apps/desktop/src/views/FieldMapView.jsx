@@ -29,7 +29,8 @@ import HeatmapMap from '../components/HeatmapMap';
 import SoilTypeGuide from '../components/SoilTypeGuide';
 import OperatorNavGuide from '../components/OperatorNavGuide';
 import PointToPointMissionDialog from '../components/PointToPointMissionDialog';
-import { operatorMapStart } from '../utils/pointToPointMission.js';
+import { operatorMapStart, choosePlanningGps } from '../utils/pointToPointMission.js';
+// EKSPLORADOR_GPS_MISSION_FIX_V1
 import MissionDeploymentWizard from '../components/MissionDeploymentWizard';
 import MissionStatusReport from '../components/MissionStatusReport';
 
@@ -141,12 +142,17 @@ export default function FieldMapView({ onHelp }) {
   // Live Rover Telemetry
   const [roverPos, setRoverPos] = useState(null);
   const [roverHeading, setRoverHeading] = useState(null);
+  // Field Map and Point A now consume the same satellite-confirmed DATA fix.
+  // FUS remains preferred for navigation whenever it is fresh and valid.
+  const [telemetryNavGps, setTelemetryNavGps] = useState(null);
   const planningGps = receiverStatus.connected && !receiverStatus.connectionError
-    ? receiverStatus.planning_gps?.current ?? null : null;
+    ? choosePlanningGps(receiverStatus.planning_gps?.current ?? null, telemetryNavGps)
+    : null;
   const gpsExpiry = useRef(null);
   useEffect(() => {
     if (!receiverStatus.connected || receiverStatus.connectionError) {
       setRoverPos(null); setRoverHeading(null);
+      setTelemetryNavGps(null);
       clearTimeout(gpsExpiry.current);
     }
   }, [receiverStatus.connected, receiverStatus.connectionError]);
@@ -584,10 +590,16 @@ export default function FieldMapView({ onHelp }) {
         Number.isInteger(Number(data.satsLocked)) &&
         Number(data.satsLocked) > 0;
       if (hasValidGps) {
+        // DATA has an actual satellite lock and nonzero coordinates; never
+        // manufacture a GPS fix from map pins or previous readings.
+        setTelemetryNavGps({ source: 'telemetry', valid: true,
+          position: [lat, lng], satsLocked: Number(data.satsLocked),
+          receivedAt: Date.now(), ageAtReceiptMs: 0 });
         setRoverPos([lat, lng]);
         clearTimeout(gpsExpiry.current);
         gpsExpiry.current = setTimeout(() => { setRoverPos(null); setRoverHeading(null); }, 5000);
       } else {
+        setTelemetryNavGps(null);
         clearTimeout(gpsExpiry.current);
         setRoverPos(null); setRoverHeading(null);
       }

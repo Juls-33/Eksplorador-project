@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2, MapPin, Navigation, X } from 'lucide-react';
 import { degreesToCardinal } from '../utils/geo';
 import { FORWARD_MPS, MAX_LEG_S, freshFusionStart, makeStraightLeg } from '../utils/pointToPointMission.js';
+// EKSPLORADOR_GPS_MISSION_FIX_V1
 
 const buttonStyle = { cursor: 'pointer', padding: '9px 12px', borderRadius: 7, border: '1px solid var(--card-border)' };
 const format = point => point ? `${point[0].toFixed(6)}, ${point[1].toFixed(6)}` : 'Not selected';
@@ -29,11 +30,10 @@ export default function PointToPointMissionDialog({ open, onClose, onPickMap, on
     return () => clearInterval(interval);
   }, [open]);
   const gpsStart = freshFusionStart(gps, now);
-  const gpsStatus = !gps ? 'No FUS navigation GPS received from the desktop receiver yet.'
-    : gps.valid !== true ? 'The latest FUS navigation message has no valid GPS fix.'
-    : gps.source !== 'fusion' ? 'Navigation GPS source is not validated FUS data.'
-    : !gpsStart ? 'The last FUS GPS fix is stale or invalid (5-second freshness limit).'
-    : 'Fresh GPS available. You may still override it with a map-selected position to correct drift.';
+  const gpsStatus = !gps ? 'No recent GPS received from the desktop receiver. Check the LoRa connection or select Point A on the map.'
+    : !gpsStart ? 'No valid fresh GPS fix (5-second limit). Check satellite lock or use a manually selected map position.'
+    : gpsStart.fixSource === 'fusion' ? 'Fresh validated FUS navigation GPS available.'
+    : 'Fresh GPS from live DATA telemetry (' + gps.satsLocked + ' satellites). FUS unavailable; verify rover position before planning.';
   const start = origin === 'GPS' ? gpsStart : manualStart;
   const target = waypoints[pinIndex];
   let plan = null, planningError = '';
@@ -82,7 +82,7 @@ export default function PointToPointMissionDialog({ open, onClose, onPickMap, on
               onClick={() => { setOrigin('MANUAL'); setAligned(false); onPickMap(); }}><MapPin size={14}/> Select on map</button>
           </div>
           <p role="status" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 0 }}>{gpsStatus}</p>
-          <p style={{ fontSize: '0.82rem', marginBottom: 0 }}>Source: <strong>{origin === 'GPS' ? 'Validated FUS GPS fix' : 'Operator estimate (not GPS)'}</strong></p>
+          <p style={{ fontSize: '0.82rem', marginBottom: 0 }}>Source: <strong>{origin === 'GPS' ? (gpsStart?.fixSource === 'fusion' ? 'Validated FUS GPS fix' : 'Live rover GPS telemetry (not fused)') : 'Operator estimate (not GPS)'}</strong></p>
           <p style={{ fontSize: '0.82rem', marginBottom: 0 }}>Point A: {format(start?.coords)}</p>
           <p style={{ fontSize: '0.82rem', marginBottom: 0 }}>Point B: {format(target)}</p>
           {!start && <p role="status" style={{ color: '#a16207' }}>{origin === 'GPS' ? 'No fresh GPS. Select your rover position on the map instead.' : 'Select Point A directly on the field map.'}</p>}
