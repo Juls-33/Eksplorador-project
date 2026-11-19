@@ -248,7 +248,7 @@ export default function MissionDeploymentWizard({ plan, onClose }) {
                   <ChecklistItem checked={startChecks.armedHold} onChange={v => updateStart('armedHold', v)} disabled={!telemetryReady || !startChecks.neutral}
                     title="3 · SA (CH5) → ARM; SB stays HOLD" detail="Arm with neutral sticks. Ensure the rover has observed armed HOLD before proceeding." />
                   <ChecklistItem checked={startChecks.semiAuto} onChange={v => updateStart('semiAuto', v)} disabled={!telemetryReady || !startChecks.armedHold}
-                    title="4 · SB (CH6) HOLD → SEMI_AUTO" detail="Authorize this timed forward leg (up to 60 seconds). Stay ready to use HOLD / DISARM until both tracks stop." />
+                    title="4 · SB (CH6) HOLD → SEMI_AUTO" detail="Authorize this timed forward leg (up to 300 seconds (5 minutes)). Stay ready to use HOLD / DISARM until both tracks stop." />
                 </fieldset>
                 <p className="mission-controller-note">The desktop cannot verify these RC switch positions or physically stop the rover. Use CH6 HOLD / CH5 DISARM immediately if needed.</p>
                 <button type="button" className="mission-deployment-primary" disabled={!telemetryReady || !allChecked(startChecks)} onClick={close}>

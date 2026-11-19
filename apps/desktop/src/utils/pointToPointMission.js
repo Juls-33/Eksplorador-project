@@ -2,11 +2,11 @@ import { calculateBearing, calculateDistance } from './geo.js';
 
 // EKSPLORADOR_GPS_MISSION_FIX_V1
 
-// A3.1 Mega accepts one supervised timed TF command, max 60 seconds.
+// A3.1 Mega accepts one supervised timed TF command, max 300 seconds (5 minutes).
 // The map estimates direction/distance; this is NOT GPS waypoint tracking.
 export const FORWARD_MPS = 0.25; // measured field estimate; ground speed varies
 export const MIN_LEG_S = 0.100;
-export const MAX_LEG_S = 60.000;
+export const MAX_LEG_S = 300.000;
 export const GPS_FRESH_MS = 5000; // backend FUS planning_gps freshness limit
 
 export function validPoint(point) {
@@ -64,7 +64,7 @@ export function makeStraightLeg({ start, target, pinIndex, now = Date.now(), gps
   }
   const estimatedTotalS = distanceM / FORWARD_MPS;
   // Never silently cap the distance: Point B must remain the planned destination.
-  if (!Number.isFinite(estimatedTotalS) || estimatedTotalS > MAX_LEG_S) {
+  if (!Number.isFinite(estimatedTotalS) || estimatedTotalS > MAX_LEG_S + 1e-9) {
     throw new Error(
       `Point B is ${distanceM.toFixed(2)} m away (${estimatedTotalS.toFixed(3)} s estimated). ` +
       `A single forward leg supports at most ${MAX_LEG_S.toFixed(3)} s ` +
@@ -75,7 +75,7 @@ export function makeStraightLeg({ start, target, pinIndex, now = Date.now(), gps
   // TF uses milliseconds; rounding introduces at most 0.5 ms of timing error.
   const durationS = Math.round(estimatedTotalS * 1000) / 1000;
   if (durationS < MIN_LEG_S || durationS > MAX_LEG_S) {
-    throw new Error('The calculated TF duration is outside the permitted 0.100–60.000 s range.');
+    throw new Error('The calculated TF duration is outside the permitted 0.100–300.000 s range.');
   }
   const sequence = `TF${durationS.toFixed(3)}`;
   return {

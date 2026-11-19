@@ -100,6 +100,7 @@ export default function PointToPointMissionDialog({ open, onClose, onPickMap, on
         <div style={{ padding: 12, border: '1px solid var(--card-border)', borderRadius: 8 }}>
           <strong>4. Review the movement</strong>
           {plan ? <>
+            {plan.durationS > 60 && <p role="alert" style={{ color: '#92400e', fontSize: '0.82rem' }}>Extended timed movement (over 60 seconds). This is open-loop distance estimation, not GPS waypoint tracking. The present bench ultrasonic profile must not be used for autonomous ground travel; verify strict obstacle protection and supervise the route before any field operation.</p>}
             <p style={{ margin: '8px 0' }}>Forward command: <code>{plan.sequence}</code> · {plan.durationS.toFixed(3)} s · about {plan.estimatedLegM.toFixed(2)} m</p>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '4px 0' }}>Calculated from {plan.distanceM.toFixed(2)} m ÷ {FORWARD_MPS.toFixed(2)} m/s = {plan.estimatedTotalS.toFixed(3)} s. A single leg supports up to {MAX_LEG_S.toFixed(3)} s (about {(MAX_LEG_S * FORWARD_MPS).toFixed(2)} m). Longer legs are rejected, never shortened.</p>
             <p style={{ fontSize: '0.8rem', color: '#92400e', margin: '4px 0' }}>Speed is an estimate, not closed-loop ground-distance control. Supervise the rover and use the physical HOLD/DISARM controls if necessary.</p>
