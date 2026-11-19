@@ -1,3 +1,4 @@
+mod obstacle_alert; // EKSPLORADOR_OBSTACLE_ALERT_V1
 use rusqlite::{params, Connection, Result};
 use rusqlite_migration::{Migrations, M};
 use serde::{Deserialize, Serialize};
@@ -1258,6 +1259,12 @@ fn start_serial_listener(app_handle: tauri::AppHandle) {
                                 }
                                 if trimmed.starts_with("[MODE]") || trimmed.starts_with("[STATUS]") || trimmed.starts_with("[LoRa TX]") || trimmed.starts_with("[ERROR]") || trimmed.starts_with("[MISSION") {
                                     let _ = app_handle.emit("rx-board-log", trimmed.to_string());
+                                }
+
+                                // EKSPLORADOR_OBSTACLE_ALERT_V1: separate urgent safety notification.
+                                if let Some(alert) = obstacle_alert::parse_rx_board_obstacle_line(trimmed) {
+                                    let _ = app_handle.emit("rover-obstacle", alert);
+                                    continue; // Never treat an alert as soil/encoder/GPS telemetry.
                                 }
 
                                 match encoder_telemetry::classify(trimmed) {
