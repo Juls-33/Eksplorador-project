@@ -327,6 +327,7 @@ pub fn ensure_schema(conn: &mut Connection) -> DbResult<()> {
         ("plot", "TEXT"),
         ("overall", "REAL"),
         ("sample_session_id", "TEXT"),
+        ("location_source", "TEXT"),
     ] {
         if !existing.iter().any(|column| column["name"] == name) {
             tx.execute_batch(
@@ -2060,6 +2061,7 @@ pub(crate) fn v6_compat_migration() -> rusqlite_migration::M<'static> {
             let has_column = |name: &str| columns.iter().any(|column| column == name);
             let plot = if has_column("plot") { "plot" } else { "NULL" };
             let overall = if has_column("overall") { "overall" } else { "NULL" };
+            let location_source = if has_column("location_source") { "location_source" } else { "NULL" };
 
             // Every other source column exists after V1/V2/V4 migrations.
             // Keep original IDs, measurement values, GPS and mission links.
@@ -2067,11 +2069,11 @@ pub(crate) fn v6_compat_migration() -> rusqlite_migration::M<'static> {
                 r#"INSERT INTO telemetry_rebuilt (
                        id, timestamp, latitude, longitude, ph, moisture, ec,
                        nitrogen, phosphorus, potassium, mission_id, created_at,
-                       updated_at, plot, overall
+                       updated_at, plot, overall, location_source
                    )
                    SELECT id, timestamp, latitude, longitude, ph, moisture, ec,
                           nitrogen, phosphorus, potassium, mission_id,
-                          created_at, updated_at, {plot}, {overall}
+                          created_at, updated_at, {plot}, {overall}, {location_source}
                    FROM telemetry;
                    DROP TABLE telemetry;
                    ALTER TABLE telemetry_rebuilt RENAME TO telemetry;"#

@@ -339,12 +339,13 @@ async function seedDefaultCropProfiles(db) {
 // custom crop profiles or a user's configured compatible-soil list.
 async function ensureCacaoAndSoilReferenceDefaults(db) {
   const done = await db.select("SELECT value FROM _app_meta WHERE key='crop_reference_upgrade_v1'");
-  if (done[0]?.value === '1') return;
-
+  // Always verify this required reference crop, even if an earlier version
+  // marked the one-time upgrade complete. Do not overwrite existing profiles.
   const existing = await db.select('SELECT id, name, compatible_soil_types FROM crop_profiles');
   const hasCacao = existing.some(row => row.id === REQUIRED_CACAO_PROFILE.id ||
     /\bcacao\b|\btheobroma cacao\b/i.test(row.name || ''));
   if (!hasCacao) await upsertCropProfile(db, REQUIRED_CACAO_PROFILE);
+  if (done[0]?.value === '1') return;
 
   for (const original of DEFAULT_CROP_PROFILES) {
     const reference = BUILTIN_CROP_REFERENCES[original.id];

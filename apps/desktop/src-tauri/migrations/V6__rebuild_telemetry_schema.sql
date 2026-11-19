@@ -18,5 +18,6 @@ CREATE TABLE IF NOT EXISTS telemetry_rebuilt (
     updated_at TEXT DEFAULT NULL,
     plot TEXT,
     overall REAL,
+    location_source TEXT,
     FOREIGN KEY (mission_id) REFERENCES missions(id)
 );
