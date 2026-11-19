@@ -114,91 +114,78 @@ export function consolidateHeatPoints(points, mergeRadiusM = 0.75) {
   return clusters.map(c => [c.lat, c.lng, c.sum / c.count]);
 }
 
-/**
- * IDW Spatial Interpolation for Continuous Field Coverage
- * @param {Array} samplePoints Array of [lat, lng, measured value]
- * @param {Array} boundaryPolygon Array of [lat, lng]
- * @param {Object} options Configuration options
- * @returns {Array} Array of interpolated points [lat, lng, measured value]
+/** One value per location: measured, local estimate, or bounded IDW estimate.
+ * Local coverage is a display assumption, not a measured soil footprint.
+ * Opacity fades only in the outer 30% and never scales the soil value.
+ * Pass consolidated sites so duplicate readings cannot gain spatial weight.
  */
-export function generateIDWHeatmapGrid(
-  samplePoints,
-  boundaryPolygon,
-  {
-    gridResolution = 28,      // Density of interpolation mesh
-    power = 2.0,              // Distance decay exponent (Shepard's method)
-    maxInfluenceRadiusM = 45, // Maximum sensor prediction radius in meters
-    minNeighbors = 1        // At least 2 sites recommended for spatial claims
-  } = {}
-) {
-  const uniquePoints = consolidateHeatPoints(samplePoints);
-  if (!uniquePoints.length) return [];
-  if (!boundaryPolygon || boundaryPolygon.length < 3) return uniquePoints;
+export function evaluateHeatmapPoint(point, sites, {
+  power = 2,
+  maxInfluenceRadiusM = 45,
+  minNeighbors = 1,
+  localCoverageRadiusM = 5
+} = {}) {
+  const radius = Math.max(0, Number(maxInfluenceRadiusM) || 0);
+  const localRadius = Math.min(radius, Math.max(0, Number(localCoverageRadiusM) || 0));
+  const required = Math.max(1, Math.floor(Number(minNeighbors) || 1));
+  const nearby = sites.map(([lat, lng, value]) => ({
+    distance: calculateDistance(point, [lat, lng]), value
+  })).sort((a, b) => a.distance - b.distance);
+  if (!nearby.length) return null;
+  const nearest = nearby[0];
+  if (nearest.distance < 0.5) return { value: nearest.value, opacity: 1, kind: 'measured' };
+  const fade = (distance, limit) => {
+    if (limit <= 0 || distance >= limit) return 0;
+    const t = Math.max(0, Math.min(1, (limit - distance) / (limit * 0.3)));
+    return t * t * (3 - 2 * t);
+  };
+  const localOpacity = fade(nearest.distance, localRadius);
+  const neighbors = nearby.filter(site => site.distance <= radius);
+  if (neighbors.length >= required) {
+    let weightedSum = 0, totalWeight = 0;
+    for (const site of neighbors) {
+      const weight = 1 / Math.pow(site.distance, power);
+      weightedSum += site.value * weight;
+      totalWeight += weight;
+    }
+    const opacity = Math.max(localOpacity, fade(neighbors[required - 1].distance, radius));
+    if (opacity > 0) return { value: weightedSum / totalWeight, opacity, kind: 'interpolated' };
+  }
+  if (localOpacity > 0) return { value: nearest.value, opacity: localOpacity, kind: 'local' };
+  return null;
+}
 
-  // 1. Calculate Bounding Box of the Field Polygon
-  let minLat = Infinity, maxLat = -Infinity;
-  let minLng = Infinity, maxLng = -Infinity;
-
-  boundaryPolygon.forEach(([lat, lng]) => {
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
-    if (lng < minLng) minLng = lng;
-    if (lng > maxLng) maxLng = lng;
-  });
-
-  const latStep = (maxLat - minLat) / gridResolution;
-  const lngStep = (maxLng - minLng) / gridResolution;
-  const interpolatedGrid = [];
-
-  // 2. Scan and Interpolate Each Internal Cell
-  for (let lat = minLat; lat <= maxLat; lat += latStep) {
-    for (let lng = minLng; lng <= maxLng; lng += lngStep) {
-      const candidatePoint = [lat, lng];
-
-      // Exclude non-soil / out-of-boundary regions
-      if (!isPointInPolygon(candidatePoint, boundaryPolygon)) {
-        continue;
-      }
-
-      let totalWeight = 0;
-      let weightedSum = 0;
-      let neighbors = 0;
-      let minDistance = Infinity;
-      let exactMatch = null;
-
-      for (let i = 0; i < uniquePoints.length; i++) {
-        const [sLat, sLng, intensity] = uniquePoints[i];
-        const dist = calculateDistanceMeters(candidatePoint, [sLat, sLng]);
-
-        if (dist < minDistance) minDistance = dist;
-
-        // Exact match at sensor coordinate
-        if (dist < 0.5) {
-          exactMatch = intensity;
-          break;
-        }
-
-        // Apply weight if within influence radius
-        if (dist <= maxInfluenceRadiusM) {
-          const weight = 1 / Math.pow(dist, power);
-          totalWeight += weight;
-          weightedSum += weight * intensity;
-          neighbors += 1;
-        }
-      }
-
-      if (exactMatch !== null) {
-        interpolatedGrid.push([lat, lng, exactMatch]);
-      } else if (totalWeight > 0 && neighbors >= minNeighbors) {
-        const predictedIntensity = weightedSum / totalWeight;
-
-        // Do not fabricate low moisture at the edge of an unsampled region.
-        interpolatedGrid.push([lat, lng, predictedIntensity]);
-      }
+/** Bounded IDW grid, with optional alpha as the fourth tuple element.
+ * Default triples preserve compatibility with existing callers.
+ */
+export function generateIDWHeatmapGrid(samplePoints, boundaryPolygon, options = {}) {
+  const { gridResolution = 28, includeCoverage = false } = options;
+  const sites = consolidateHeatPoints(samplePoints);
+  if (!sites.length) return [];
+  if (!boundaryPolygon || boundaryPolygon.length < 3) {
+    return sites.map(site => includeCoverage ? [...site, 1] : site);
+  }
+  const minLat = Math.min(...boundaryPolygon.map(p => p[0]));
+  const maxLat = Math.max(...boundaryPolygon.map(p => p[0]));
+  const minLng = Math.min(...boundaryPolygon.map(p => p[1]));
+  const maxLng = Math.max(...boundaryPolygon.map(p => p[1]));
+  if (![minLat, maxLat, minLng, maxLng].every(Number.isFinite) ||
+      maxLat <= minLat || maxLng <= minLng) return [];
+  const resolution = Math.max(1, Math.floor(Number(gridResolution) || 28));
+  const grid = [];
+  for (let row = 0; row <= resolution; row++) {
+    const lat = minLat + (maxLat - minLat) * row / resolution;
+    for (let col = 0; col <= resolution; col++) {
+      const lng = minLng + (maxLng - minLng) * col / resolution;
+      if (!isPointInPolygon([lat, lng], boundaryPolygon)) continue;
+      const result = evaluateHeatmapPoint([lat, lng], sites, options);
+      if (!result) continue;
+      grid.push(includeCoverage ? [lat, lng, result.value, result.opacity] : [lat, lng, result.value]);
     }
   }
-
-  // A weighted mean cannot exceed its observed input range.
-  // Include one representative point per site, not every duplicate packet.
-  return [...interpolatedGrid, ...uniquePoints];
+  // Preserve source values while respecting the field clipping polygon.
+  for (const site of sites) {
+    if (isPointInPolygon(site, boundaryPolygon)) grid.push(includeCoverage ? [...site, 1] : site);
+  }
+  return grid;
 }

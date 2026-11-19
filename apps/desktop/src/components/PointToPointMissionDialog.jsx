@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, MapPin, Navigation, X } from 'lucide-react';
 import { degreesToCardinal } from '../utils/geo';
-import { freshFusionStart, makeStraightLeg } from '../utils/pointToPointMission.js';
+import { FORWARD_MPS, MAX_LEG_S, freshFusionStart, makeStraightLeg } from '../utils/pointToPointMission.js';
 
 const buttonStyle = { cursor: 'pointer', padding: '9px 12px', borderRadius: 7, border: '1px solid var(--card-border)' };
 const format = point => point ? `${point[0].toFixed(6)}, ${point[1].toFixed(6)}` : 'Not selected';
@@ -101,8 +101,8 @@ export default function PointToPointMissionDialog({ open, onClose, onPickMap, on
           <strong>4. Review the movement</strong>
           {plan ? <>
             <p style={{ margin: '8px 0' }}>Forward command: <code>{plan.sequence}</code> · {plan.durationS.toFixed(3)} s · about {plan.estimatedLegM.toFixed(2)} m</p>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '4px 0' }}>Calculated from {plan.distanceM.toFixed(2)} m ÷ 0.25 m/s = {plan.estimatedTotalS.toFixed(2)} s total estimate. Each upload is capped at 2.000 s by the Mega A3.1 safety limit.</p>
-            {plan.partial && <p style={{ fontSize: '0.82rem', color: '#92400e' }}>This is a short partial leg, not the entire {plan.distanceM.toFixed(2)} m path. Stop and inspect before planning another leg.</p>}
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '4px 0' }}>Calculated from {plan.distanceM.toFixed(2)} m ÷ {FORWARD_MPS.toFixed(2)} m/s = {plan.estimatedTotalS.toFixed(3)} s. A single leg supports up to {MAX_LEG_S.toFixed(3)} s (about {(MAX_LEG_S * FORWARD_MPS).toFixed(2)} m). Longer legs are rejected, never shortened.</p>
+            <p style={{ fontSize: '0.8rem', color: '#92400e', margin: '4px 0' }}>Speed is an estimate, not closed-loop ground-distance control. Supervise the rover and use the physical HOLD/DISARM controls if necessary.</p>
           </> : <p style={{ fontSize: '0.82rem' }}>{planningError || 'Awaiting valid starting position.'}</p>}
           <label style={{ display: 'flex', gap: 8, fontSize: '0.82rem' }}><input type="checkbox" checked={probeClear} onChange={e => setProbeClear(e.target.checked)} /> Soil probe is fully retracted and clear.</label>
           <label style={{ display: 'flex', gap: 8, fontSize: '0.82rem' }}><input type="checkbox" checked={pathClear} onChange={e => setPathClear(e.target.checked)} /> I can visually supervise the clear straight path.</label>

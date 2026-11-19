@@ -130,15 +130,20 @@ const uint8_t SOIL_REQUEST[]={0x01,0x03,0x00,0x00,0x00,0x08,0x44,0x0C};
 uint8_t soilReply[21];uint8_t soilCount=0;
 unsigned long soilLastPoll=0,soilQueryAt=0;
 bool soilWaiting=false;
-// Set TRUE after HC-SR04 is connected and verified. Unknown sonar readings stop forward motion.
-const bool ULTRASONIC_ENABLED=true;   
-
-// FALSE = A31 ignores sonar: it neither blocks the start nor stops a running leg.
-// Manual mode already ignores sonar. Sensor is still read for telemetry only.
-// DIAGNOSTIC BENCH CONFIG ONLY: sonar interlock remains disabled EXACTLY as
-// in the uploaded original. DO NOT use ground-contacting autonomous travel.
-// Once HC-SR04 has been validated, set TRUE and verify fail-closed behavior.
-const bool SONAR_INTERLOCK_ENABLED = false;
+// Ultrasonic response policy for TRACKS-RAISED BENCH TESTING ONLY.
+// HC-SR04 pulseIn() returns 0 both when the beam sees open space and when
+// the sensor/wire fails. These outcomes are electrically indistinguishable.
+// BENCH mode deliberately treats 3 consecutive no-echo pings as no target.
+// This is NOT fail-safe: a disconnected sensor could also authorize driving.
+// Keep the tracks securely off the ground. Before ANY ground-contacting
+// autonomous test, change BENCH_NO_ECHO_IS_CLEAR to false, restore a tested
+// stopping threshold and validate the sensor on the actual terrain.
+const bool ULTRASONIC_ENABLED = true;
+const bool SONAR_INTERLOCK_ENABLED = true;
+#define BENCH_NO_ECHO_IS_CLEAR 1
+#if BENCH_NO_ECHO_IS_CLEAR
+#warning "EKSPLORADOR SONAR BENCH-ONLY: missing HC-SR04 echo can count as clear; NEVER drive on ground in this configuration."
+#endif
 
 const uint8_t AUTO_OBSTACLE_LIMIT=5;
 uint8_t autoObstacleEvents=0;
@@ -203,19 +208,55 @@ const uint16_t RC_DEADZONE = 65; // Widened from 45 to prevent gimbal bleed and 
 
 const uint32_t SIGNAL_TIMEOUT = 250;
 
-const unsigned int OBSTACLE_DISTANCE_CM = 35; // Bench test only: very short stop distance
-const unsigned int OBSTACLE_RESUME_CM = 45; // Clear distance before forward resumes
-// BENCH TEST ONLY: HC-SR04 no-echo can mean no target OR sensor failure.
-// Set FALSE for field use; FALSE requires valid echoes to resume.
-const bool SONAR_BENCH_NO_ECHO_CLEAR = false; // A3.1: missing echo must not authorize travel
+// BENCH-ONLY close-stop experiment; 10 cm is NOT a safe field stopping distance.
+// Revisit these values using measured stopping distance, speed, sensor latency,
+// and terrain before any ground-contacting autonomous test.
+const unsigned int OBSTACLE_DISTANCE_CM = 10;
+const unsigned int OBSTACLE_RESUME_CM = 20;
+// HC-SR04 requires a quiet period between pings; 60 ms also reduces
+// acoustic cross-talk. A 12 ms timeout limits blocking on a missed echo.
+// 12 ms covers roughly 2 m; this profile is ONLY for the 10/20 cm bench test.
 const uint8_t SONAR_CLEAR_SAMPLES = 3;
-const uint8_t SONAR_NO_ECHO_CLEAR_SAMPLES = 5;
+const uint8_t SONAR_NO_ECHO_CLEAR_SAMPLES = 3;
+// TRACKS-RAISED BENCH only: two suspicious HC-SR04 samples 60ms apart.
+// On the first close/invalid sample, stop motors temporarily to verify it.
+// STRICT policy (BENCH_NO_ECHO_IS_CLEAR=0) retains immediate stopping.
+const uint8_t SONAR_INVALID_SAMPLES_TO_STOP = 2;
+const uint8_t SONAR_BENCH_SUSPICIOUS_CONFIRM_SAMPLES = 2;
+const unsigned long SONAR_FRESH_MS = 250UL;
+const unsigned long SONAR_ECHO_TIMEOUT_US = 12000UL;
+const uint16_t SONAR_MIN_CM = 2;
+const uint16_t SONAR_MAX_CM = 200;
 unsigned long sonarEchoUs = 0;
 uint8_t noEchoSamples = 0;
+uint8_t sonarInvalidSamples = 0;
+uint8_t sonarSuspiciousSamples = 0;
+bool sonarBenchCheckPending = false;
+bool sonarBenchNoEchoClear = false;
+unsigned long sonarLastAssessmentMs = 0;
 const char* sonarDecision = "STARTUP";
 bool forwardBlocked = true;
 uint8_t clearSonarSamples = 0;
-const unsigned long PING_INTERVAL_MS = 40;
+const unsigned long PING_INTERVAL_MS = 60UL;
+
+bool sonarForwardClear() {
+  if (!ULTRASONIC_ENABLED || forwardBlocked) return false;
+#if BENCH_NO_ECHO_IS_CLEAR
+  // A suspicious sample must not authorize motor output until rechecked.
+  if (sonarBenchCheckPending) return false;
+#endif
+  const unsigned long now = millis();
+  if (sonarValid && sonarLastGood != 0 && now - sonarLastGood <= SONAR_FRESH_MS)
+    return true;
+#if BENCH_NO_ECHO_IS_CLEAR
+  // A NO_ECHO reading is NOT a valid distance. This permission is deliberately
+  // limited to the tracks-raised bench profile; never use as field safety.
+  return sonarBenchNoEchoClear && sonarLastAssessmentMs != 0 &&
+         now - sonarLastAssessmentMs <= SONAR_FRESH_MS;
+#else
+  return false;
+#endif
+}
 
 // Bench demonstration only: PWM is not speed or distance feedback.
 const int AUTO_DRIVE_SPEED = 120;
@@ -329,6 +370,26 @@ String missionSequence = "";
 String currentCommand = "";
 
 bool missionActive = false;
+// Pause preserves only the unfinished, previously authorized command.
+// HOLD, deliberate DISARM and sonar obstruction can pause; MANUAL, RC loss,
+// tilt/encoder fault, nonneutral controls and >30 s PAUSE still CANCEL.
+// Re-ARM alone NEVER moves motors: fresh armed HOLD dwell + SEMI edge required.
+const unsigned long A31_PAUSE_MAX_MS = 30000UL;
+const unsigned long A31_PAUSE_HOLD_CONFIRM_MS = 700UL;
+bool a31MissionPaused = false;
+unsigned long a31PausedAtMs = 0;
+unsigned long a31HoldConfirmedAtMs = 0;
+bool a31PauseNeedsRearm = false;  // once CH5 DISARM is observed during a pause
+bool a31PauseRearmed = false;     // true only after RC's qualified low-to-high rearm
+bool a31PauseSonar = false;       // stopped by missing/obstructed forward sonar
+// BENCH-only provisional stop (not a latched pause). Freeze timed mission
+// while awaiting the next HC-SR04 ping; a clear sample resumes the clock.
+bool a31SonarVerificationActive = false;
+unsigned long a31SonarVerificationSinceMs = 0;
+// Latched diagnostic survives a transient sensor recovery until next mission.
+const char* a31LastSonarPauseDecision = "NONE";
+unsigned long a31LastSonarPauseEchoUs = 0;
+unsigned int a31LastSonarPauseCm = 999;
 // Staging never energizes motors; a deliberate, fresh HOLD->SEMI_AUTO edge is required.
 bool a31MissionStaged = false;
 bool a31PreviousSemi = false;
@@ -481,6 +542,58 @@ void printDebugTelemetry(
 
 
 
+// -----------------------------------------------------------------
+// Mission pause helpers: no motor start can occur inside these functions.
+// -----------------------------------------------------------------
+void a31ClearPause() {
+  a31SonarVerificationActive = false;
+  a31SonarVerificationSinceMs = 0;
+  a31MissionPaused = false;
+  a31PausedAtMs = 0;
+  a31HoldConfirmedAtMs = 0;
+  a31PauseNeedsRearm = false;
+  a31PauseRearmed = false;
+  a31PauseSonar = false;
+}
+
+void a31BeginPause(const char *reason, bool sonarTriggered, bool disarmTriggered) {
+  if (!missionActive || a31MissionPaused) return;
+  const unsigned long now = millis();
+  if (a31SonarVerificationActive) {
+    // Exclude provisional stopped time from the motion timer.
+    a31StepStartedMs += now - a31SonarVerificationSinceMs;
+    a31SonarVerificationActive = false;
+  }
+  if (sonarTriggered) {
+    a31LastSonarPauseDecision = sonarDecision;
+    a31LastSonarPauseEchoUs = sonarEchoUs;
+    a31LastSonarPauseCm = currentObstacleDist;
+    Serial.print(F("[A31] SONAR PAUSE CAUSE: "));
+    Serial.print(a31LastSonarPauseDecision);
+    Serial.print(F(" cm=")); Serial.print(a31LastSonarPauseCm);
+    Serial.print(F(" echo_us=")); Serial.println(a31LastSonarPauseEchoUs);
+  }
+  if (currentCommand.length()) {
+    const unsigned long elapsed = now - a31StepStartedMs;
+    benchRemainingMs = elapsed >= benchRemainingMs ? 0 : benchRemainingMs - elapsed;
+  }
+  a31MissionPaused = true;
+  a31PausedAtMs = now;
+  a31HoldConfirmedAtMs = (!sonarTriggered && !disarmTriggered) ? now : 0;
+  a31PauseNeedsRearm = disarmTriggered;
+  a31PauseRearmed = !disarmTriggered;
+  a31PauseSonar = sonarTriggered;
+  a31StartIntentValid = false;
+  a31PendingRadioNoticeSent = false;
+  a31ArmedHoldSinceRearm = false;
+  a31SettleUntil = 0;
+  stopAllOutputs();    // Motor output is zero immediately; no automatic resume.
+  Serial.print(F("[A31] PAUSED ")); Serial.print(reason);
+  Serial.print(F(" remaining_ms=")); Serial.println(benchRemainingMs);
+  espSerial.print(F("MISSION_STATUS:A31_PAUSED:"));
+  espSerial.print(reason); espSerial.print(':'); espSerial.println(benchRemainingMs);
+}
+
 // =================================================================
 // A2.4 DRIVE ENCODERS - ADDITIVE, MEGA PORT K (A8-A11)
 // =================================================================
@@ -491,8 +604,14 @@ void printDebugTelemetry(
 // These constants DO NOT establish ground distance or field turns.
 const int32_t ENC_LEFT_CPR  = 5925L;
 const int32_t ENC_RIGHT_CPR = 5842L;
-const int8_t ENC_LEFT_FORWARD_SIGN  = +1;
-const int8_t ENC_RIGHT_FORWARD_SIGN = -1;
+const int8_t ENC_LEFT_FORWARD_SIGN  = -1; // observed TF forward: L ticks negative
+const int8_t ENC_RIGHT_FORWARD_SIGN = +1; // observed TF forward: R ticks positive
+
+// The manual RC forward mix for a positive throttle command is LEFT + / RIGHT -.
+// Match that polarity for semi-auto TF so the rover no longer backs up.
+// Keep the encoder signs aligned with physically observed forward rotation.
+const int8_t AUTO_FORWARD_LEFT_SIGN = +1;
+const int8_t AUTO_FORWARD_RIGHT_SIGN = -1;
 
 // Applies proportional encoder synchronization ONLY to existing
 // semi-auto straight 'F' / 'B' bench motor commands. Manual RC,
@@ -668,6 +787,7 @@ void latchDriveSyncFault(const __FlashStringHelper *reason) {
   driveSyncFaultLatched = true;
   driveSyncActive = false;
   missionActive = false;
+  a31ClearPause();
   detourStage = 0;
   // Direct PWM zero; avoid recursive call to resetDriveSync.
   setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, 0);
@@ -678,8 +798,10 @@ void latchDriveSyncFault(const __FlashStringHelper *reason) {
 }
 
 void commandAutoStraightWithSync(bool forward) {
-  const int leftSign = forward ? -1 : +1;  // original motor polarity
-  const int rightSign = forward ? +1 : -1;
+  // TF must match the confirmed manual-forward electrical polarity.
+  // Never reverse manual driving or the actuator to correct autonomous TF.
+  const int leftSign = forward ? AUTO_FORWARD_LEFT_SIGN : -AUTO_FORWARD_LEFT_SIGN;
+  const int rightSign = forward ? AUTO_FORWARD_RIGHT_SIGN : -AUTO_FORWARD_RIGHT_SIGN;
   if (!ENABLE_AUTO_STRAIGHT_ENCODER_SYNC) {
     setMotorSpeed(PIN_L_RPWM, PIN_L_LPWM, leftSign * AUTO_DRIVE_SPEED);
     setMotorSpeed(PIN_R_RPWM, PIN_R_LPWM, rightSign * AUTO_DRIVE_SPEED);
@@ -1156,6 +1278,15 @@ void setup() {
     CHANGE
   );
 
+  Serial.println(F("[SAFETY] Ultrasonic interlock ENABLED for semi-auto forward movement"));
+  Serial.println(F("[SAFETY] Sonar stop <=10cm; clear >=20cm x3, unknown/invalid status logged"));
+  Serial.println(F("[SAFETY] Sonar pause needs deliberate armed HOLD -> SEMI resume"));
+#if BENCH_NO_ECHO_IS_CLEAR
+  Serial.println(F("[DANGER] SONAR BENCH PROFILE: NO_ECHO CAN COUNT AS CLEAR. TRACKS UP ONLY!"));
+#else
+  Serial.println(F("[SONAR] STRICT: NO_ECHO BLOCKS semi-auto forward"));
+#endif
+  Serial.println(F("[TEST PROFILE] TF uses LEFT + / RIGHT - motor polarity"));
   Serial.println(F("[SYSTEM] Initialization Complete"));
   Serial.println(F("[SYSTEM] Waiting for RC Commands..."));
   Serial.println(F("[SAFETY] Tilt fault: MANUAL DRIVE allowed; actuator DOWN blocked."));
@@ -1260,6 +1391,7 @@ if (millis() - lastSonarDebug >= 1000) {
     if (missionActive || a31MissionStaged) {
       a31MissionStaged = false;
       a31SawArmedHold = false;
+      a31ClearPause();
       missionActive = false;
       detourStage = 0;
       currentCommand = "";
@@ -1284,6 +1416,10 @@ if (millis() - lastSonarDebug >= 1000) {
     if (rcDisarmObserved && rcNeutral) {
       rcRearmRequired = false;
       rcDisarmObserved = false;
+      // A pause that involved CH5 DISARM is eligible for a deliberate
+      // resume ONLY after RC has observed a qualified rearm cycle.
+      if (missionActive && a31MissionPaused && a31PauseNeedsRearm)
+        a31PauseRearmed = true;
     }
     rcDisarmSince = 0;
     if (rcRearmRequired) {
@@ -1340,16 +1476,106 @@ if (millis() - lastSonarDebug >= 1000) {
   }
 
 
-  // A3.1 mission never resumes after RC loss, operator takeover, or re-arming.
+  // A3.1: deliberate HOLD/DISARM or sonar blockage pauses the remaining
+  // movement time. Faults, nonneutral sticks, RC loss and MANUAL cancel.
   const bool a31SemiNow = rcFresh && !rcRearmRequired && armPulse >= 1500 &&
                           currentState == STATE_SEMI_AUTO;
-  if (missionActive && (!a31SemiNow || !rcNeutral || safetyLatched || driveSyncFaultLatched)) {
+  const bool a31BaseSafe = rcFresh && rcNeutral && !safetyLatched &&
+                           !driveSyncFaultLatched && !actuatorOverload;
+  const bool a31ArmedHealthy = a31BaseSafe && !rcRearmRequired && armPulse >= 1500;
+
+  if (missionActive && !a31MissionPaused && a31BaseSafe) {
+    if (currentState == STATE_HOLD && a31ArmedHealthy) {
+      a31BeginPause("HOLD", false, false);
+    } else if (currentState == STATE_DISARMED && armPulse < 1500) {
+      a31BeginPause("DISARM", false, true);
+    }
+  }
+
+  if (missionActive && a31MissionPaused) {
+    const unsigned long now = millis();
+    const bool pauseExpired = now - a31PausedAtMs >= A31_PAUSE_MAX_MS;
+    const bool invalidMode = currentState == STATE_MANUAL || currentState == STATE_NO_SIGNAL;
+    if (pauseExpired || !a31BaseSafe || invalidMode) {
+      missionActive = false;
+      a31ClearPause();
+      a31MissionStaged = false;
+      a31SawArmedHold = false;
+      a31ArmedHoldSinceRearm = false;
+      a31StartIntentValid = false;
+      a31PendingRadioNoticeSent = false;
+      currentCommand = "";
+      missionSequence = "";
+      benchRemainingMs = 0;
+      a31SettleUntil = 0;
+      stopAllOutputs();
+      Serial.println(pauseExpired ? F("[A31] ABORT: pause expired") :
+                                  F("[A31] ABORT: RC/mode/safety while paused"));
+      espSerial.println(pauseExpired ? F("MISSION_STATUS:A31_ABORTED:PAUSE_EXPIRED") :
+                                      F("MISSION_STATUS:A31_ABORTED:PAUSE_UNSAFE"));
+    } else if (currentState == STATE_DISARMED) {
+      // CH5 DISARM is an immediate output interlock. Always invalidate any
+      // prior armed-HOLD dwell before considering a fresh post-rearm launch.
+      a31HoldConfirmedAtMs = 0;
+      if (!a31PauseNeedsRearm) {
+        a31PauseNeedsRearm = true;
+        a31PauseRearmed = false;
+        stopAllOutputs();
+        Serial.println(F("[A31] DISARMED DURING PAUSE: qualified rearm required"));
+        espSerial.println(F("MISSION_STATUS:A31_PAUSED:DISARM_REARM_REQUIRED"));
+      }
+    } else if (currentState == STATE_HOLD && a31ArmedHealthy) {
+      // HOLD dwell begins only AFTER qualified rearm; a disarmed HOLD period
+      // never counts toward motor restart authorization.
+      if ((!a31PauseNeedsRearm || a31PauseRearmed) && !a31HoldConfirmedAtMs)
+        a31HoldConfirmedAtMs = now;
+    } else if (a31SemiNow && !a31PreviousSemi) {
+      // A deliberate post-rearm HOLD dwell plus a FRESH HOLD->SEMI edge are
+      // required. Merely moving CH5 from DISARM to ARM cannot start the rover.
+      const bool holdConfirmed = a31HoldConfirmedAtMs &&
+          now - a31HoldConfirmedAtMs >= A31_PAUSE_HOLD_CONFIRM_MS;
+      const bool rearmConfirmed = !a31PauseNeedsRearm || a31PauseRearmed;
+      const bool sonarClear = !SONAR_INTERLOCK_ENABLED || sonarForwardClear();
+      if (a31ArmedHealthy && holdConfirmed && rearmConfirmed && espInTxMode && sonarClear) {
+        a31ClearPause();
+        a31ArmedHoldSinceRearm = false;
+        a31SawArmedHold = false;
+        a31StartIntentValid = false;
+        a31SettleUntil = 0;
+        a31StepStartedMs = now;  // command timer restarts from frozen remainder
+        a31LastEncoderProgressLeftMs = now;
+        a31LastEncoderProgressRightMs = now;
+        const DriveEncoderSnapshot enc = readDriveEncoders();
+        a31LastLeftTicks = enc.left;
+        a31LastRightTicks = enc.right;
+        benchLastTickMs = now;
+        resetDriveSync();         // do not reuse old encoder synchronization error
+        Serial.print(F("[A31] RESUMED; remaining_ms=")); Serial.println(benchRemainingMs);
+        espSerial.print(F("MISSION_STATUS:A31_RESUMED:")); espSerial.println(benchRemainingMs);
+      } else {
+        // An early SEMI attempt never becomes a delayed auto-start.
+        a31HoldConfirmedAtMs = 0;
+        const char* reason = !a31ArmedHealthy ? "RC_NOT_READY" :
+            !rearmConfirmed ? "REARM_NOT_CONFIRMED" :
+            !holdConfirmed ? "ARMED_HOLD_700MS_REQUIRED" :
+            !espInTxMode ? "ROVER_RADIO_NOT_TX" :
+            !sonarClear ? "SONAR_NOT_CLEAR" : "CHECK_INTERLOCK";
+        Serial.print(F("[A31] RESUME BLOCKED: ")); Serial.println(reason);
+        espSerial.print(F("MISSION_STATUS:A31_RESUME_BLOCKED:")); espSerial.println(reason);
+      }
+    }
+  } else if (missionActive && !a31MissionPaused && (!a31SemiNow || !a31ArmedHealthy)) {
     missionActive = false;
+    a31ClearPause();
     a31MissionStaged = false;
     a31StartIntentValid = false;
+    a31ArmedHoldSinceRearm = false;
+    a31SawArmedHold = false;
     currentCommand = "";
     missionSequence = "";
-    stopDriveMotors();
+    benchRemainingMs = 0;
+    a31SettleUntil = 0;
+    stopAllOutputs();
     Serial.println(F("[A31] ABORT: RC mode / safety interruption"));
     espSerial.println(F("MISSION_STATUS:A31_ABORTED"));
   }
@@ -1366,7 +1592,7 @@ if (millis() - lastSonarDebug >= 1000) {
     a31ArmedHoldSinceRearm = true;
     if (a31MissionStaged) a31SawArmedHold = true;
   }
-  if (a31SemiNow && !a31PreviousSemi && a31ArmedHoldSinceRearm) {
+  if (!a31MissionPaused && a31SemiNow && !a31PreviousSemi && a31ArmedHoldSinceRearm) {
     a31StartIntentValid = true;
     a31SemiSelectedAtMs = millis();
     a31PendingRadioNoticeSent = false;
@@ -1395,7 +1621,7 @@ if (millis() - lastSonarDebug >= 1000) {
       rcFresh && !rcRearmRequired && armPulse >= 1500 &&
       currentState == STATE_HOLD && rcNeutral && espInTxMode &&
       !safetyLatched && !driveSyncFaultLatched &&
-      (!SONAR_INTERLOCK_ENABLED || (!forwardBlocked && sonarValid));
+      (!SONAR_INTERLOCK_ENABLED || sonarForwardClear());
   static bool a31WasReadyForSwitch = false;
   if (a31ReadyForSwitch && !a31WasReadyForSwitch) {
     Serial.println(F("[A31] READY: switch CH6 HOLD to SEMI_AUTO to start"));
@@ -1409,7 +1635,7 @@ if (millis() - lastSonarDebug >= 1000) {
     a31MissionStaged, a31StartIntentValid, a31ArmedHoldSinceRearm,
     rcFresh, rcRearmRequired, armPulse >= 1500, a31SemiNow,
     espInTxMode, rcNeutral, safetyLatched, driveSyncFaultLatched,
-    SONAR_INTERLOCK_ENABLED, sonarValid, forwardBlocked,
+    SONAR_INTERLOCK_ENABLED, sonarForwardClear(), !sonarForwardClear(),
     static_cast<uint32_t>(millis()), static_cast<uint32_t>(a31SemiSelectedAtMs)
   };
   if (SemiAutoStartPolicy::canStart(a31StartInputs)) {
@@ -1439,7 +1665,7 @@ if (millis() - lastSonarDebug >= 1000) {
       !rcNeutral ? "CENTER_STICKS" :
       safetyLatched ? "TILT_FAULT" :
       driveSyncFaultLatched ? "ENCODER_FAULT" :
-      (SONAR_INTERLOCK_ENABLED && (!sonarValid || forwardBlocked)) ? "SONAR_NOT_CLEAR" :
+      (SONAR_INTERLOCK_ENABLED && !sonarForwardClear()) ? "SONAR_NOT_CLEAR" :
       "CHECK_START_CONDITIONS";
     espSerial.print(F("MISSION_STATUS:A31_START_BLOCKED:"));
     espSerial.println(reason);
@@ -1486,7 +1712,8 @@ if (millis() - lastA31Debug >= 500) {
 
   a31PreviousSemi = a31SemiNow;
 
-  // The mission clock does not advance outside SEMI_AUTO or during safety recovery.
+  // Mission time is explicitly frozen at HOLD and restarted on deliberate resume.
+  // This legacy tick is for diagnostics; it does NOT authorize movement.
   if (currentState != STATE_SEMI_AUTO || safetyLatched || recoveryState == REC_RETRACT)
     benchLastTickMs = millis();
 
@@ -1849,6 +2076,7 @@ void startBenchDetour() {
 void a31StopAndHold(const __FlashStringHelper *reason) {
   stopAllOutputs();
   missionActive = false;
+  a31ClearPause();
   a31MissionStaged = false;
   a31SawArmedHold = false;
   currentCommand = "";
@@ -1858,7 +2086,7 @@ void a31StopAndHold(const __FlashStringHelper *reason) {
 }
 
 void processAutoDrive() {
-  if (!missionActive) { stopAllOutputs(); return; }
+  if (!missionActive || a31MissionPaused) { stopAllOutputs(); return; }
   if (safetyLatched || driveSyncFaultLatched) {
     a31StopAndHold(F("SAFETY_LATCH")); return;
   }
@@ -1872,18 +2100,38 @@ void processAutoDrive() {
     if (!missionActive) return;
   }
   const char op = currentCommand.charAt(1);
-  // All motion needs a functioning forward-looking sensor for the first test.
-  // Only FORWARD is electronically protected by this single HC-SR04.
-    if (SONAR_INTERLOCK_ENABLED && //new
-      (!sonarValid || forwardBlocked || (op == 'F' && currentObstacleDist <= OBSTACLE_DISTANCE_CM))) {
-    a31StopAndHold(F("SONAR_UNKNOWN_OR_OBSTACLE")); return;
-  }//new
-  
-  //originally
-  // if (!sonarValid || forwardBlocked || (op == 'F' && currentObstacleDist <= OBSTACLE_DISTANCE_CM)) {
-  //   a31StopAndHold(F("SONAR_UNKNOWN_OR_OBSTACLE")); return;
-  // }
-//
+#if BENCH_NO_ECHO_IS_CLEAR
+  // BENCH: do not latch an entire 30+ second leg on one isolated anomalous
+  // echo. First suspicious sample: motor PWM ZERO while verification occurs.
+  // Second suspicious sample: a normal persistent SONAR pause (manual resume).
+  if (SONAR_INTERLOCK_ENABLED && op == 'F' && sonarBenchCheckPending) {
+    if (!a31SonarVerificationActive) {
+      a31SonarVerificationActive = true;
+      a31SonarVerificationSinceMs = now;
+    }
+    stopDriveMotors();
+    stopActuator();
+    return;
+  }
+  if (a31SonarVerificationActive) {
+    // The next ping cleared the transient, or confirmed a hard block.
+    // Both outcomes must exclude all time spent with motor PWM at zero.
+    a31StepStartedMs += now - a31SonarVerificationSinceMs;
+    a31LastEncoderProgressLeftMs = now;
+    a31LastEncoderProgressRightMs = now;
+    a31SonarVerificationActive = false;
+    a31SonarVerificationSinceMs = 0;
+    resetDriveSync();
+  }
+#endif
+  // In STRICT mode a single close/invalid reading still stops immediately.
+  // In BENCH mode only confirmed errors cause a persistent sonar pause.
+  if (SONAR_INTERLOCK_ENABLED && op == 'F' && !sonarForwardClear()) {
+    if (!sonarLastAssessmentMs || now - sonarLastAssessmentMs > SONAR_FRESH_MS)
+      sonarDecision = "STALE_SONAR_DATA";
+    a31BeginPause("SONAR", true, false);
+    return;
+  }
   const DriveEncoderSnapshot counts = readDriveEncoders();
   // Keep each wheel's last progress separately. One wheel must NEVER hide the
   // other's failure; unlike a joint checkpoint, logs identify which wheel lags.
@@ -1922,11 +2170,16 @@ void fetchNextAutoCommand() {
     missionSequence.remove(0, 1);
   if (!missionSequence.length()) {
     missionActive = false;
+    a31ClearPause();
     a31MissionStaged = false;
     currentCommand = "";
     stopAllOutputs();
     Serial.println(F("[A31] LEG COMPLETE - OPERATOR ARRIVAL CHECK REQUIRED"));
     espSerial.println(F("MISSION_STATUS:A31_LEG_COMPLETE"));
+    // Do not imply arrival or auto-start a subsequent leg. The operator must
+    // go back to HOLD and explicitly authorize a fresh staged mission.
+    a31StartIntentValid = false;
+    a31SawArmedHold = false;
     return;
   }
   int commaIndex = missionSequence.indexOf(',');
@@ -2120,7 +2373,16 @@ void stopAllOutputs() {
 // =================================================================
 
 void updateUltrasonicDistance() {
-  if (!ULTRASONIC_ENABLED) return;
+  if (!ULTRASONIC_ENABLED) {
+    sonarValid = false;
+    sonarBenchCheckPending = false;
+    sonarSuspiciousSamples = 0;
+    sonarBenchNoEchoClear = false;
+    forwardBlocked = true;
+    clearSonarSamples = 0;
+    sonarDecision = "DISABLED_FAIL_CLOSED";
+    return;
+  }
   if (millis() - lastPingTime < PING_INTERVAL_MS) return;
   lastPingTime = millis();
 
@@ -2130,50 +2392,115 @@ void updateUltrasonicDistance() {
   delayMicroseconds(10);
   digitalWrite(PIN_TRIG, LOW);
 
-  // Echo pulse length is reported so we can diagnose actual sensor readings.
-  sonarEchoUs = pulseIn(PIN_ECHO, HIGH, 25000UL);
-  sonarValid = sonarEchoUs != 0;
+  // No echo is normal in empty space, but is also possible with sensor failure.
+  // Short timeout avoids repeatedly blocking safety/LoRa processing for 25 ms.
+  sonarEchoUs = pulseIn(PIN_ECHO, HIGH, SONAR_ECHO_TIMEOUT_US);
+  const unsigned long now = millis();
+  sonarLastAssessmentMs = now;
+  const unsigned long measuredCm = (unsigned long)(sonarEchoUs * 0.0343f / 2.0f);
 
-  if (sonarValid) {
-    currentObstacleDist = (unsigned int)(sonarEchoUs * 0.0343f / 2.0f);
-    sonarLastGood = millis();
-    noEchoSamples = 0;
-
-    if (currentObstacleDist <= OBSTACLE_DISTANCE_CM) {
-      forwardBlocked = true;
+  if (sonarEchoUs == 0) {
+    sonarValid = false;  // Never mislabel NO_ECHO as a genuine range reading.
+    if (noEchoSamples < SONAR_NO_ECHO_CLEAR_SAMPLES) ++noEchoSamples;
+    sonarInvalidSamples = 0;
+#if BENCH_NO_ECHO_IS_CLEAR
+    const bool wasBenchNoEchoClear = sonarBenchNoEchoClear;
+    sonarBenchCheckPending = false;
+    sonarSuspiciousSamples = 0;
+    // BENCH ONLY: after 3 no-echo pings, no reflection is assumed to mean
+    // no detected target. Preserve a previously verified, fresh clear reading
+    // during the short transition to NO_ECHO (do not pause on the first miss).
+    const bool recentClearEcho = !forwardBlocked && sonarLastGood != 0 &&
+        now - sonarLastGood <= SONAR_FRESH_MS;
+    if (noEchoSamples >= SONAR_NO_ECHO_CLEAR_SAMPLES || recentClearEcho ||
+        (!forwardBlocked && wasBenchNoEchoClear)) {
+      forwardBlocked = false;
+      sonarBenchNoEchoClear = true;
       clearSonarSamples = 0;
-      sonarDecision = "OBSTACLE";
-    } else if (currentObstacleDist >= OBSTACLE_RESUME_CM) {
-      if (clearSonarSamples < SONAR_CLEAR_SAMPLES) ++clearSonarSamples;
-      if (clearSonarSamples >= SONAR_CLEAR_SAMPLES) {
-        forwardBlocked = false;
-        sonarDecision = "CLEAR";
-      } else {
-        sonarDecision = "CONFIRM_CLEAR";
-      }
+      currentObstacleDist = 999;  // Explicitly UNKNOWN, not "999 cm clear".
+      sonarDecision = noEchoSamples >= SONAR_NO_ECHO_CLEAR_SAMPLES ?
+          "BENCH_NO_ECHO_CLEAR" : "BENCH_NO_ECHO_GRACE";
+      return;
+    }
+#endif
+    forwardBlocked = true;
+    sonarBenchNoEchoClear = false;
+    sonarBenchCheckPending = false;
+    clearSonarSamples = 0;
+    currentObstacleDist = 999;
+    sonarDecision = "NO_ECHO_UNKNOWN_STOP";
+    return;
+  }
+
+  noEchoSamples = 0;
+  // A nonzero but malformed/physically implausible echo is NOT open space.
+  if (measuredCm < SONAR_MIN_CM || measuredCm > SONAR_MAX_CM) {
+    sonarValid = false;
+    if (sonarInvalidSamples < SONAR_INVALID_SAMPLES_TO_STOP) ++sonarInvalidSamples;
+#if BENCH_NO_ECHO_IS_CLEAR
+    if (sonarSuspiciousSamples < SONAR_BENCH_SUSPICIOUS_CONFIRM_SAMPLES)
+      ++sonarSuspiciousSamples;
+    if (sonarSuspiciousSamples < SONAR_BENCH_SUSPICIOUS_CONFIRM_SAMPLES &&
+        !forwardBlocked) {
+      // One malformed nonzero echo may be electrical/acoustic interference.
+      // Require a new ping, with zero motor PWM in the interim.
+      sonarBenchCheckPending = true;
+      sonarDecision = "BENCH_VERIFY_INVALID";
+      return;
+    }
+#endif
+    // Repeated invalid readings are NOT clear in either policy.
+    sonarBenchCheckPending = false;
+    sonarBenchNoEchoClear = false;
+    forwardBlocked = true;
+    clearSonarSamples = 0;
+    currentObstacleDist = 999;
+    sonarDecision = "INVALID_ECHO_STOP";
+    return;
+  }
+
+  sonarInvalidSamples = 0;
+  sonarValid = true;
+  currentObstacleDist = (unsigned int)measuredCm;
+  sonarLastGood = now;
+
+  if (currentObstacleDist <= OBSTACLE_DISTANCE_CM) {
+#if BENCH_NO_ECHO_IS_CLEAR
+    if (sonarSuspiciousSamples < SONAR_BENCH_SUSPICIOUS_CONFIRM_SAMPLES)
+      ++sonarSuspiciousSamples;
+    if (sonarSuspiciousSamples < SONAR_BENCH_SUSPICIOUS_CONFIRM_SAMPLES &&
+        !forwardBlocked) {
+      // Do not accept this close echo as clear: processAutoDrive() temporarily
+      // stops PWM and freezes the TF timer until the next sonar sample.
+      sonarBenchCheckPending = true;
+      sonarDecision = "BENCH_VERIFY_CLOSE";
+      return;
+    }
+#endif
+    sonarBenchCheckPending = false;
+    sonarBenchNoEchoClear = false;
+    forwardBlocked = true;
+    clearSonarSamples = 0;
+    sonarDecision = "OBSTACLE";
+  } else if (currentObstacleDist >= OBSTACLE_RESUME_CM) {
+    sonarSuspiciousSamples = 0;
+    sonarBenchCheckPending = false;
+    sonarBenchNoEchoClear = false;
+    if (clearSonarSamples < SONAR_CLEAR_SAMPLES) ++clearSonarSamples;
+    if (clearSonarSamples >= SONAR_CLEAR_SAMPLES) {
+      forwardBlocked = false;
+      sonarDecision = "CLEAR";
     } else {
-      clearSonarSamples = 0;
-      // Between stop/resume thresholds, retain the previous blocked state.
-      sonarDecision = forwardBlocked ? "HYSTERESIS_BLOCK" : "HYSTERESIS_GO";
+      // Keep previous clear permission on successive valid far pings.
+      sonarDecision = "CONFIRM_CLEAR";
     }
   } else {
-    currentObstacleDist = 999; // Not an actual measured distance!
+    sonarSuspiciousSamples = 0;
+    sonarBenchCheckPending = false;
+    sonarBenchNoEchoClear = false;
     clearSonarSamples = 0;
-    if (noEchoSamples < SONAR_NO_ECHO_CLEAR_SAMPLES) ++noEchoSamples;
-
-    if (SONAR_BENCH_NO_ECHO_CLEAR) {
-      // TEST MODE: no echo is treated as clear after repeated timeouts.
-      // WARNING: a disconnected or failed sensor can also produce no echo.
-      if (noEchoSamples >= SONAR_NO_ECHO_CLEAR_SAMPLES) {
-        forwardBlocked = false;
-        sonarDecision = "NO_ECHO_BENCH_GO";
-      } else {
-        sonarDecision = "NO_ECHO_WAIT";
-      }
-    } else {
-      forwardBlocked = true;
-      sonarDecision = "NO_ECHO_FAILSAFE";
-    }
+    // Valid 10-20 cm echo: preserve previous blocked/clear hysteresis state.
+    sonarDecision = forwardBlocked ? "HYSTERESIS_BLOCK" : "HYSTERESIS_GO";
   }
 }
 
@@ -2360,7 +2687,7 @@ void printDebugTelemetry(
   Serial.print(F("cm | SonarValid:"));
   Serial.print(sonarValid);
   Serial.print(F(" | FwdBlocked:"));
-  Serial.print(ULTRASONIC_ENABLED && forwardBlocked);
+  Serial.print(SONAR_INTERLOCK_ENABLED && !sonarForwardClear());
   Serial.print(F(" | SonarStatus:"));
   if (!ULTRASONIC_ENABLED) Serial.print(F("DISABLED"));
   else if (!sonarValid) Serial.print(F("NO_ECHO_OR_OUT_OF_RANGE"));
@@ -2375,6 +2702,8 @@ void printDebugTelemetry(
   Serial.print(noEchoSamples);
   Serial.print(F(" | SonarDecision:"));
   Serial.print(sonarDecision);
+  Serial.print(F(" | SonarVerifyPending:"));
+  Serial.print(sonarBenchCheckPending);
   Serial.print(F(" | StopCm:"));
   Serial.print(OBSTACLE_DISTANCE_CM);
   Serial.print(F(" | ResumeCm:"));
@@ -2387,8 +2716,24 @@ void printDebugTelemetry(
 
   Serial.print(F(" | ACT_PWM:"));
   Serial.print(debugActuatorPwm);
+  Serial.print(F(" | EncoderFaultLatched:"));
+  Serial.print(driveSyncFaultLatched);
   Serial.print(F(" | MissionActive:"));
   Serial.print(missionActive);
+  Serial.print(F(" | MissionPaused:"));
+  Serial.print(a31MissionPaused);
+  Serial.print(F(" | PauseSonar:"));
+  Serial.print(a31PauseSonar);
+  Serial.print(F(" | LastSonarPause:"));
+  Serial.print(a31LastSonarPauseDecision);
+  Serial.print(F(" | LastSonarEchoUs:"));
+  Serial.print(a31LastSonarPauseEchoUs);
+  Serial.print(F(" | LastSonarCm:"));
+  Serial.print(a31LastSonarPauseCm);
+  Serial.print(F(" | PauseNeedsRearm:"));
+  Serial.print(a31PauseNeedsRearm);
+  Serial.print(F(" | PauseRearmed:"));
+  Serial.print(a31PauseRearmed);
   Serial.print(F(" | MissionStep:"));
   Serial.print(benchStepNumber);
   Serial.print('/');
@@ -2512,13 +2857,16 @@ void processEspLine(const char *line) {
       Serial.println(imuValid);
     }
   } else if (strncmp(line, "RCV:", 4) == 0) {
+    // ACK2 from the rover ESP32 means UART queued, not that the Mega accepted.
+    // Give each Mega rejection an explicit reason on the existing Serial2 link.
     if (driveSyncFaultLatched) {
-      Serial.println(F("[MISSION] Rejected while encoder fault latched; reset required"));
-      espSerial.println(F("MISSION_STATUS:REJECTED"));
+      Serial.println(F("[MISSION] Rejected: encoder fault latched; inspect before reset"));
+      espSerial.println(F("MISSION_STATUS:A31_REJECTED:ENCODER_FAULT"));
       return;
     }
     if (safetyLatched) {
-      Serial.println(F("[MISSION] Rejected while tilt fault latched"));
+      Serial.println(F("[MISSION] Rejected: tilt fault latched"));
+      espSerial.println(F("MISSION_STATUS:A31_REJECTED:TILT_FAULT"));
       return;
     }
     String incoming = String(line + 4);
@@ -2527,15 +2875,34 @@ void processEspLine(const char *line) {
     // TF / TL / TR explicitly distinguish seconds from legacy distances.
     bool incomingTimed = incoming.startsWith("T");
     // A3.1: legacy meter/degree missions cannot command motors.
-    if (missionActive || a31MissionStaged) {
-      Serial.println(F("[A31] REJECTED: leg already staged/running"));
-      espSerial.println(F("MISSION_STATUS:A31_REJECTED"));
+    if (missionActive) {
+      Serial.println(F("[A31] REJECTED: previous mission still running"));
+      espSerial.println(F("MISSION_STATUS:A31_REJECTED:ACTIVE"));
       return;
     }
     if (!validateMission(incoming, incomingTimed)) {
       Serial.println(F("[MISSION REJECTED] Invalid, oversized, or unsafe command"));
-      espSerial.println(F("MISSION_STATUS:REJECTED"));
+      espSerial.println(F("MISSION_STATUS:A31_REJECTED:INVALID_COMMAND"));
       return;
+    }
+    // A previously STAGED, never started mission otherwise blocks all later
+    // uploads indefinitely. Permit replacement ONLY when the rover is
+    // DISARMED and software output authorization is false. No moving mission
+    // can be replaced. A fresh operator HOLD->SEMI transition is still required.
+    if (a31MissionStaged) {
+      if (currentState != STATE_DISARMED || rcOutputAuthorized) {
+        Serial.println(F("[A31] REJECTED: disarm before replacing a staged mission"));
+        espSerial.println(F("MISSION_STATUS:A31_REJECTED:DISARM_TO_REPLACE"));
+        return;
+      }
+      a31MissionStaged = false;
+      a31SawArmedHold = false;
+      a31StartIntentValid = false;
+      a31PendingRadioNoticeSent = false;
+      a31ArmedHoldSinceRearm = false;
+      a31SettleUntil = 0;
+      Serial.println(F("[A31] Unstarted mission replaced while disarmed"));
+      espSerial.println(F("MISSION_STATUS:A31_REPLACED"));
     }
     // Retain the complete mission independent of LoRa mode or manual/hold state.
     savedMission = incoming;
@@ -2545,7 +2912,10 @@ void processEspLine(const char *line) {
     missionTimedMode = incomingTimed;
     missionActive = false;
     a31SawArmedHold = false;
-    a31MissionStaged = true; // Stage only; a recent explicit SEMI selection may start once ready
+    a31MissionStaged = true; // Staging never energizes motors; fresh RC authorization required
+    a31ClearPause();
+    // A previous leg's 200 ms settling timer must not contaminate a new upload.
+    a31SettleUntil = 0;
     benchRemainingMs = 0;
     benchLastTickMs = millis();
     benchStepNumber = 0;
@@ -2651,6 +3021,7 @@ void latchTiltFault(const char *reason) {
   faultOrigin = currentState;
   recoveryCompleted = false;
   safetyLatched = true;
+  a31ClearPause();
   faultReverseActive = false;
   faultReverseNeedsNeutral = true; // left stick must be released after the fault
   missionActive = false;

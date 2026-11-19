@@ -2,6 +2,9 @@
 pub const MAX_PACKET_BYTES: usize = 255;
 pub const HEADER_BYTES: usize = 29; // M2:<16 hex ID>:<8 hex CRC32>:
 pub const MAX_WAYPOINTS: usize = 10;
+// Must match the A3.1 Mega's A31_MAX_STEP_MS = 60000 and desktop MAX_LEG_S.
+pub const MAX_TIMED_LEG_SECONDS: f64 = 60.000;
+pub const MIN_TIMED_LEG_SECONDS: f64 = 0.100;
 
 pub fn validate_sequence(sequence: &str) -> Result<(), String> {
     // A3.1 Mega supervised forward-only command. Accept a single bounded TF
@@ -10,8 +13,8 @@ pub fn validate_sequence(sequence: &str) -> Result<(), String> {
         if sequence.len() > 9 || seconds.is_empty() ||
             !seconds.bytes().all(|b| b.is_ascii_digit() || b == b'.') ||
             seconds.bytes().filter(|b| *b == b'.').count() > 1 ||
-            !seconds.parse::<f64>().is_ok_and(|n| n.is_finite() && (0.100..=2.000).contains(&n)) {
-            return Err("Timed movement must be a single TF0.100–TF2.000 command.".into());
+            !seconds.parse::<f64>().is_ok_and(|n| n.is_finite() && (MIN_TIMED_LEG_SECONDS..=MAX_TIMED_LEG_SECONDS).contains(&n)) {
+            return Err("Timed movement must be a single TF0.100–TF60.000 command.".into());
         }
         return Ok(());
     }
@@ -94,10 +97,10 @@ mod tests {
     }
     #[test]
     fn bounded_straight_leg_does_not_permit_unbounded_motion() {
-        for s in ["TF0.100", "TF0.250", "TF1.500", "TF2.000"] {
+        for s in ["TF0.100", "TF0.250", "TF1.500", "TF2.000", "TF20.000", "TF45.000", "TF60.000"] {
             assert!(validate_sequence(s).is_ok(), "{s}");
         }
-        for s in ["TF0.099", "TF2.001", "TF2.000,TF2.000", "TL0.500", "TR0.500", "TFNaN", "TF", "TF1..0", "TF-1", "TF1e3"] {
+        for s in ["TF0.099", "TF60.001", "TF61.000", "TF60.000,TF1.000", "TL0.500", "TR0.500", "TFNaN", "TF", "TF1..0", "TF-1", "TF1e3"] {
             assert!(validate_sequence(s).is_err(), "{s}");
         }
     }

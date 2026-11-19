@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { CheckCircle2, RadioTower, X } from 'lucide-react';
 import { refreshLoRaConnection, useLoRaConnection } from '../hooks/useLoRaConnection';
 import { missionExperiment } from '../hooks/useMissionExperiment';
+import { FORWARD_MPS, MAX_LEG_S } from '../utils/pointToPointMission.js';
 import { getDeploymentFailure, getDeploymentProgress, isReceiverUnavailable } from '../utils/loraStatus';
 import LoRaConnectionStatus from './LoRaConnectionStatus';
 import MissionStatusReport from './MissionStatusReport';
@@ -185,7 +186,7 @@ export default function MissionDeploymentWizard({ plan, onClose }) {
         <div className="mission-deployment-payload">
           <span>{timed ? 'Forward-only mission' : 'Mission payload'}</span>
           <code>{plan.sequence}</code>
-          {timed && <small>{plan.durationS.toFixed(3)} seconds · limited single leg</small>}
+          {timed && <small>{plan.durationS.toFixed(3)} seconds · approximately {(plan.durationS * FORWARD_MPS).toFixed(2)} m at {FORWARD_MPS.toFixed(2)} m/s · max {MAX_LEG_S.toFixed(3)} seconds per leg</small>}
         </div>
         {progress && <p className={`mission-deployment-progress${showTransfer ? ' mission-deployment-progress--active' : ''}`} role="status" aria-live="polite">{progress}</p>}
 
@@ -230,7 +231,7 @@ export default function MissionDeploymentWizard({ plan, onClose }) {
 
         {afterUpload && (
           <>
-            <h3 className="mission-deployment-step-title">Step 2 · Restore telemetry and authorize movement</h3>
+            <h3 className="mission-deployment-step-title">Step 3 · Restore telemetry and authorize movement</h3>
             <p className="mission-deployment-intro">Follow the switch guide again. Uploading never starts the rover; movement needs deliberate physical RC authorization.</p>
             <div className="mission-controller-step">
               <ControllerReference />
@@ -247,7 +248,7 @@ export default function MissionDeploymentWizard({ plan, onClose }) {
                   <ChecklistItem checked={startChecks.armedHold} onChange={v => updateStart('armedHold', v)} disabled={!telemetryReady || !startChecks.neutral}
                     title="3 · SA (CH5) → ARM; SB stays HOLD" detail="Arm with neutral sticks. Ensure the rover has observed armed HOLD before proceeding." />
                   <ChecklistItem checked={startChecks.semiAuto} onChange={v => updateStart('semiAuto', v)} disabled={!telemetryReady || !startChecks.armedHold}
-                    title="4 · SB (CH6) HOLD → SEMI_AUTO" detail="Authorize this one short forward leg while supervising the rover." />
+                    title="4 · SB (CH6) HOLD → SEMI_AUTO" detail="Authorize this timed forward leg (up to 60 seconds). Stay ready to use HOLD / DISARM until both tracks stop." />
                 </fieldset>
                 <p className="mission-controller-note">The desktop cannot verify these RC switch positions or physically stop the rover. Use CH6 HOLD / CH5 DISARM immediately if needed.</p>
                 <button type="button" className="mission-deployment-primary" disabled={!telemetryReady || !allChecked(startChecks)} onClick={close}>
@@ -255,7 +256,7 @@ export default function MissionDeploymentWizard({ plan, onClose }) {
                 </button>
               </div>
             </div>
-            {timed && <p className="mission-deployment-caution"><strong>Arrival is not verified.</strong> This is a bounded timed leg, not GPS-guided travel to Pin {plan.destinationPin}. Observe the stop and select a new Point A before another leg.</p>}
+            {timed && <p className="mission-deployment-caution"><strong>Arrival is not verified.</strong> This is a timed leg based on estimated speed, not GPS-guided travel to Pin {plan.destinationPin}. Supervise the entire movement, verify both tracks stop, and select a new Point A before another leg.</p>}
           </>
         )}
 

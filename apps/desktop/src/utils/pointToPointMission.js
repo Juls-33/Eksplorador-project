@@ -1,10 +1,10 @@
 import { calculateBearing, calculateDistance } from './geo.js';
 
-// A3.1 Mega accepts a supervised, timed one-leg TF command, max 2 seconds.
+// A3.1 Mega accepts one supervised timed TF command, max 60 seconds.
 // The map estimates direction/distance; this is NOT GPS waypoint tracking.
 export const FORWARD_MPS = 0.25; // measured field estimate; ground speed varies
 export const MIN_LEG_S = 0.100;
-export const MAX_LEG_S = 2.000;
+export const MAX_LEG_S = 60.000;
 export const GPS_FRESH_MS = 5000; // backend FUS planning_gps freshness limit
 
 export function validPoint(point) {
@@ -46,8 +46,20 @@ export function makeStraightLeg({ start, target, pinIndex, now = Date.now(), gps
     throw new Error('Point B is too close for a bounded timed command. Inspect arrival or drive manually.');
   }
   const estimatedTotalS = distanceM / FORWARD_MPS;
-  const durationS = Math.floor(Math.min(MAX_LEG_S, estimatedTotalS) * 1000) / 1000;
-  if (durationS < MIN_LEG_S) throw new Error('The forward command would be shorter than 0.100 seconds.');
+  // Never silently cap the distance: Point B must remain the planned destination.
+  if (!Number.isFinite(estimatedTotalS) || estimatedTotalS > MAX_LEG_S) {
+    throw new Error(
+      `Point B is ${distanceM.toFixed(2)} m away (${estimatedTotalS.toFixed(3)} s estimated). ` +
+      `A single forward leg supports at most ${MAX_LEG_S.toFixed(3)} s ` +
+      `(${(MAX_LEG_S * FORWARD_MPS).toFixed(2)} m estimated). Choose a closer destination ` +
+      'rather than silently truncating the command.'
+    );
+  }
+  // TF uses milliseconds; rounding introduces at most 0.5 ms of timing error.
+  const durationS = Math.round(estimatedTotalS * 1000) / 1000;
+  if (durationS < MIN_LEG_S || durationS > MAX_LEG_S) {
+    throw new Error('The calculated TF duration is outside the permitted 0.100–60.000 s range.');
+  }
   const sequence = `TF${durationS.toFixed(3)}`;
   return {
     protocol: 'A31_TIMED', firmware: 'A3.1', sequence,
@@ -57,7 +69,7 @@ export function makeStraightLeg({ start, target, pinIndex, now = Date.now(), gps
     legs: [{ pin: pinIndex + 1, coordinates: [...target], distanceM, bearingDegrees: bearing }],
     distanceM, bearing, estimatedTotalS, durationS,
     estimatedLegM: durationS * FORWARD_MPS,
-    partial: durationS + 0.0001 < estimatedTotalS,
+    partial: false, // All accepted missions represent the entire estimated A-to-B leg.
     limitations: 'Forward timed travel only; manually aligned heading, no onboard coordinate targeting or automatic arrival confirmation.'
   };
 }

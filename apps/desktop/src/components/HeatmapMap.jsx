@@ -4,7 +4,7 @@ import { AlertTriangle, Crosshair, Wifi, WifiOff, CloudOff, MapPin, Search, X } 
 import { appLocalDataDir, join } from '@tauri-apps/api/path';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { generateIDWHeatmapGrid } from '../utils/geo';
-import { autoHeatmapBoundary, heatmapCoverageOpacity, heatmapSupportSites } from '../utils/heatmapCoverage';
+import { autoHeatmapBoundary } from '../utils/heatmapCoverage';
 import { fetchAllCoverage } from '../services/tileStorage';
 import { searchPlaces, MIN_QUERY_LENGTH } from '../services/placeSearch';
 import AnimatedMenu from './ui/AnimatedMenu';
@@ -55,6 +55,7 @@ export default function HeatmapMap({
   valueToIntensity = (value) => value,
   maxInfluenceRadiusM = 55,
   minInterpolationNeighbors = 1,
+  localCoverageRadiusM = 20,
   focusPoints = [],
   labeledPoints = [],
   roverPos = [14.6095, 120.9895],
@@ -530,13 +531,14 @@ export default function HeatmapMap({
     if (maxLat <= minLat || maxLng <= minLng) return;
     // A finer raster + feathered alpha avoids the blocky square appearance
     // without changing any measured or interpolated parameter values.
-    const resolution = 96;
-    const supportSites = heatmapSupportSites(heatPoints);
+    const resolution = 256;
     const readings = generateIDWHeatmapGrid(heatPoints, polygon, {
       gridResolution: resolution,
       power: 2,
       maxInfluenceRadiusM,
-      minNeighbors: minInterpolationNeighbors
+      minNeighbors: minInterpolationNeighbors,
+      localCoverageRadiusM,
+      includeCoverage: true
     });
     if (!readings.length) return;
     const canvas = document.createElement('canvas');
@@ -547,12 +549,9 @@ export default function HeatmapMap({
     // Overwrite each pixel individually: duplicate grid/source coordinates
     // must not artificially intensify the display at overlapping locations.
     // Canvas 'copy' composite mode would erase earlier pixels of the cloud.
-    for (const [lat, lng, measuredValue] of readings) {
+    for (const [lat, lng, measuredValue, coverageAlpha] of readings) {
       const intensity = valueToIntensity(measuredValue);
       if (intensity === null || !Number.isFinite(intensity)) continue;
-      const coverageAlpha = heatmapCoverageOpacity(
-        [lat, lng], supportSites, maxInfluenceRadiusM, minInterpolationNeighbors
-      );
       if (coverageAlpha <= 0) continue;
       const x = Math.max(0, Math.min(resolution, Math.round((lng-minLng)/(maxLng-minLng)*resolution)));
       const y = Math.max(0, Math.min(resolution, Math.round((maxLat-lat)/(maxLat-minLat)*resolution)));
@@ -567,7 +566,7 @@ export default function HeatmapMap({
       [[minLat,minLng],[maxLat,maxLng]],
       { opacity: 0.73, interactive: false, className: 'eksplorador-nonadditive-heatmap' }
     ).addTo(mapInstanceRef.current);
-  }, [heatPoints, boundary, gradient, valueToIntensity, maxInfluenceRadiusM, minInterpolationNeighbors]);
+  }, [heatPoints, boundary, gradient, valueToIntensity, maxInfluenceRadiusM, minInterpolationNeighbors, localCoverageRadiusM]);
 
   // Frame the selected historical samples.
   useEffect(() => {

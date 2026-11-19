@@ -1,0 +1,68 @@
+// EKSPLORADOR_OBSTACLE_ALERT_V1: independent, bounded alert queue.
+// A safety stop is enforced by the UNCHANGED Mega. This path only notifies.
+char obstacleAlertPacket[72] = {0};
+bool obstacleAlertPending = false;
+uint8_t obstacleAlertAttempts = 0;
+unsigned long obstacleAlertLastTxMs = 0;
+const uint8_t OBSTACLE_ALERT_REPEATS = 4;
+const unsigned long OBSTACLE_ALERT_REPEAT_MS = 300UL;
+
+void queueObstacleAlert(const char *megaMessage) {
+  // The Mega sends: MISSION_STATUS:A31_PAUSED:SONAR:<remaining milliseconds>
+  static const char kPrefix[] = "MISSION_STATUS:A31_PAUSED:SONAR:";
+  if (strncmp(megaMessage, kPrefix, sizeof(kPrefix) - 1) != 0) return;
+  const char *timeText = megaMessage + sizeof(kPrefix) - 1;
+  if (!*timeText) return;
+  for (const char *p = timeText; *p; ++p) {
+    if (*p < '0' || *p > '9') return;
+  }
+  const unsigned long remaining = strtoul(timeText, nullptr, 10);
+  if (remaining > 120000UL) return;
+  uint32_t id = (uint32_t)esp_random();
+  if (id == 0) id = 1;
+  snprintf(obstacleAlertPacket, sizeof(obstacleAlertPacket),
+           "ALRT1:%lu:%lu", (unsigned long)id, remaining);
+  obstacleAlertPending = true;
+  obstacleAlertAttempts = 0;
+  obstacleAlertLastTxMs = 0;
+  Serial.printf("[OBSTACLE ALERT QUEUED] %s\n", obstacleAlertPacket);
+}
+
+
+// EKSPLORADOR_OBSTACLE_ALERT_V1: sends safety notification before routine telemetry.
+// Desktop RX_BOARD already prints raw LoRa payloads; no RX_BOARD flash is needed.
+// No ACK channel is added here. Four identical-ID transmissions are attempted;
+// desktop suppresses duplicates. Delivery cannot be guaranteed across radio loss.
+bool serviceObstacleAlert() {
+  if (!obstacleAlertPending) return false;
+  if (obstacleAlertAttempts >= OBSTACLE_ALERT_REPEATS) {
+    obstacleAlertPending = false;
+    return false;
+  }
+  const unsigned long now = millis();
+  if (obstacleAlertAttempts && now - obstacleAlertLastTxMs < OBSTACLE_ALERT_REPEAT_MS)
+    return true;
+
+  // An in-flight DATA telemetry ACK must not prevent immediate alert priority.
+  // Retire that old DATA ID so a late ACK cannot be confused with a new packet.
+  if (awaitingAck) {
+    awaitingAck = false;
+    packetId++;
+  }
+
+  LoRa.idle();
+  bool sent = false;
+  if (LoRa.beginPacket()) {
+    LoRa.print(obstacleAlertPacket);
+    sent = LoRa.endPacket() == 1;
+  }
+  // Count failed attempts too: a broken radio must not starve all telemetry.
+  ++obstacleAlertAttempts;
+  obstacleAlertLastTxMs = millis();
+  Serial.printf("[OBSTACLE ALERT %s] %u/%u %s\n",
+                sent ? "TX" : "SEND_FAILED", obstacleAlertAttempts,
+                OBSTACLE_ALERT_REPEATS, obstacleAlertPacket);
+  LoRa.receive();
+  // Keep the alert exclusive until last copy goes out; safety is Mega-owned.
+  return true;
+}
