@@ -1832,11 +1832,15 @@ export default function App() {
                     Crop Suitability
                   </span>
                 </div>
+                
 
                 <div
                   style={{
-                    padding: '16px',
-                    fontSize: '0.85rem'
+                    padding: '12px 16px',
+                    fontSize: '0.85rem',
+                    maxHeight: '190px',
+                    overflowY: 'auto',
+                    overscrollBehavior: 'contain'
                   }}
                 >
                   <div
@@ -1871,6 +1875,18 @@ export default function App() {
                           `${cropSuitability.potassium} mg/kg.`
                         )
                       : 'Recommendations will appear once a valid soil reading is received.'}
+                  </p>
+                  <p data-testid="app03-crop-conditional-disclosure" style={{
+                    color: 'var(--text-muted)',
+                    fontSize: '0.73rem',
+                    lineHeight: 1.45,
+                    margin: '12px 0 0',
+                    paddingTop: '10px',
+                    borderTop: '1px solid var(--card-border)'
+                  }}>
+                    Preliminary crop suggestions based only on available soil pH and moisture. Irrigation,
+                    drainage, climate, soil depth, and cultivation conditions are not assessed. Rice requires
+                    separate consideration of water availability and cultivation method.
                   </p>
                 </div>
               </div>

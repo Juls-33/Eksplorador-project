@@ -1,0 +1,841 @@
+{
+  "test": "MTP-APP-03 Step 1 — actual compatibility module and database-profile SQL",
+  "started": "2026-11-18T23:16:37.762Z",
+  "temporaryDatabase": "C:\\Users\\JULIUS~1\\AppData\\Local\\Temp\\eksplorador-app03-cFELBv\\app03-test-only.db",
+  "limitations": "Direct JS function plus actual source-extracted UPSERT SQL in isolated SQLite; no browser UI, live crop-card recommendations, native Tauri service, real field validation, or persisted production data tested.",
+  "checks": [
+    "50 independent compatibility rule vectors match actual cropCompatibility.js (pH, soil type, missing and boundaries)",
+    "Actual compatibility summary distinguishes matched, review and insufficient",
+    "TEST SETUP: reproduced Rust ensure_schema crop-profile soil-type column on temporary database",
+    "CREATE/READ: actual db.js UPSERT SQL stored synthetic profile in separate SQLite file",
+    "UPDATE: actual UPSERT changed pH threshold and changed assessment from review to matched",
+    "PERSISTENCE: edited crop profile survived SQLite close/reopen",
+    "DELETE: actual db.js DELETE SQL removed the synthetic profile only",
+    "Temporary SQLite integrity and foreign-key validation passed"
+  ],
+  "vectors": [
+    {
+      "id": 1,
+      "group": "boundary",
+      "sample": {
+        "ph": 5.49
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 2,
+      "group": "boundary",
+      "sample": {
+        "ph": 5.5
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 3,
+      "group": "boundary",
+      "sample": {
+        "ph": 5.51
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 4,
+      "group": "boundary",
+      "sample": {
+        "ph": 6.49
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 5,
+      "group": "boundary",
+      "sample": {
+        "ph": 6.5
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 6,
+      "group": "boundary",
+      "sample": {
+        "ph": 6.51
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 7,
+      "group": "boundary",
+      "sample": {
+        "ph": 6.99
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 8,
+      "group": "boundary",
+      "sample": {
+        "ph": 7
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 9,
+      "group": "boundary",
+      "sample": {
+        "ph": 7.01
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 10,
+      "group": "boundary",
+      "sample": {
+        "ph": 8
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 11,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "loam",
+      "preferred": [
+        "loam"
+      ],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 12,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "clay",
+      "preferred": [
+        "loam"
+      ],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 13,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "sandy-loam",
+      "preferred": [
+        "loam",
+        "sandy-loam"
+      ],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 14,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "silt-loam",
+      "preferred": [
+        "loam"
+      ],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 15,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [
+        "loam"
+      ],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 16,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "clay",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 17,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "loam",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 18,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "sandy-loam",
+      "preferred": [
+        "sandy-loam"
+      ],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 19,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "clay-loam",
+      "preferred": [
+        "loam",
+        "clay-loam"
+      ],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 20,
+      "group": "soil-context",
+      "sample": {
+        "ph": 6.2
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "loam",
+      "preferred": [
+        "clay"
+      ],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 21,
+      "group": "missing-invalid",
+      "sample": {
+        "ph": null
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 22,
+      "group": "missing-invalid",
+      "sample": {},
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 23,
+      "group": "missing-invalid",
+      "sample": {
+        "ph": ""
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 24,
+      "group": "missing-invalid",
+      "sample": {
+        "ph": "n/a"
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 25,
+      "group": "missing-invalid",
+      "sample": {
+        "ph": true
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 26,
+      "group": "missing-invalid",
+      "sample": {
+        "ph": -1
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 27,
+      "group": "missing-invalid",
+      "sample": {
+        "ph": 14.01
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 28,
+      "group": "missing-invalid",
+      "sample": {
+        "ph": 6
+      },
+      "thresholds": {
+        "minPh": 7,
+        "maxPh": 5
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 29,
+      "group": "missing-invalid",
+      "sample": {
+        "ph": 6
+      },
+      "thresholds": {
+        "minPh": null,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 30,
+      "group": "missing-invalid",
+      "sample": {
+        "ph": 6
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": null
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "insufficient",
+      "actual": "insufficient",
+      "pass": true
+    },
+    {
+      "id": 31,
+      "group": "general-range",
+      "sample": {
+        "ph": 0
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 32,
+      "group": "general-range",
+      "sample": {
+        "ph": 1
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 33,
+      "group": "general-range",
+      "sample": {
+        "ph": 4.9
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 34,
+      "group": "general-range",
+      "sample": {
+        "ph": 5
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 35,
+      "group": "general-range",
+      "sample": {
+        "ph": 5.01
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 36,
+      "group": "general-range",
+      "sample": {
+        "ph": 6
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 37,
+      "group": "general-range",
+      "sample": {
+        "ph": 7
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 38,
+      "group": "general-range",
+      "sample": {
+        "ph": 7.01
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 39,
+      "group": "general-range",
+      "sample": {
+        "ph": 13.99
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 40,
+      "group": "general-range",
+      "sample": {
+        "ph": 14
+      },
+      "thresholds": {
+        "minPh": 5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 41,
+      "group": "profile-rice",
+      "sample": {
+        "ph": 5.49
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 42,
+      "group": "profile-rice",
+      "sample": {
+        "ph": 5.5
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 43,
+      "group": "profile-rice",
+      "sample": {
+        "ph": 7
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 44,
+      "group": "profile-rice",
+      "sample": {
+        "ph": 7.01
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 45,
+      "group": "profile-cacao",
+      "sample": {
+        "ph": 5.49
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 6.7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 46,
+      "group": "profile-cacao",
+      "sample": {
+        "ph": 5.5
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 6.7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 47,
+      "group": "profile-cacao",
+      "sample": {
+        "ph": 6.7
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 6.7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    },
+    {
+      "id": 48,
+      "group": "profile-cacao",
+      "sample": {
+        "ph": 6.71
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 6.7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 49,
+      "group": "profile-custom",
+      "sample": {
+        "ph": 6.8
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 6.5
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "review",
+      "actual": "review",
+      "pass": true
+    },
+    {
+      "id": 50,
+      "group": "profile-custom",
+      "sample": {
+        "ph": 6.8
+      },
+      "thresholds": {
+        "minPh": 5.5,
+        "maxPh": 7
+      },
+      "soilType": "",
+      "preferred": [],
+      "expected": "matched",
+      "actual": "matched",
+      "pass": true
+    }
+  ],
+  "agreement": {
+    "matches": 50,
+    "total": 50,
+    "percent": 100
+  },
+  "status": "PASS",
+  "finished": "2026-11-18T23:16:37.853Z"
+}

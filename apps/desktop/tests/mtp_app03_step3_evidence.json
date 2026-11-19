@@ -1,0 +1,31 @@
+{
+  "test": "MTP-APP-03 Step 3 — Live Monitoring crop rules",
+  "mode": "Actual App.jsx useMemo evaluated in isolated Node VM; not browser UI",
+  "timestamp": "2026-11-18T23:49:20.167Z",
+  "source": "apps/desktop/src/App.jsx",
+  "historicalMinimum": 10,
+  "comparisons": 133,
+  "passed": 133,
+  "failed": 0,
+  "agreement": 100,
+  "checks": [
+    {
+      "name": "Live pH/moisture cross-product boundaries",
+      "count": 117
+    },
+    {
+      "name": "Missing, invalid, formatting and packet-validity cases",
+      "count": 10
+    },
+    {
+      "name": "Historical-record selection, averages and missing data",
+      "count": 6
+    }
+  ],
+  "cautions": [
+    "Live Monitoring Rice recommendation only checks pH/moisture in this logic; irrigation, drainage and cultivation conditions are not evaluated. Confirm an appropriate UI disclosure before marking MTP Step 4 fully PASS."
+  ],
+  "failures": [],
+  "productionDatabaseOpened": false,
+  "hardwareCalls": 0
+}
