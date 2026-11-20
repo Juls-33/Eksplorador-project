@@ -4,7 +4,7 @@ import { calculateBearing, calculateDistance } from './geo.js';
 
 // A3.1 Mega accepts one supervised timed TF command, max 300 seconds (5 minutes).
 // The map estimates direction/distance; this is NOT GPS waypoint tracking.
-export const FORWARD_MPS = 0.25; // measured field estimate; ground speed varies
+export const FORWARD_MPS = 2.9 / 22;; // measured field estimate; ground speed varies
 export const MIN_LEG_S = 0.100;
 export const MAX_LEG_S = 300.000;
 export const GPS_FRESH_MS = 5000; // backend FUS planning_gps freshness limit

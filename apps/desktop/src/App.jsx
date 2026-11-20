@@ -43,6 +43,7 @@ import PageTransition from './components/ui/PageTransition';
 import { getSourceTab, helpNavigationReducer, initialNavigation } from './utils/helpNavigation.js';
 import LoRaConnectionStatus from './components/LoRaConnectionStatus';
 import { useLoRaConnection } from './hooks/useLoRaConnection';
+import { useRoverDisplayPosition } from './hooks/useRoverDisplayPosition.js'; // EKSPLORADOR_LIVE_MONITORING_GPS_CONTINUITY_V1
 import { useEncoderTelemetrySource } from './hooks/useEncoderTelemetry';
 import DrivetrainTelemetry from './components/DrivetrainTelemetry';
 import { useDownloadPercent } from './hooks/useDownloadJob';
@@ -977,6 +978,19 @@ export default function App() {
   const hasGpsFix =
     isConnected && hasLiveGpsFix(liveData);
 
+  // DISPLAY ONLY. Do not replace the live GPS validity value used by
+  // monitoring, soil data, geotagging, or point-to-point planning.
+  // Memoization prevents unrelated React re-renders from refreshing the
+  // age of a GPS position that has NOT received a new telemetry packet.
+  const liveMapGps = useMemo(
+    () => hasGpsFix ? [Number(liveData.lat), Number(liveData.lng)] : null,
+    [hasGpsFix, liveData?.seq, liveData?.lat, liveData?.lng]
+  );
+  const liveMapDisplay = useRoverDisplayPosition(
+    liveMapGps,
+    isConnected && receiverStatus.connected && !receiverStatus.connectionError
+  );
+
   const soilOk =
     liveData && liveData.soilValid === 1;
 
@@ -1483,26 +1497,18 @@ export default function App() {
                 </div>
 
                 <HeatmapMap
-                  center={
-                    selectedHistoricalPos ||
-                    (
-                      hasGpsFix
-                        ? [liveData.lat, liveData.lng]
-                        : latestDbPos || [14.6095, 120.9890]
-                    )
-                  }
+                  center={selectedHistoricalPos || liveMapDisplay.position || latestDbPos || [14.6095, 120.9890]}
                   zoom={18}
                   heatPoints={displayedHeatPoints}
                   valueToIntensity={displayScale}
                   maxInfluenceRadiusM={25}
                   minInterpolationNeighbors={2}
-                  roverPos={
-                    !selectedHistoricalPos && hasGpsFix
-                      ? [liveData.lat, liveData.lng]
-                      : null
-                  }
+                  roverPos={!selectedHistoricalPos ? liveMapDisplay.position : null}
+                  roverPositionStatus={liveMapDisplay.mode}
                   gpsWarning={
-                    !hasGpsFix
+                    !selectedHistoricalPos && liveMapDisplay.mode === 'LAST_KNOWN'
+                      ? `GPS temporarily unavailable — last known position ${Math.floor(liveMapDisplay.ageMs / 1000)}s old (not live GPS or dead reckoning).`
+                      : !hasGpsFix
                       ? !isConnected
                         ? 'Waiting for rover telemetry and GPS position.'
                         : Number(liveData?.satsLocked) === 0
