@@ -29,6 +29,7 @@ import HeatmapMap from '../components/HeatmapMap';
 import SoilTypeGuide from '../components/SoilTypeGuide';
 import OperatorNavGuide from '../components/OperatorNavGuide';
 import PointToPointMissionDialog from '../components/PointToPointMissionDialog';
+import { useRoverDisplayPosition } from '../hooks/useRoverDisplayPosition.js'; // EKSPLORADOR_GPS_DISPLAY_CONTINUITY_V1
 import { operatorMapStart, choosePlanningGps } from '../utils/pointToPointMission.js';
 // EKSPLORADOR_GPS_MISSION_FIX_V1
 import MissionDeploymentWizard from '../components/MissionDeploymentWizard';
@@ -142,6 +143,11 @@ export default function FieldMapView({ onHelp }) {
   // Live Rover Telemetry
   const [roverPos, setRoverPos] = useState(null);
   const [roverHeading, setRoverHeading] = useState(null);
+  // Map-only last-known fix. Keep roverPos null on GPS loss so soil geotags
+  // and Point A never accidentally receive a historical position.
+  const roverDisplay = useRoverDisplayPosition(
+    roverPos, receiverStatus.connected && !receiverStatus.connectionError
+  );
   // Field Map and Point A now consume the same satellite-confirmed DATA fix.
   // FUS remains preferred for navigation whenever it is fresh and valid.
   const [telemetryNavGps, setTelemetryNavGps] = useState(null);
@@ -1461,7 +1467,8 @@ export default function FieldMapView({ onHelp }) {
               localCoverageRadiusM={5}
               labeledPoints={samplePins}
               focusPoints={focusPoints}
-              roverPos={roverPos}
+              roverPos={roverDisplay.position}
+              roverPositionStatus={roverDisplay.mode}
               planningStartPos={(pointToPointOpen || pointToPointPicking) && pointToPointOriginPreference === 'MANUAL' ? pointToPointManualStart?.coords ?? null : null}
               planningTargetPos={displayedWaypoints[pointToPointPinIndex] ?? null}
               manualSamplePos={missionState === 'IN_PROGRESS' && manualSoilLocationEnabled ? manualSoilLocation?.coords ?? null : null}
@@ -1479,6 +1486,19 @@ export default function FieldMapView({ onHelp }) {
               onWaypointDelete={(index) => setTempWaypoints((prev) => prev.filter((_, i) => i !== index))}
               gradient={activeConfig.gradient}
             />
+            {roverDisplay.mode === 'LAST_KNOWN' && (
+              <div role="status" aria-live="polite" style={{
+                position: 'absolute', top: 12, left: 12, zIndex: 790,
+                maxWidth: 'min(355px, calc(100% - 24px))',
+                padding: '8px 12px', borderRadius: 8,
+                border: '1px solid #d97706', background: '#fffbeb',
+                color: '#92400e', fontSize: 13, lineHeight: 1.4,
+                pointerEvents: 'none', boxShadow: '0 2px 8px rgba(0,0,0,.1)'
+              }}>
+                <strong>GPS unavailable — last known location</strong>
+                <div>{Math.floor(roverDisplay.ageMs / 1000)}s since last GPS fix · Not live, not dead reckoning</div>
+              </div>
+            )}
             {/* Map-centered sampling chip: shown during active mission logging, not in the sidebar. */}
             {missionState === 'IN_PROGRESS' && wizardStep === 'IDLE' && currentSelected && (
               <div className={`soil-map-timer-chip soil-map-timer-chip--${soilSessionStatus.phase}`} role="status" aria-live="polite">

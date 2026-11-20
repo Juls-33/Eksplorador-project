@@ -1,5 +1,0 @@
-                                // EKSPLORADOR_OBSTACLE_ALERT_V1: separate urgent safety notification.
-                                if let Some(alert) = obstacle_alert::parse_rx_board_obstacle_line(trimmed) {
-                                    let _ = app_handle.emit("rover-obstacle", alert);
-                                    continue; // Never treat an alert as soil/encoder/GPS telemetry.
-                                }

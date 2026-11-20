@@ -59,6 +59,7 @@ export default function HeatmapMap({
   focusPoints = [],
   labeledPoints = [],
   roverPos = [14.6095, 120.9895],
+  roverPositionStatus = 'GPS', // EKSPLORADOR_GPS_DISPLAY_CONTINUITY_V1
   planningStartPos = null,
   planningTargetPos = null,
   manualSamplePos = null,
@@ -641,6 +642,12 @@ export default function HeatmapMap({
 
     if (showRover && hasMapPosition(roverPos)) {
       roverMarkerRef.current.setLatLng(roverPos);
+      // Last-known coordinates are NOT current GPS or odometry.
+      const isLastKnown = roverPositionStatus === 'LAST_KNOWN';
+      roverMarkerRef.current.setOpacity(isLastKnown ? 0.45 : 1);
+      roverMarkerRef.current.bindTooltip(isLastKnown
+        ? 'Last known GPS position (not live, not dead reckoning)'
+        : 'Live GPS rover position');
 
       if (!mapInstanceRef.current.hasLayer(roverMarkerRef.current)) {
         roverMarkerRef.current.addTo(mapInstanceRef.current);
@@ -655,7 +662,7 @@ export default function HeatmapMap({
     } else {
       mapInstanceRef.current.removeLayer(roverMarkerRef.current);
     }
-  }, [roverPos, showRover]);
+  }, [roverPos, showRover, roverPositionStatus]);
 
   // Planning overlays are distinct from live GPS, saved pins and soil samples.
   // When a point is manually estimated, the orange marker is NOT a GPS fix.
