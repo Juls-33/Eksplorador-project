@@ -7,7 +7,9 @@ import {
   MapPin,
   Filter,
   X,
-  AlertCircle
+  AlertCircle,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import HeatmapMap from '../components/HeatmapMap';
 import HelpButton from '../components/ui/HelpButton';
@@ -22,6 +24,8 @@ import {
 import { ecDsM, estimatedTdsMgL } from '../utils/soilSampling';
 import { summarizeCropCompatibility } from '../utils/cropCompatibility';
 import { BUILTIN_CROP_REFERENCES } from '../utils/cropReferences';
+import { PH_LAYER } from '../utils/layerBands';
+import { cropPhHeatPoints, cropPhFieldBoundary, CROP_PH_HEATMAP_SETTINGS } from '../utils/cropPhHeatmap';
 import './CropAssessmentView.css';
 
 // Legacy crop profile reference ranges remain editable, but only measured pH
@@ -64,6 +68,7 @@ export default function CropAssessmentView({ onHelp }) {
   const [selectedPlot, setSelectedPlot] = useState('');
   const [plotSamples, setPlotSamples] = useState([]);
   const [filterCategory, setFilterCategory] = useState('ALL');
+  const [showPhHeatmap, setShowPhHeatmap] = useState(true);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -116,6 +121,11 @@ export default function CropAssessmentView({ onHelp }) {
     };
     return { ec, n: npkAvg('n'), p: npkAvg('p'), k: npkAvg('k') };
   }, [plotSamples]);
+
+  // Reuse Field Map's measured-pH gradient and bounded IDW renderer.
+  // A heatmap is not a continuous crop suitability classification.
+  const phHeatPoints = useMemo(() => cropPhHeatPoints(plotSamples), [plotSamples]);
+  const phMapBoundary = useMemo(() => cropPhFieldBoundary(knownFields, selectedPlot), [knownFields, selectedPlot]);
 
   const filteredCrops = crops.filter(c => {
     return filterCategory === 'ALL' || c.category === filterCategory;
@@ -431,26 +441,54 @@ export default function CropAssessmentView({ onHelp }) {
                 </p>}
               </div>
 
-              <div className="card" style={{ padding: '12px', fontSize: '0.8rem' }}>
-                <strong>Operator-tagged soil type: {soilTypeLabel}</strong>
-                <p style={{ marginTop: 6, color: 'var(--text-muted)' }}>
+              <div className="card crop-field-context-card">
+                <div className="crop-field-context-topline">
+                  <h3 className="crop-field-context-heading">Field Soil Context</h3>
+                  <div className="crop-field-context-type">
+                    <span>Operator-tagged soil type</span>
+                    <strong>{soilTypeLabel}</strong>
+                  </div>
+                </div>
+                <p className="crop-field-context-note">
                   {selectedSoilType
                     ? (currentCrop?.compatibleSoilTypes?.length
-                      ? `This crop's configured soil types: ${currentCrop.compatibleSoilTypes.map(t => SOIL_TYPES.find(([v]) => v === t)?.[1] || t).join(', ')}.`
-                      : 'No crop-specific soil-type reference has been configured. The soil type is recorded as context but not scored.')
-                    : 'Set the field soil type in Field Map to allow a crop-specific soil compatibility check.'}
+                      ? `Preferred soil types: ${currentCrop.compatibleSoilTypes.map(t => SOIL_TYPES.find(([v]) => v === t)?.[1] || t).join(', ')}.`
+                      : 'No crop-specific soil-type range is configured; this field tag is not scored.')
+                    : 'Set the field soil type in Field Map to include texture in the screening.'}
                 </p>
-                {conditionSummary && <p style={{ marginTop: 7 }}>
-                  <strong>EC-related advisory:</strong> Mean field EC {ecDsM(conditionSummary.ec)?.toFixed(3)} dS/m;
-                  estimated TDS {estimatedTdsMgL(conditionSummary.ec)?.toFixed(1)} mg/L. These are conductivity-based indicators, not a laboratory ECe/salinity classification.
-                  Sensor N/P/K averages: {['n','p','k'].map(k=>conditionSummary[k]?.toFixed(1) ?? '—').join(' / ')} mg/kg (uncalibrated, moisture-sensitive).
-                  Confirm nutrient deficiencies using laboratory soil testing before fertilizer advice.
-                </p>}
+                {conditionSummary && (
+                  <section className="crop-sensor-advisory" aria-label="Field sensor advisory">
+                    <div className="crop-sensor-advisory-heading">
+                      <h4>Field sensor indicators</h4>
+                      <span className="crop-sensor-advisory-badge">Advisory only</span>
+                    </div>
+                    <div className="crop-sensor-metrics">
+                      <div className="crop-sensor-metric">
+                        <span className="crop-sensor-metric-label">Mean EC</span>
+                        <strong>{ecDsM(conditionSummary.ec)?.toFixed(3)} <small>dS/m</small></strong>
+                      </div>
+                      <div className="crop-sensor-metric">
+                        <span className="crop-sensor-metric-label">Estimated TDS</span>
+                        <strong>{estimatedTdsMgL(conditionSummary.ec)?.toFixed(1)} <small>mg/L</small></strong>
+                      </div>
+                      <div className="crop-sensor-metric">
+                        <span className="crop-sensor-metric-label">Mean sensor N / P / K</span>
+                        <strong>{['n','p','k'].map(k => conditionSummary[k]?.toFixed(1) ?? '—').join(' / ')} <small>mg/kg</small></strong>
+                      </div>
+                    </div>
+                    <p className="crop-sensor-advisory-caution">
+                      <strong>Sensor estimates only.</strong> Confirm with lab soil testing before fertilizer advice.
+                    </p>
+                    <details className="crop-sensor-advisory-details">
+                      <summary>Reading limitations</summary>
+                      <p>EC/TDS do not provide laboratory ECe/salinity classification; sensor NPK is uncalibrated and moisture-sensitive.</p>
+                    </details>
+                  </section>
+                )}
               </div>
 
-              {/* Categorical compatibility belongs to the measured sample pins.
-                  Interpolating 0.25/0.60/1.00 as a continuous surface would
-                  fabricate quantitative suitability between observations. */}
+              {/* Crop screening stays attached to actual measured sample pins.
+                  Only the underlying numerical pH is interpolated for display. */}
               <div className="card crop-compatibility-card">
                 <div className="card-header crop-compatibility-heading">
                   <span className="card-title">Sample-Level Crop Compatibility</span>
@@ -462,23 +500,57 @@ export default function CropAssessmentView({ onHelp }) {
                     : 'Select a recorded field to evaluate sample points.'}</p>
                 ) : (
                   <div className="crop-compatibility-body">
-                    <p className="crop-disclaimer">Results are a preliminary screening of measured pH and, when configured, field-level soil texture. Pin colors apply only to sampled points, not unmeasured areas.</p>
+                    <p className="crop-disclaimer">Colored pins show sample-level crop screening. The optional gradient estimates soil pH near measured points, not crop suitability across the field.</p>
                     <div className="crop-stat-row">
                       <span><b>{analysis.counts.phMatched}/{analysis.total}</b> within preferred pH</span>
                       <span><b>{analysis.counts.matched}</b> assessed preferences match</span>
                       <span><b>{analysis.counts.review}</b> require review</span>
                       <span><b>{analysis.counts.insufficient}</b> insufficient pH</span>
                     </div>
+                    <div className="crop-ph-toolbar">
+                      <div className="crop-ph-toolbar-title">
+                        <strong>Soil pH gradient</strong>
+                        <span>Measured points + local spatial estimates</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="crop-ph-toggle ui-control"
+                        onClick={() => setShowPhHeatmap(shown => !shown)}
+                        aria-pressed={showPhHeatmap}
+                        aria-label={phHeatPoints.length === 0 ? 'No valid pH measurements for heatmap' : showPhHeatmap ? 'Hide soil pH gradient' : 'Show soil pH gradient'}
+                        disabled={phHeatPoints.length === 0}
+                      >
+                        {showPhHeatmap ? <EyeOff size={15} /> : <Eye size={15} />}
+                        {phHeatPoints.length === 0 ? 'No pH data' : showPhHeatmap ? 'Hide gradient' : 'Show gradient'}
+                      </button>
+                    </div>
                     <div className="crop-compatibility-map">
                       <HeatmapMap
-                        heatPoints={[]}
+                        heatPoints={showPhHeatmap ? phHeatPoints : []}
                         focusPoints={analysis.focusPoints}
                         labeledPoints={analysis.markers}
-                        boundary={[]}
+                        boundary={phMapBoundary}
+                        valueToIntensity={PH_LAYER.intensity}
+                        gradient={PH_LAYER.gradient}
+                        {...CROP_PH_HEATMAP_SETTINGS}
                         showRover={false}
                         showFollowControl={false}
                       />
                     </div>
+                    {showPhHeatmap && phHeatPoints.length > 0 && (
+                      <div className="crop-ph-gradient-guide" aria-label="Soil pH heatmap color guide">
+                        <div className="crop-ph-gradient-guide-title">Soil acidity / alkalinity (pH)</div>
+                        <div className="crop-ph-gradient-bands">
+                          {PH_LAYER.bands.map(band => (
+                            <div className="crop-ph-gradient-band" key={band.label}>
+                              <span className="crop-ph-gradient-swatch" style={{ backgroundColor: band.color }} />
+                              <span>{band.label}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <p>Estimated pH is shown only near samples or where nearby points support interpolation; colors do not indicate crop suitability.</p>
+                      </div>
+                    )}
                     <div className="crop-status-legend">
                       <span><i className="crop-dot match"/> All assessed preferences match</span>
                       <span><i className="crop-dot review"/> At least one condition needs review</span>

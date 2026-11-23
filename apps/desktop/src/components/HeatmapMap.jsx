@@ -62,6 +62,7 @@ export default function HeatmapMap({
   roverPositionStatus = 'GPS', // EKSPLORADOR_GPS_DISPLAY_CONTINUITY_V1
   planningStartPos = null,
   planningTargetPos = null,
+  planningPickRadiusM = null,
   manualSamplePos = null,
   gpsWarning = null,
   waypoints = [],
@@ -72,6 +73,8 @@ export default function HeatmapMap({
   interactionMode = 'NONE',
   showRover = true,
   showFollowControl = true,
+  // Visual positioning only. Other uses of HeatmapMap keep their original controls.
+  controlLayout = 'default',
   gradient = {
     0.2: '#dc2626',
     0.4: '#ea580c',
@@ -686,6 +689,26 @@ export default function HeatmapMap({
     return () => { if (map.hasLayer(layer)) map.removeLayer(layer); if (planningLayerRef.current === layer) planningLayerRef.current = null; };
   }, [planningStartPos?.[0], planningStartPos?.[1], planningTargetPos?.[0], planningTargetPos?.[1]]);
 
+  // Point A picker guide: visually show the existing maximum timed-leg range.
+  // This never participates in map interpolation or changes rover movement.
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || interactionMode !== 'SELECT_ROVER_START' ||
+        !hasMapPosition(planningTargetPos) || !Number.isFinite(planningPickRadiusM) || planningPickRadiusM <= 0) return;
+    const circle = L.circle(planningTargetPos, {
+      radius: planningPickRadiusM,
+      color: '#1e6c45', weight: 3, opacity: .95,
+      dashArray: '8 6', fillColor: '#54ad79', fillOpacity: .13,
+      interactive: false, bubblingMouseEvents: false
+    }).addTo(map);
+    // Bring the selected destination and its allowed radius into view.
+    // A fresh GPS update must not immediately pan away during selection.
+    followRoverRef.current = false;
+    setFollowRover(false);
+    map.fitBounds(circle.getBounds(), { padding: [42, 42], maxZoom: 18, animate: false });
+    return () => { if (map.hasLayer(circle)) map.removeLayer(circle); };
+  }, [interactionMode, planningTargetPos?.[0], planningTargetPos?.[1], planningPickRadiusM]);
+
   // Operator-selected soil sampling location: a separate amber marker,
   // never the rover's actual GPS marker or the movement-planning origin.
   useEffect(() => {
@@ -928,8 +951,11 @@ export default function HeatmapMap({
           // ~54px tall (two stacked buttons) — this badge used to start at
           // top:12px, landing right on top of the "+" button. Clearing that
           // height is the actual fix; left stays the same corner.
-          top: '18px',
-          left: '330px',
+          top: controlLayout === 'field-map' ? '58px' : '18px',
+          left: controlLayout === 'field-map' ? 'auto' : '330px',
+          right: controlLayout === 'field-map' ? '12px' : 'auto',
+          maxWidth: 'calc(100% - 24px)',
+          whiteSpace: 'nowrap',
           zIndex: 1000,
           display: 'flex',
           alignItems: 'center',

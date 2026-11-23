@@ -235,6 +235,18 @@ export const REQUIRED_CACAO_PROFILE = {
   thresholds: t(5.5, 6.7, 30, 65, 0.5, 2, 20, 40, 20, 40, 30, 60)
 };
 
+// Required reference crop for both fresh and previously seeded databases.
+// As with cacao, only pH and configured soil texture influence screening;
+// all other legacy threshold values are unscored form defaults, not agronomic claims.
+export const REQUIRED_ARABICA_COFFEE_PROFILE = {
+  id: 'CRP-COFFEE-ARABICA', // stable non-numeric ID; custom CRP-005+ IDs are unaffected
+  name: 'Arabica Coffee (Coffea arabica)',
+  category: 'Tree Crop',
+  notes: BUILTIN_CROP_REFERENCES['CRP-COFFEE-ARABICA'].note,
+  compatibleSoilTypes: BUILTIN_CROP_REFERENCES['CRP-COFFEE-ARABICA'].preferredSoils,
+  thresholds: t(5.6, 6.5, 35, 65, 0.8, 2.0, 25, 45, 25, 45, 35, 55)
+};
+
 async function upsertCropProfile(db, crop) {
   const th = crop.thresholds;
 
@@ -345,6 +357,11 @@ async function ensureCacaoAndSoilReferenceDefaults(db) {
   const hasCacao = existing.some(row => row.id === REQUIRED_CACAO_PROFILE.id ||
     /\bcacao\b|\btheobroma cacao\b/i.test(row.name || ''));
   if (!hasCacao) await upsertCropProfile(db, REQUIRED_CACAO_PROFILE);
+  // Match the stable ID or an existing Arabica-named profile to avoid creating
+  // a duplicate of the same crop. Never overwrite an edited or user-created row.
+  const hasArabica = existing.some(row => row.id === REQUIRED_ARABICA_COFFEE_PROFILE.id ||
+    /\barabica\b|\bcoffea\s+arabica\b/i.test(row.name || ''));
+  if (!hasArabica) await upsertCropProfile(db, REQUIRED_ARABICA_COFFEE_PROFILE);
   if (done[0]?.value === '1') return;
 
   for (const original of DEFAULT_CROP_PROFILES) {

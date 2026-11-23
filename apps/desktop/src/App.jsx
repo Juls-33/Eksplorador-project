@@ -1610,6 +1610,7 @@ export default function App() {
                 </div>
 
                 <div
+                  className="recent-samples-scroll"
                   style={{
                     padding: '12px',
                     fontSize: '0.8rem',
@@ -1841,12 +1842,10 @@ export default function App() {
                 
 
                 <div
+                  className="crop-suitability-content"
                   style={{
                     padding: '12px 16px',
-                    fontSize: '0.85rem',
-                    maxHeight: '190px',
-                    overflowY: 'auto',
-                    overscrollBehavior: 'contain'
+                    fontSize: '0.85rem'
                   }}
                 >
                   <div

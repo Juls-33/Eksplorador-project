@@ -159,3 +159,124 @@
 /* Offline illustrated soil-type guide, opened from the existing field classification. */
 .field-soil-type-panel__guide-button { display:flex; align-items:center; justify-content:center; gap:7px; padding:9px 10px; font-size:.76rem; font-weight:700; color:#275d38; background:#fff; border:1px solid #8eaf97; border-radius:8px; cursor:pointer; }
 .field-soil-type-panel__guide-button:hover { background:#e6f4e9; }
+
+/* Field Map minor UX fixes: avoid overlaying map controls without changing map data. */
+.field-map-header__help {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+/* Field Map's tile-status chip sits below the downloaded-map control.
+   The GPS notice starts below both, without obstructing either control. */
+.field-map-view .gps-map-overlay { top: 100px; }
+
+/* Compact toggle stays on-map; the explanatory legend is opt-in. */
+.field-map-gradient-guide__toggle {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 1012;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  max-width: calc(100% - 24px);
+  padding: 8px 11px;
+  border: 1px solid #aec6b5;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .97);
+  color: #245239;
+  font: inherit;
+  font-size: .75rem;
+  font-weight: 750;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.16);
+}
+.field-map-gradient-guide__toggle:hover { background: #f1f8f3; }
+.field-map-gradient-guide__toggle:focus-visible { outline: 3px solid #86b993; outline-offset: 2px; }
+.field-map-gradient-guide__panel {
+  position: absolute;
+  bottom: 58px;
+  left: 12px;
+  z-index: 1011;
+  box-sizing: border-box;
+  max-width: min(260px, calc(100% - 24px));
+  max-height: min(340px, calc(100% - 118px));
+  overflow-y: auto;
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid var(--card-border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .97);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 12px rgba(0,0,0,.14);
+  font-size: .75rem;
+  line-height: 1.35;
+}
+.field-map-gradient-guide__panel[hidden] { display: none; }
+.field-map-gradient-guide__heading { display: flex; align-items: center; gap: 5px; font-weight: 800; color: var(--text-dark); }
+.field-map-gradient-guide__ranges { display: flex; flex-direction: column; gap: 5px; }
+.field-map-gradient-guide__range { display: flex; align-items: center; gap: 8px; }
+.field-map-gradient-guide__note { color: var(--text-muted); font-size: .7rem; border-top: 1px solid var(--card-border); padding-top: 7px; }
+@media (max-width: 600px) {
+  .field-map-gradient-guide__panel { max-height: min(260px, calc(100% - 118px)); }
+}
+
+/* Field-boundary drawing: always-visible area estimate, outside Leaflet controls. */
+.field-area-preview {
+  flex: 0 0 auto;
+  padding: 12px 14px 10px;
+  background: #f8faf8;
+  border-top: 1px solid #e1e9e3;
+  border-bottom: 1px solid #d8e2dc;
+  color: #193c29;
+}
+.field-area-preview__top {
+  display: grid;
+  grid-template-columns: minmax(130px, .85fr) minmax(0, 1.55fr);
+  gap: 16px;
+  align-items: center;
+}
+.field-area-preview__measurement { display: grid; gap: 3px; min-width: 0; }
+.field-area-preview__eyebrow {
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #577263;
+}
+.field-area-preview__number { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; }
+.field-area-preview__number strong { font-size: clamp(1.45rem, 2.2vw, 1.95rem); line-height: 1.08; font-variant-numeric: tabular-nums; color: #174e2d; }
+.field-area-preview__number span { font-size: .85rem; font-weight: 700; }
+.field-area-preview__secondary { font-size: .72rem; color: #5b7062; }
+.field-area-preview__comparison { min-width: 0; display: grid; gap: 7px; }
+.field-area-preview__status { font-size: .77rem; font-weight: 750; line-height: 1.35; color: #506355; }
+.field-area-preview--above .field-area-preview__status { color: #a04a10; }
+.field-area-preview--within .field-area-preview__status { color: #176a38; }
+.field-area-preview__target-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; justify-content: space-between; font-size: .74rem; }
+.field-area-preview__edit { position: relative; }
+.field-area-preview__edit summary { color: #27613c; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.field-area-preview__edit summary:focus-visible { outline: 2px solid #256b40; outline-offset: 3px; border-radius: 3px; }
+.field-area-preview__inputs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.field-area-preview__inputs label { display: grid; gap: 3px; font-size: .7rem; font-weight: 700; color: #536a5a; }
+.field-area-preview__inputs input { width: 96px; min-width: 0; padding: 6px 8px; border: 1px solid #a5bbab; border-radius: 6px; font: inherit; color: #153b26; background: white; }
+.field-area-preview__edit small { display: block; margin-top: 5px; color: #a04a10; }
+.field-area-preview__track { overflow: hidden; width: 100%; height: 6px; border-radius: 999px; background: #dfe8e0; }
+.field-area-preview__track > div { height: 100%; background: #368454; border-radius: inherit; transition: width 170ms ease-out, background-color 170ms ease-out; }
+.field-area-preview--above .field-area-preview__track > div { background: #d97706; }
+.field-area-preview--below .field-area-preview__track > div { background: #8a9c46; }
+.field-area-preview__footnote { margin: 8px 0 0; font-size: .67rem; line-height: 1.4; color: #687e6e; }
+@media (max-width: 1450px) {
+  .field-area-preview__top { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+}
+@media (max-width: 600px) {
+  .field-area-preview { padding: 10px 12px; }
+  .field-area-preview__number strong { font-size: 1.55rem; }
+  .field-area-preview__target-row { align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .field-area-preview__track > div { transition: none; }
+}

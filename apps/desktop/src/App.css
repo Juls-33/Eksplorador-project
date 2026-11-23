@@ -147,6 +147,9 @@ button.nav-item { width: 100%; border: 0; background: transparent; text-align: l
   height: 100vh;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  /* Let Live Monitoring respond to the space remaining after sidebar toggles. */
+  container-type: inline-size;
+  container-name: monitoring-viewport;
   padding: 20px 24px;
   gap: 16px;
 }
@@ -281,18 +284,94 @@ button.nav-item { width: 100%; border: 0; background: transparent; text-align: l
   min-height: 0;
 }
 
-/* Keep the dashboard's soil/GIS workspace readable alongside drivetrain monitoring. */
-.live-monitoring-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.live-monitoring-kpis > *, .live-monitoring-workspace > * { min-width: 0; }
-.live-monitoring-workspace { grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr); }
-.live-monitoring-workspace > .drivetrain-monitoring { grid-column: 1 / -1; }
-@media (max-width: 1200px) {
-  .live-monitoring-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Live Monitoring: balanced 3 + 2 sensor cards. Six tracks allow three
+   identical cards on row one and two identical cards on row two. */
+.live-monitoring-kpis {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
-@media (max-width: 1000px) {
-  .workspace-grid.live-monitoring-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; flex: 0 0 auto; }
-  .live-monitoring-workspace > .card { grid-column: 1; grid-row: auto; min-height: 220px; }
-  .live-monitoring-workspace > .map-card { min-height: 360px; }
+.live-monitoring-kpis > .kpi-card {
+  grid-column: span 2;
+  min-width: 0;
+  justify-content: space-between;
+}
+.live-monitoring-kpis > .kpi-card:nth-child(n + 4) {
+  grid-column: span 3;
+}
+.live-monitoring-kpis .kpi-value,
+.live-monitoring-kpis .kpi-status {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Wide dashboards: map and recent samples each use 3/4 of their row.
+   Keep the drivetrain across the entire grid. Fixed *minimums* allow
+   content to grow, without squeezing the map or historical table. */
+.live-monitoring-workspace {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
+  grid-template-rows: minmax(440px, auto) minmax(350px, auto) auto;
+  align-items: stretch;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+.live-monitoring-workspace > * { min-width: 0; }
+.live-monitoring-workspace > .drivetrain-monitoring { grid-column: 1 / -1; grid-row: 3; }
+
+/* The taller record/crop row needs usable internal space, not just a
+   taller empty box. Do not change table selection or crop logic. */
+.recent-samples-card .card-header {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.recent-samples-card .historical-selection-controls {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.recent-samples-scroll,
+.crop-suitability-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.recent-samples-scroll table { min-width: 720px; }
+.recent-samples-scroll th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+}
+
+/* Available content width, not screen width: collapsing the sidebar may
+   enable the 75/25 pairs again without changing browser dimensions. */
+@container monitoring-viewport (max-width: 1000px) {
+  .workspace-grid.live-monitoring-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+  }
+  .live-monitoring-workspace > .card,
+  .live-monitoring-workspace > .drivetrain-monitoring {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .live-monitoring-workspace > .map-card { min-height: 420px; }
+  .live-monitoring-workspace > .live-sampling-card { min-height: 200px; }
+  .live-monitoring-workspace > .recent-samples-card { min-height: 350px; }
+  .live-monitoring-workspace > .crop-suitability-card { min-height: 300px; }
+}
+@container monitoring-viewport (max-width: 960px) {
+  .live-monitoring-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .live-monitoring-kpis > .kpi-card,
+  .live-monitoring-kpis > .kpi-card:nth-child(n + 4) { grid-column: span 1; }
+  .live-monitoring-kpis > .kpi-card:last-child { grid-column: 1 / -1; }
+}
+@container monitoring-viewport (max-width: 580px) {
+  .live-monitoring-kpis { grid-template-columns: minmax(0, 1fr); }
+  .live-monitoring-kpis > .kpi-card:nth-child(n) { grid-column: 1 / -1; }
+  .recent-samples-card .historical-selection-controls {
+    justify-content: flex-start;
+    margin-left: 0;
+  }
 }
 
 .card {
@@ -461,12 +540,6 @@ button.nav-item { width: 100%; border: 0; background: transparent; text-align: l
   width: 100%;
   height: 100%;
   min-height: 280px;
-}
-
-@media (max-width: 1200px) {
-  .status-badges {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 /* Responsive layout for the remaining status indicators */

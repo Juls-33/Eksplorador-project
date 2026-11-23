@@ -26,6 +26,15 @@ export const BUILTIN_CROP_REFERENCES = Object.freeze({
     source: 'Department of Agriculture ATI — Pechay Production Guide',
     note: 'Pechay prefers well-drained, organic-rich sandy-to-clay loam; the existing profile pH can be edited to match local references.'
   },
+  'CRP-COFFEE-ARABICA': {
+    // Illustrated preferred textures, not exclusive suitability classes.
+    // DA ATI documents pH; FAO describes sandy loam and well-drained soil;
+    // BSWM lists clay loam among suitable textures for Philippine Arabica.
+    preferredSoils: ['sandy-loam', 'loam', 'clay-loam'],
+    url: 'https://ati2.da.gov.ph/ati-4b/content/sites/default/files/2022-11/Coffee%20Technoguide%20w%20page%20numbers.pdf',
+    source: 'Philippine DA–ATI — Coffee Technoguide (Arabica)',
+    note: 'Arabica coffee prefers soil pH 5.6–6.5 (DA–ATI); deep, freely draining soil is important (FAO). Sandy loam, loam and clay loam are broad screening examples, not exclusive suitable textures. Climate, elevation, soil depth and drainage are not assessed.'
+  },
   'CRP-CACAO': {
     preferredSoils: ['sandy-loam', 'loam', 'clay-loam'],
     url: 'https://pcaf.da.gov.ph/wp-content/uploads/2022/06/Philippine-Cacao-Industry-Roadmap-2021-2025.pdf',

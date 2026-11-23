@@ -31,6 +31,7 @@ import OperatorNavGuide from '../components/OperatorNavGuide';
 import PointToPointMissionDialog from '../components/PointToPointMissionDialog';
 import { useRoverDisplayPosition } from '../hooks/useRoverDisplayPosition.js'; // EKSPLORADOR_GPS_DISPLAY_CONTINUITY_V1
 import { operatorMapStart, choosePlanningGps } from '../utils/pointToPointMission.js';
+import { MAX_PLANNING_RADIUS_M, isWithinPlanningRadius } from '../utils/planningRadius.js';
 // EKSPLORADOR_GPS_MISSION_FIX_V1
 import MissionDeploymentWizard from '../components/MissionDeploymentWizard';
 import MissionStatusReport from '../components/MissionStatusReport';
@@ -40,6 +41,7 @@ import LoRaConnectionStatus from '../components/LoRaConnectionStatus';
 
 import { useLoRaConnection } from '../hooks/useLoRaConnection';
 import { isPointInPolygon, calculatePolygonArea } from '../utils/geo';
+import { summarizeDraftFieldArea, formatSquareMeters, formatHectares } from '../utils/fieldAreaPreview.js';
 import { computeReachedPins, firstPendingPin, PIN_REACH_RADIUS_M } from '../utils/pinProgress';
 import { resolveSoilSampleLocation, isInsideSamplingField, SOIL_LOCATION_SOURCE } from '../utils/manualSampleGeotag';
 import { fieldLayerPresentation } from '../utils/fieldHeatmapLayers';
@@ -115,6 +117,8 @@ export default function FieldMapView({ onHelp }) {
   const [fieldFilter, setFieldFilter] = useState('ALL'); // 'ALL' or a field id (as string)
   const [selectedMissionId, setSelectedMissionId] = useState(null);
   const [selectedLayerKey, setSelectedLayerKey] = useState('ph');
+  // Presentation only: keep the gradient guide out of the map until requested.
+  const [showGradientGuide, setShowGradientGuide] = useState(false);
 
   // Mission Logging Telemetry State Machine
   const [missionState, setMissionState] = useState('IDLE'); // IDLE, IN_PROGRESS, PAUSED, FINISHED
@@ -172,6 +176,13 @@ export default function FieldMapView({ onHelp }) {
   const [wizardStep, setWizardStep] = useState('IDLE');
   const [wizard, setWizard] = useState({ intent: 'MISSION', fieldId: null, fieldName: '' });
   const [tempBoundary, setTempBoundary] = useState([]);
+  // Display-only area reference; changing it never changes the saved geometry.
+  const [areaTargetMin, setAreaTargetMin] = useState('500');
+  const [areaTargetMax, setAreaTargetMax] = useState('1000');
+  const draftAreaPreview = useMemo(
+    () => summarizeDraftFieldArea(tempBoundary, areaTargetMin, areaTargetMax),
+    [tempBoundary, areaTargetMin, areaTargetMax]
+  );
   const [tempWaypoints, setTempWaypoints] = useState([]);
   const [pinDeleteMode, setPinDeleteMode] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
@@ -741,6 +752,12 @@ export default function FieldMapView({ onHelp }) {
         setNotification({ type: 'error', message: 'Select a valid location on the map.' });
         return;
       }
+      // Mirror the already-enforced TF planning limit at the map-picker UI.
+      // An out-of-range click never sets Point A or closes selection mode.
+      if (!isWithinPlanningRadius(coords, displayedWaypoints[pointToPointPinIndex])) {
+        setNotification({ type: 'error', message: `Outside the ${MAX_PLANNING_RADIUS_M.toFixed(2)} m circle around Pin ${pointToPointPinIndex + 1}. Choose a point inside it.` });
+        return;
+      }
       setPointToPointManualStart(estimated);
       setPointToPointOriginPreference('MANUAL');
       setPointToPointPicking(false);
@@ -1097,7 +1114,7 @@ export default function FieldMapView({ onHelp }) {
       )}
       {pointToPointPicking && (
         <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', borderRadius: 8, background: '#fef3c7', color: '#78350f' }}>
-          <MapPin size={16} /> Click on the Field Map to set Point A (operator estimate, not GPS).
+          <MapPin size={16} /> Select Point A inside the {MAX_PLANNING_RADIUS_M.toFixed(2)} m circle around Pin {pointToPointPinIndex + 1} (map estimate, not GPS).
           <button type="button" className="badge" onClick={() => { setPointToPointPicking(false); setPointToPointOpen(true); }}>Cancel selection</button>
         </div>
       )}
@@ -1116,7 +1133,6 @@ export default function FieldMapView({ onHelp }) {
         </div>
 
         <div className="view-header-actions" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <HelpButton viewId="Field Map" onOpen={onHelp} />
           {wizardStep === 'DRAWING_BOUNDARY' && (
             <>
               <button className="badge" disabled={tempBoundary.length === 0} onClick={() => setTempBoundary((prev) => prev.slice(0, -1))} style={{ cursor: 'pointer' }}>
@@ -1194,6 +1210,9 @@ export default function FieldMapView({ onHelp }) {
               </button>
             </>
           )}
+          <div className="field-map-header__help">
+            <HelpButton viewId="Field Map" onOpen={onHelp} />
+          </div>
         </div>
       </div>
 
@@ -1381,6 +1400,55 @@ export default function FieldMapView({ onHelp }) {
             </div>
           </div>
 
+          {/* Visible while drawing: same area calculator used for saved field summaries.
+              This is a planning preview, not a limit or survey measurement. */}
+          {wizardStep === 'DRAWING_BOUNDARY' && (
+            <section className={`field-area-preview field-area-preview--${draftAreaPreview.status}`} aria-label="Live field area preview">
+              <div className="field-area-preview__top">
+                <div className="field-area-preview__measurement">
+                  <span className="field-area-preview__eyebrow">Live field area</span>
+                  <div className="field-area-preview__number">
+                    <strong aria-live="polite">{draftAreaPreview.validArea ? formatSquareMeters(draftAreaPreview.sqm) : '—'}</strong>
+                    <span>m²</span>
+                  </div>
+                  <span className="field-area-preview__secondary">
+                    {draftAreaPreview.validArea ? `${formatHectares(draftAreaPreview.hectares)} ha` : 'Area appears after 3 points'}
+                    {' · '}{draftAreaPreview.points} boundary {draftAreaPreview.points === 1 ? 'point' : 'points'}
+                  </span>
+                </div>
+                <div className="field-area-preview__comparison">
+                  <div className="field-area-preview__status" role="status" aria-live="polite">
+                    {draftAreaPreview.status === 'incomplete' && 'Add at least 3 corners to preview the area.'}
+                    {draftAreaPreview.status === 'invalid' && 'No enclosed area yet — adjust the boundary.'}
+                    {draftAreaPreview.status === 'no-target' && 'Enter a valid target range to compare areas.'}
+                    {draftAreaPreview.status === 'below' && 'Below your target — expand the boundary if needed.'}
+                    {draftAreaPreview.status === 'within' && 'Within your target area.'}
+                    {draftAreaPreview.status === 'above' && `Above target (${draftAreaPreview.aboveFactor.toFixed(1)}× the maximum) — review before saving.`}
+                  </div>
+                  <div className="field-area-preview__target-row">
+                    <span>Planning target: <strong>{draftAreaPreview.validTarget ? `${formatSquareMeters(draftAreaPreview.targetMin)}–${formatSquareMeters(draftAreaPreview.targetMax)} m²` : 'Not set'}</strong></span>
+                    <details className="field-area-preview__edit">
+                      <summary>Change target</summary>
+                      <div className="field-area-preview__inputs">
+                        <label>Min (m²)
+                          <input type="number" inputMode="numeric" min="1" step="100" value={areaTargetMin} onChange={(event) => setAreaTargetMin(event.target.value)} />
+                        </label>
+                        <label>Max (m²)
+                          <input type="number" inputMode="numeric" min="1" step="100" value={areaTargetMax} onChange={(event) => setAreaTargetMax(event.target.value)} />
+                        </label>
+                      </div>
+                      {!draftAreaPreview.validTarget && <small>Maximum must be at least the positive minimum.</small>}
+                    </details>
+                  </div>
+                  <div className="field-area-preview__track" role="presentation">
+                    <div style={{ width: `${draftAreaPreview.progressPercent}%` }} />
+                  </div>
+                </div>
+              </div>
+              <p className="field-area-preview__footnote">Approximate mapped area · updates with every corner or Undo · reference range does not restrict saving.</p>
+            </section>
+          )}
+
           {/* Keep manual geotagging *outside* Leaflet's map overlay. The map's
               offline-coverage selector is positioned top-right at z-index 1000;
               overlay controls here would compete with it and obscure clicks. */}
@@ -1456,6 +1524,7 @@ export default function FieldMapView({ onHelp }) {
           )}
           <div style={{ flex: 1, position: 'relative', minHeight: '340px' }}>
             <HeatmapMap
+              controlLayout="field-map"
               center={DEFAULT_CENTER}
               zoom={18}
               boundary={activeBoundary}
@@ -1471,6 +1540,7 @@ export default function FieldMapView({ onHelp }) {
               roverPositionStatus={roverDisplay.mode}
               planningStartPos={(pointToPointOpen || pointToPointPicking) && pointToPointOriginPreference === 'MANUAL' ? pointToPointManualStart?.coords ?? null : null}
               planningTargetPos={displayedWaypoints[pointToPointPinIndex] ?? null}
+              planningPickRadiusM={pointToPointPicking ? MAX_PLANNING_RADIUS_M : null}
               manualSamplePos={missionState === 'IN_PROGRESS' && manualSoilLocationEnabled ? manualSoilLocation?.coords ?? null : null}
               onMapClick={handleMapClick}
               interactionMode={
@@ -1557,39 +1627,39 @@ export default function FieldMapView({ onHelp }) {
                 </div>
               </div>
             )}
-            {/* Floating Color Legend Guide */}
-            <div style={{
-              position: 'absolute',
-              bottom: '12px',
-              left: '12px',
-              zIndex: 1000,
-              background: 'rgba(255, 255, 255, 0.95)',
-              backdropFilter: 'blur(4px)',
-              border: '1px solid var(--card-border)',
-              borderRadius: '8px',
-              padding: '10px 12px',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-              fontSize: '0.75rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '6px',
-              maxWidth: '220px'
-            }}>
-              <div style={{ fontWeight: 800, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Info size={13} color="var(--primary-green)" />
+            {/* Compact, accessible toggle; the guide never blocks the map by default. */}
+            <button
+              type="button"
+              className="field-map-gradient-guide__toggle"
+              aria-expanded={showGradientGuide}
+              aria-controls="field-map-gradient-guide"
+              onClick={() => setShowGradientGuide((visible) => !visible)}
+            >
+              <Info size={14} aria-hidden="true" />
+              {showGradientGuide ? 'Hide gradient guide' : 'Show gradient guide'}
+              {showGradientGuide ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+            </button>
+            <div
+              id="field-map-gradient-guide"
+              className="field-map-gradient-guide__panel"
+              role="region"
+              aria-label="Heatmap gradient guide"
+              hidden={!showGradientGuide}
+            >
+              <div className="field-map-gradient-guide__heading">
+                <Info size={13} color="var(--primary-green)" aria-hidden="true" />
                 <span>{activeConfig.label} ({activeConfig.unit})</span>
               </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div className="field-map-gradient-guide__ranges">
                 {activeConfig.ranges.map((range, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div key={idx} className="field-map-gradient-guide__range">
                     <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: range.color, flexShrink: 0 }} />
                     <span style={{ fontWeight: 700, minWidth: '60px' }}>{range.label}</span>
                     <span style={{ color: 'var(--text-muted)' }}>{range.desc}</span>
                   </div>
                 ))}
               </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.35, borderTop: '1px solid var(--card-border)', paddingTop: '6px' }}>
+              <div className="field-map-gradient-guide__note">
                 Assumed coverage within 20 m of samples · IDW estimates with ≥2 sites within 25 m. Blank areas lack supported coverage.
                 <details style={{ marginTop: '5px' }}>
                   <summary style={{ cursor: 'pointer', color: 'var(--primary-green)', fontWeight: 700 }}>Interpretation & limitations</summary>
