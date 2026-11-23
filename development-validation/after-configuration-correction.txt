@@ -1,0 +1,50 @@
+MTP-SW-02 isolated retest | 2026-11-21T23:40:11.315Z | v24.22.3 | linux
+Explicit numerical settings: local=20 m, search=25 m, neighbors=2, power=2
+SHA256 geo.js: 43bc2e93bbecb396faeb3c14fe67dd4b35a7346178b84f2acd84a9c5aa3c126f
+SHA256 HeatmapMap.jsx: c74babf0e2f24b0055c39d63bc4998d3ac8ab74d0c301d24e4cc7294f223d052
+SHA256 FieldMapView.jsx: 77ca5be8fc4abedcce5704df18af10185976bbee41d9d20ba1a55b124bba67ce
+SHA256 heatmapCoverage.js: 7c0b96d47c131f14bb81b87bf179cf116a695a66cd66efd3f0fca26fde77a6be
+STEP1 source 20% -> 20.0000%
+STEP1 source 40% -> 40.0000%
+STEP1 source 60% -> 60.0000%
+STEP2 midpoint=50.0000%
+STEP3A expected=36.721311, actual=36.721311
+STEP3B power1=40.0000, power2=32.0000
+STEP3C sites=2, center=48.0000
+STEP4A one site at 10 m: value=40, opacity=1
+STEP4B 19 m: value=40, opacity=0.074076
+STEP4D two neighbors ~24.17 m away: 50.0000%
+STEP4G clipped output count=49; not compared with historical 45
+STEP4O installed configuration: local=20, search=25, neighbors=2
+✔ SW02-STEP1: generated cell preserves exact source 20% (4.675884ms)
+✔ SW02-STEP1: generated cell preserves exact source 40% (1.466935ms)
+✔ SW02-STEP1: generated cell preserves exact source 60% (1.558992ms)
+✔ SW02-STEP2: 20/80 equal-distance generated midpoint equals 50% (2.439598ms)
+✔ SW02-STEP3A: multi-site power-2 IDW matches independent metric reference (0.435596ms)
+✔ SW02-STEP3B: power change favors the nearer sample (0.273265ms)
+✔ SW02-STEP3C: duplicate and near-duplicate site average contributes once (0.283401ms)
+✔ SW02-STEP3D: duplicate packets cannot satisfy two distinct neighbors (0.141971ms)
+✔ SW02-STEP3E: repeating identical packets does not change the numerical grid (1.302052ms)
+✔ SW02-STEP4A: one site paints a generated cell 10 m away (0.4316ms)
+✔ SW02-STEP4B: local estimate fades but keeps its value at 19 m (0.233175ms)
+✔ SW02-STEP4C: one site cannot paint beyond the 20 m local radius (0.262279ms)
+✔ SW02-STEP4D: two sites can support IDW beyond both local footprints (0.166597ms)
+✔ SW02-STEP4E: points outside search and local radii remain blank (0.083985ms)
+✔ SW02-STEP4F: overlapping footprints return a weighted mean, not a sum (0.302709ms)
+✔ SW02-STEP4G: rectangular polygon masks output including an outside source (0.444439ms)
+✔ SW02-STEP4H: concave polygon leaves its excluded notch blank (0.97077ms)
+✔ SW02-STEP4I: fade changes alpha only, retaining 40% across local footprint (0.131475ms)
+✔ SW02-STEP4J: auto canvas extent retains isolated coverage with no saved field (14.14602ms)
+✔ SW02-STEP4K: empty or degenerate fixtures return without invalid output (0.191163ms)
+✔ SW02-STEP4L: actual renderer consumes 20 m settings and coverage alpha (74.550195ms)
+✔ SW02-STEP4M: repeated source/grid pixels do not accumulate rendered alpha (142.016314ms)
+✔ SW02-STEP4N: actual renderer blends overlapping samples without value inflation (80.481332ms)
+✔ SW02-STEP4O: installed Field Map explicitly enables final 20 m / 25 m / two-site settings (0.859214ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 477.26882

@@ -1,0 +1,10 @@
+{
+  "file": "D:\\UST Capstone\\Eksplorador-project\\apps\\desktop\\src\\views\\FieldMapView.jsx",
+  "backupFile": "D:\\UST Capstone\\Eksplorador-project\\apps\\desktop\\sw02-backups\\2026-11-21T23-54-08-947Z\\FieldMapView.jsx",
+  "beforeSHA256": "3d77758cac1b5114c7316dbbcce0572e4e62f91f39b2dc562c205440b9bf83db",
+  "afterSHA256": "77ca5be8fc4abedcce5704df18af10185976bbee41d9d20ba1a55b124bba67ce",
+  "changed": [
+    "Field Map local radius 5 -> 20 m",
+    "Legend 5 -> 20 m"
+  ]
+}

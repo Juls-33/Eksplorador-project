@@ -1464,7 +1464,7 @@ export default function FieldMapView({ onHelp }) {
               valueToIntensity={activeConfig.valueToIntensity}
               maxInfluenceRadiusM={25}
               minInterpolationNeighbors={2}
-              localCoverageRadiusM={5}
+              localCoverageRadiusM={20}
               labeledPoints={samplePins}
               focusPoints={focusPoints}
               roverPos={roverDisplay.position}
@@ -1590,7 +1590,7 @@ export default function FieldMapView({ onHelp }) {
                 ))}
               </div>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.35, borderTop: '1px solid var(--card-border)', paddingTop: '6px' }}>
-                Assumed coverage within 5 m of samples · IDW estimates with ≥2 sites within 25 m. Blank areas lack supported coverage.
+                Assumed coverage within 20 m of samples · IDW estimates with ≥2 sites within 25 m. Blank areas lack supported coverage.
                 <details style={{ marginTop: '5px' }}>
                   <summary style={{ cursor: 'pointer', color: 'var(--primary-green)', fontWeight: 700 }}>Interpretation & limitations</summary>
                   <p style={{ margin: '6px 0 0' }}>{activeConfig.note} Raw values are interpolated before applying colors. No fertilizer requirements are inferred.</p>
