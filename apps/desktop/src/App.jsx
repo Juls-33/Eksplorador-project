@@ -14,7 +14,6 @@ import {
   ClipboardList,
   Sprout,
   BarChart3,
-  Settings,
   Droplets,
   CheckCircle2,
   AlertTriangle,
@@ -1105,18 +1104,6 @@ export default function App() {
           </nav>
         </div>
 
-        <div
-          className="nav-item"
-          title={isCollapsed ? 'Settings' : ''}
-        >
-          <Settings size={20} />
-
-          {!isCollapsed && (
-            <span className="nav-label">
-              Settings
-            </span>
-          )}
-        </div>
       </aside>
 
       <main className="main-content" ref={mainRef}>
