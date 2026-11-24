@@ -1,0 +1,18 @@
+MTP-GIS-05 Node.js replacement — development-only validation
+Script: gis05_demo.mjs
+Runtime: Node.js 22.16.0, built-in node:sqlite; no third-party SQLite package
+Data: temporary SQLite databases built from source SQL migrations, WAL enabled
+Project source: uploaded Eksplorador-project-main(6).zip, extracted for validation
+
+PASS: WAL-aware, integrity-checked SQLite backup before insert
+PASS: 3 labelled missions / 1, 2, 3 samples inserted transactionally
+PASS: Manifest captures exact mission and telemetry IDs
+PASS: Repeated insert is a no-op with no additional backup
+PASS: Cleanup creates a second backup and preserves field, boundary and unrelated rows
+PASS: Optional labelled duplicate fixture (A, B, B)
+PASS: Too-small field geometry refuses before any backup or mutation
+PASS: Unexpected additional telemetry blocks cleanup
+
+Development test result: 4/4 test scenarios passed.
+No actual project/user database was opened or changed.
+No actual UI screenshots, rendering time, GPS/LoRa packets, or MTP PASS statuses were claimed.

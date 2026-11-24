@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "state": "installed",
+  "kind": "SYNTHETIC DEMONSTRATION ONLY — NOT ROVER MEASUREMENTS",
+  "db_path": "D:\\UST Capstone\\Eksplorador-project\\apps\\desktop\\src-tauri\\eksplorador.db",
+  "source_id": "ae1dcd2004218e4aea38fca36636f24b",
+  "field_id": 8,
+  "field_name": "GIS05_SYNTHETIC_TEST",
+  "field_boundary_sha256": "68feca7785e64c56b56a90e11709bb8c880a5d7e4051503e864983265a4e3910",
+  "created_at": "2026-11-24T18:43:46.071+08:00",
+  "backup": {
+    "path": "D:\\UST Capstone\\Eksplorador-project\\gis05_demo\\backups\\GIS05_before_20261124104346036_20840.sqlite3",
+    "sha256": "9fdee199390912c9bc787a3f4cf74badd1a270530e4791df141df83849d7d8e7",
+    "timestamp": "2026-11-24T18:43:46.070+08:00",
+    "counts": {
+      "fields": 8,
+      "missions": 6,
+      "telemetry": 2673
+    },
+    "source_id": "ae1dcd2004218e4aea38fca36636f24b",
+    "includes_committed_WAL": true
+  },
+  "geometry": {
+    "mode": "verified_compact_field_8",
+    "origin": [
+      14.608298430810962,
+      120.98835117967181
+    ],
+    "points": {
+      "A": [
+        14.608343396891257,
+        120.98867645795762
+      ],
+      "B": [
+        14.608508638323086,
+        120.98874986955896
+      ],
+      "C": [
+        14.608595206940915,
+        120.98837906066774
+      ],
+      "GAP": [
+        14.608694132317567,
+        120.98861140230046
+      ]
+    },
+    "bbox_m": [
+      57.7,
+      55.3
+    ],
+    "clip_distance_m": 1.92,
+    "metre_offsets": {
+      "A": [
+        35,
+        5
+      ],
+      "B": [
+        42.899101042768784,
+        23.374008890716503
+      ],
+      "C": [
+        3,
+        33
+      ],
+      "GAP": [
+        28,
+        44
+      ]
+    }
+  },
+  "geo_js_checks": {
+    "AB": 20,
+    "AC": 42.5,
+    "BC": 41,
+    "AGap": 39.6,
+    "BGap": 25.4,
+    "CGap": 27.3,
+    "midpoint": 30.000000586453243,
+    "midpointDuplicate": 30.000000586453243,
+    "distinctDuplicate": 2,
+    "gap": null
+  },
+  "missions": [
+    {
+      "id": 13,
+      "name": "GIS05_DEMO_01_SINGLE",
+      "samples": [
+        {
+          "id": 2686,
+          "site": "A",
+          "lat": 14.608343396891257,
+          "lng": 120.98867645795762,
+          "moisture": 20,
+          "timestamp": "2026-11-24T10:43:46.071+00:00"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "GIS05_DEMO_02_OVERLAP",
+      "samples": [
+        {
+          "id": 2687,
+          "site": "A",
+          "lat": 14.608343396891257,
+          "lng": 120.98867645795762,
+          "moisture": 20,
+          "timestamp": "2026-11-24T10:43:56.071+00:00"
+        },
+        {
+          "id": 2688,
+          "site": "B",
+          "lat": 14.608508638323086,
+          "lng": 120.98874986955896,
+          "moisture": 40,
+          "timestamp": "2026-11-24T10:43:57.071+00:00"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "name": "GIS05_DEMO_03_BOUNDARY",
+      "samples": [
+        {
+          "id": 2689,
+          "site": "A",
+          "lat": 14.608343396891257,
+          "lng": 120.98867645795762,
+          "moisture": 20,
+          "timestamp": "2026-11-24T10:44:06.071+00:00"
+        },
+        {
+          "id": 2690,
+          "site": "B",
+          "lat": 14.608508638323086,
+          "lng": 120.98874986955896,
+          "moisture": 40,
+          "timestamp": "2026-11-24T10:44:07.071+00:00"
+        },
+        {
+          "id": 2691,
+          "site": "C",
+          "lat": 14.608595206940915,
+          "lng": 120.98837906066774,
+          "moisture": 60,
+          "timestamp": "2026-11-24T10:44:08.071+00:00"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "GIS05_DEMO_04_DUPLICATE",
+      "samples": [
+        {
+          "id": 2692,
+          "site": "A",
+          "lat": 14.608343396891257,
+          "lng": 120.98867645795762,
+          "moisture": 20,
+          "timestamp": "2026-11-24T10:44:16.071+00:00"
+        },
+        {
+          "id": 2693,
+          "site": "B",
+          "lat": 14.608508638323086,
+          "lng": 120.98874986955896,
+          "moisture": 40,
+          "timestamp": "2026-11-24T10:44:17.071+00:00"
+        },
+        {
+          "id": 2694,
+          "site": "B",
+          "lat": 14.608508638323086,
+          "lng": 120.98874986955896,
+          "moisture": 40,
+          "timestamp": "2026-11-24T10:44:18.071+00:00"
+        }
+      ]
+    }
+  ],
+  "sample_metadata": {
+    "ph": null,
+    "ec": null,
+    "nitrogen": null,
+    "phosphorus": null,
+    "potassium": null,
+    "overall": null,
+    "sample_session_id": null,
+    "location_source": "GIS05_SYNTHETIC_DEMO",
+    "raw_sensor_packets": 0
+  }
+}

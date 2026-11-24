@@ -1,0 +1,11 @@
+2026-11-24 — Development checks only (not user's live database)
+
+Sources: uploaded Eksplorador-project-main(6).zip; user-supplied exact GeoJSON polygon for Field ID 8; SHA256 68feca7785e64c56b56a90e11709bb8c880a5d7e4051503e864983265a4e3910.
+
+Node v22.16.0, node:sqlite, temporary SQLite databases:
+- Original-fixture safety lifecycle: 4/4 passed
+- Exact-boundary compact-fixture lifecycle: 4/4 passed
+- App geo.js midpoint, duplicate consolidation, unsupported point, and site-separation numerical checks executed within compact plan and insert, passed
+- Verified transaction insertion, consistent WAL backup, integrity and FK checks, manifest, rerun no-op, cleanup, unrelated-record preservation, and refusal of undersized/mutated boundary or added telemetry
+
+No modifications to the user's live database, field polygon, firmware, application code, or shared docs. No application rendering times or screenshots generated.
