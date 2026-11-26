@@ -1,7 +1,7 @@
 {
   "test": "MTP-APP-03 Step 1 — actual compatibility module and database-profile SQL",
-  "started": "2026-11-18T23:16:37.762Z",
-  "temporaryDatabase": "C:\\Users\\JULIUS~1\\AppData\\Local\\Temp\\eksplorador-app03-cFELBv\\app03-test-only.db",
+  "started": "2026-11-24T16:02:56.145Z",
+  "temporaryDatabase": "C:\\Users\\JULIUS~1\\AppData\\Local\\Temp\\eksplorador-app03-EV9q0m\\app03-test-only.db",
   "limitations": "Direct JS function plus actual source-extracted UPSERT SQL in isolated SQLite; no browser UI, live crop-card recommendations, native Tauri service, real field validation, or persisted production data tested.",
   "checks": [
     "50 independent compatibility rule vectors match actual cropCompatibility.js (pH, soil type, missing and boundaries)",
@@ -837,5 +837,5 @@
     "percent": 100
   },
   "status": "PASS",
-  "finished": "2026-11-18T23:16:37.853Z"
+  "finished": "2026-11-24T16:02:56.219Z"
 }

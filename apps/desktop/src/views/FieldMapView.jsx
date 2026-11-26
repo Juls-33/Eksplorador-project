@@ -1297,8 +1297,15 @@ export default function FieldMapView({ onHelp }) {
                         cursor: 'pointer'
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', gap: '6px' }}>
-                        <strong style={{ fontSize: '0.85rem' }}>{m.name}</strong>
+                      <strong style={{ display: 'block', fontSize: '0.85rem', marginBottom: '4px', overflowWrap: 'anywhere' }}>
+                        {m.name}
+                      </strong>
+                      <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 8px' }}>
+                        <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          <span>{m.date}</span>
+                          <span>•</span>
+                          <span>{m.sampleCount} pts</span>
+                        </span>
                         <span style={{
                           fontSize: '0.68rem',
                           padding: '2px 6px',
@@ -1306,16 +1313,12 @@ export default function FieldMapView({ onHelp }) {
                           background: m.status === 'in_progress' ? '#dcfce7' : '#f1f5f9',
                           color: m.status === 'in_progress' ? '#166534' : 'var(--text-muted)',
                           fontWeight: 700,
-                          flexShrink: 0
+                          flexShrink: 0,
+                          marginLeft: 'auto'
                         }}>
                           {STATUS_LABELS[m.status] || m.status}
                         </span>
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
-                        <span>{m.date}</span>
-                        <span>•</span>
-                        <span>{m.sampleCount} pts</span>
-                      </div>
+                      </span>
                     </button>
                   ))}
                 </div>

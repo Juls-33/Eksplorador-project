@@ -1,7 +1,7 @@
 {
   "test": "MTP-APP-03 Step 3 — Live Monitoring crop rules",
   "mode": "Actual App.jsx useMemo evaluated in isolated Node VM; not browser UI",
-  "timestamp": "2026-11-18T23:49:20.167Z",
+  "timestamp": "2026-11-24T16:02:56.459Z",
   "source": "apps/desktop/src/App.jsx",
   "historicalMinimum": 10,
   "comparisons": 133,
